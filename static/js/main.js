@@ -344,10 +344,7 @@ function closeDetailModal() {
     clearInterval(detailPollInterval);
     detailPollInterval = null;
   }
-  if (_histChart) {
-    _histChart.destroy();
-    _histChart = null;
-  }
+
   activeDetailDeviceId = null;
 }
 
