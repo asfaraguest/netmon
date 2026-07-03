@@ -497,18 +497,33 @@ def get_zones_with_devices():
 
 @app.route('/api/zones', methods=['POST'])
 def add_zone():
-    zone_id = db.add_zone(request.json)
-    return jsonify({'id': zone_id, 'status': 'success'})
+    import traceback
+    try:
+        zone_id = db.add_zone(request.json)
+        return jsonify({'id': zone_id, 'status': 'success'})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/zones/<int:zone_id>', methods=['PUT'])
 def update_zone(zone_id):
-    db.update_zone(zone_id, request.json)
-    return jsonify({'status': 'success'})
+    import traceback
+    try:
+        db.update_zone(zone_id, request.json)
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/api/zones/<int:zone_id>', methods=['DELETE'])
 def delete_zone(zone_id):
-    db.delete_zone(zone_id)
-    return jsonify({'status': 'success'})
+    import traceback
+    try:
+        db.delete_zone(zone_id)
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # ============================================================
 # API – ALERTS & LOGS
