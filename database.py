@@ -478,12 +478,18 @@ class Database:
         with self.conn() as c:
             if severity:
                 rows = c.execute(
-                    'SELECT * FROM alerts WHERE severity=? ORDER BY created_at DESC LIMIT ? OFFSET ?',
+                    '''SELECT id, device_id, device_name, device_ip, severity, message, details, 
+                              acknowledged, ack_by, ack_at, is_false_alarm, ai_analysis, replica_count, 
+                              strftime('%Y-%m-%dT%H:%M:%SZ', created_at) AS created_at 
+                       FROM alerts WHERE severity=? ORDER BY created_at DESC LIMIT ? OFFSET ?''',
                     (severity, limit, offset)
                 ).fetchall()
             else:
                 rows = c.execute(
-                    'SELECT * FROM alerts ORDER BY created_at DESC LIMIT ? OFFSET ?',
+                    '''SELECT id, device_id, device_name, device_ip, severity, message, details, 
+                              acknowledged, ack_by, ack_at, is_false_alarm, ai_analysis, replica_count, 
+                              strftime('%Y-%m-%dT%H:%M:%SZ', created_at) AS created_at 
+                       FROM alerts ORDER BY created_at DESC LIMIT ? OFFSET ?''',
                     (limit, offset)
                 ).fetchall()
             return [dict(r) for r in rows]
@@ -525,7 +531,12 @@ class Database:
 
     def get_access_logs(self, limit=100):
         with self.conn() as c:
-            rows = c.execute('SELECT * FROM access_logs ORDER BY created_at DESC LIMIT ?', (limit,)).fetchall()
+            rows = c.execute(
+                '''SELECT id, source, message, type, 
+                          strftime('%Y-%m-%dT%H:%M:%SZ', created_at) AS created_at 
+                   FROM access_logs ORDER BY created_at DESC LIMIT ?''', 
+                (limit,)
+            ).fetchall()
             return [dict(r) for r in rows]
 
     # ============================================================
