@@ -22,6 +22,7 @@
 <!-- ======================================================
      SIDEBAR
 ====================================================== -->
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="document.getElementById('sidebar').classList.toggle('show'); document.getElementById('sidebar-overlay').classList.toggle('show');"></div>
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-logo">
     <i class="bi bi-hdd-network-fill text-accent"></i>
@@ -94,6 +95,17 @@
      MAIN CONTENT
 ====================================================== -->
 <main class="main-content" id="main">
+  <!-- Mobile Topbar -->
+  <div class="mobile-topbar d-md-none">
+    <div class="d-flex align-items-center">
+      <i class="bi bi-hdd-network-fill text-accent me-2"></i>
+      <span class="fw-600">NetMon</span>
+    </div>
+    <button class="mobile-menu-btn" onclick="document.getElementById('sidebar').classList.toggle('show'); document.getElementById('sidebar-overlay').classList.toggle('show');">
+      <i class="bi bi-list"></i>
+    </button>
+  </div>
+
   <!-- Global alert banner -->
   <div class="alert-banner d-none" id="alert-banner">
     <i class="bi bi-exclamation-triangle-fill"></i>
