@@ -157,3 +157,18 @@ static/img/floorplan.svg
 
 # Security audit report (sensitive — do not commit)
 report.html
+
+# Markdown files (except README)
+*.md
+!README.md
+!readme.md
+!Readme.md
+
+# IDE, Editor, and AI Agent configs (Non-app functional components)
+.vscode/
+.idea/
+.fleet/
+.cursor/
+.agents/
+.gemini/
+*.code-workspace
