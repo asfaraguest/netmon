@@ -807,6 +807,8 @@ def generate_monthly_report():
         report = db.generate_and_save_monthly_report(month_str)
         return jsonify({'status': 'success', 'report': report})
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 400
 
 @app.route('/api/reports/<int:report_id>/delete', methods=['POST'])
