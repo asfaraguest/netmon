@@ -499,7 +499,8 @@ def get_zones_with_devices():
 def add_zone():
     import traceback
     try:
-        zone_id = db.add_zone(request.json)
+        data = request.json or {}
+        zone_id = db.add_zone(data)
         return jsonify({'id': zone_id, 'status': 'success'})
     except Exception as e:
         traceback.print_exc()
@@ -509,7 +510,8 @@ def add_zone():
 def update_zone(zone_id):
     import traceback
     try:
-        db.update_zone(zone_id, request.json)
+        data = request.json or {}
+        db.update_zone(zone_id, data)
         return jsonify({'status': 'success'})
     except Exception as e:
         traceback.print_exc()
