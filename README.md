@@ -24,6 +24,8 @@ Real-time network monitoring with SNMP auto-discovery, interactive floor plan al
 | **Manual WAN Override** | Manually configure router WAN interface mapping via an on-demand dropdown on the Devices page |
 | **Time-Weighted Reports** | Monthly bandwidth average calculated via time-weighted algorithms over valid intervals |
 | **Context-Aware Rollovers** | Distinguishes 32-bit SNMP counter rollovers from device reboots based on polling delta time (dt) |
+| **Responsive Mobile UI** | Fully adaptive interface with an off-canvas sidebar and wrapping filters for smartphone browsers |
+| **Router Uplinks Dashboard** | Dedicated multi-chart page for tracking live and historical throughput across all WAN router interfaces |
 
 ---
 
