@@ -830,6 +830,7 @@ body.theme-morphism .page-header {
   :root { --sidebar-w: 0px; }
   .mobile-topbar { display: flex; }
   .sidebar { 
+    width: 260px !important;
     transform: translateX(-110%); 
     transition: transform 0.3s ease;
     z-index: 1050; 
