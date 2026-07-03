@@ -275,34 +275,57 @@ server {
 
 ---
 
-## 📝 System Prompt for AI-assisted Development
+## 📝 Big Prompt / System Prompt for AI-assisted Development
 
-```
-You are building a network monitoring application called NetMon with the following architecture:
+```text
+You are an expert full-stack developer tasked with building "NetMon", an advanced, highly responsive, and lightweight network monitoring application.
 
-Backend: Python 3.9+ with Flask + Flask-SocketIO (threading mode), APScheduler
-Database: SQLite (via custom Database class in database.py)
-SNMP: pysnmp library, polling sysDescr/sysName/sysUpTime/ifOperStatus
-Real-time: Socket.IO WebSockets for device status updates and alert notifications
-Frontend: Bootstrap 5 dark theme, vanilla JS, HTML5 Canvas for floor plan
+### Tech Stack:
+- **Backend**: Python 3.9+, Flask, Flask-SocketIO (threading mode), SQLite3, APScheduler, PySNMP
+- **Frontend**: HTML5, Vanilla JavaScript, CSS3 (No Tailwind/Bootstrap, pure custom responsive CSS), Chart.js (for graphs), Socket.IO client.
+- **Deployment**: Nginx as a reverse proxy, bash scripts for installation and updates.
 
-Core entities: Device (id, name, ip, mac, type, zone_id, snmp_enabled, status, pos_x, pos_y, icon)
-               Zone (id, name, color, description)
-               Alert (id, device_id, severity, message, acknowledged)
-               AccessLog (id, source, message, type)
-               Floorplan (id, background_url, canvas_data)
+### Architecture & Design Rules:
+1. **Zero-reload UI**: The frontend must be fully dynamic. Use vanilla JS to render DOM elements based on Socket.IO events (`init_data`, `device_status_update`, `stats_update`). Do not reload the page.
+2. **Responsive CSS**: The design must use CSS Grid/Flexbox. Use a dark, premium, glassmorphism aesthetic (vibrant accents, dark background `#0b0b0d`, smooth micro-animations). Implement a mobile-first responsive layout (hamburger menus, horizontally scrollable tables, stacked flex-containers).
+3. **Robust SQLite Database**: Use `sqlite3` with `check_same_thread=False` and explicit connection locks to prevent concurrency errors since background threads and API endpoints access the DB simultaneously.
 
-Socket events emitted by server: init_data, device_status_update, new_alert, stats_update,
-  scan_progress, scan_complete, device_found, unifi_sync_complete
+### Database Schema (Core Tables):
+1. `devices`: id, name, ip, mac, type (e.g., router, switch, ap), zone_id, snmp_enabled, snmp_community, status (up/down/warning/unknown), pos_x, pos_y, is_muted (boolean), wan_interface (string).
+2. `zones`: id, name, color, description.
+3. `alerts`: id, device_id, severity, message, timestamp, acknowledged (boolean).
+4. `access_logs`: id, source_ip, message, log_type, timestamp.
+5. `interface_traffic`: id, device_id, timestamp, rx_bytes, tx_bytes.
+6. `settings`: key, value (stores traffic_retention_hours, poll_interval, etc.)
 
-API endpoints: GET/POST /api/devices, PUT/DELETE /api/devices/<id>,
-  GET/POST /api/zones, GET /api/alerts, POST /api/alerts/<id>/ack,
-  GET /api/floorplan, POST /api/floorplan, POST /api/scan, GET /api/stats,
-  GET/POST /api/settings, POST /api/unifi/sync
+### Backend Core Logic (`snmp_worker.py`):
+1. **Dual-Interval Polling**: Implement two separate APScheduler jobs. 
+   - Job 1: Status Polling (every 30s) -> Uses ping + basic SNMP to check if a device is online. Uses a "double-check" logic (SNMP fails -> Ping fails -> Mark Offline).
+   - Job 2: Traffic Polling (every 10s) -> Polls `ifInOctets` and `ifOutOctets` (32-bit & 64-bit counters) for routers.
+2. **Bandwidth Calculation**: Calculate delta bytes between polls divided by delta time (`dt`) to get Bps (Bytes per second). Multiply by 8 to get bps.
+3. **Rollover Protection**: Differentiate between a 32-bit SNMP counter rollover (happens at 4.29GB) and a device reboot (where uptime decreases). Adjust the math dynamically to prevent false "negative" or "anomalous spike" bandwidth readings.
+4. **Data Retention**: Run a background cleanup task every hour to delete `interface_traffic` data older than `traffic_retention_hours` from `settings`.
 
-Frontend conventions: All status colors via CSS vars (--green, --red, --yellow, --accent=#00d4ff)
-  statusBadge(), iconClass(), relTime(), esc(), showToast() are global helpers in main.js
-  Page handlers are registered as window.onInitData, window.onDeviceStatusUpdate, etc.
+### Frontend Core Features:
+1. **Dashboard (`dashboard.html`)**: Shows summary cards (Total, Up, Down), recent alerts feed, and real-time total backbone throughput graph (Chart.js).
+2. **Devices (`devices.html`)**: A searchable, filterable table. Includes a "Device Detail Modal" that allows editing properties (Name, IP, Type, Zone, WAN Interface dropdown).
+3. **Floor Plan (`floorplan.html`)**: An interactive HTML5 Canvas. Users can upload a background image, drag-and-drop device icons, and save their coordinates. Devices pulse red when offline.
+4. **Router Uplinks (`uplink_traffic.html`)**: Displays real-time bandwidth charts for all devices marked as 'router'. Includes time-filters (1h, 6h, 12h, 24h) fetched via `/api/devices/<id>/traffic_history`.
+5. **Logs & Reports**: Includes Alert Logs, Access Logs, and PDF export functionality for monthly bandwidth summaries.
+
+### API Endpoints:
+- `GET/POST /api/devices`, `PUT/DELETE /api/devices/<id>`
+- `GET/POST /api/zones`, `DELETE /api/zones/<id>`
+- `GET /api/alerts`, `POST /api/alerts/<id>/ack`
+- `GET /api/devices/<id>/traffic_history?hours=X`
+- `POST /api/settings` (to update retention and polling interval)
+- `GET /api/stats` (fetches high-level metrics)
+
+### Deployment Constraints:
+- Provide an `update.sh` script that stops the service, git pulls, migrates the DB safely (DO NOT OVERWRITE `netmon.db`), installs pip requirements, and restarts the systemd service.
+- Implement a `manage_proxy.sh` script to configure Nginx to reverse proxy port 80 to 5000, supporting WebSocket upgrades (`Upgrade $http_upgrade`, `Connection "upgrade"`).
+
+CRITICAL INSTRUCTION: Ensure the code is modular. Separate database interactions into `database.py`, background polling into `snmp_worker.py`, API and Socket routing into `app.py`, and frontend logic into `static/js/main.js`.
 ```
 
 ---
