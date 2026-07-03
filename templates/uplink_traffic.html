@@ -8,7 +8,12 @@
     <p class="page-sub">Real-time and historic WAN interface throughput for all routers</p>
   </div>
   <div class="page-actions">
-
+    <div class="btn-group me-2" role="group" id="time-filter-group">
+      <button class="btn-nm btn-sm btn-ghost active" onclick="changeInterval(1)" id="btn-1h">1h</button>
+      <button class="btn-nm btn-sm btn-ghost" onclick="changeInterval(6)" id="btn-6h">6h</button>
+      <button class="btn-nm btn-sm btn-ghost" onclick="changeInterval(12)" id="btn-12h">12h</button>
+      <button class="btn-nm btn-sm btn-ghost" onclick="changeInterval(24)" id="btn-24h">24h</button>
+    </div>
     <a href="/devices" class="btn-nm btn-sm" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
       <i class="bi bi-chevron-left"></i> Kembali ke Devices
     </a>
@@ -37,7 +42,7 @@
 
 {% block scripts %}
 <script>
-let activeInterval = 0.25; // Default to 15 minutes rolling real-time window
+let activeInterval = 1; // Default to 1 hour
 let pollTimer = null;
 let charts = {}; // Store Chart instances by device ID
 let routersList = [];
@@ -273,6 +278,20 @@ function loadAllRouterData() {
   });
 }
 
+function changeInterval(hours) {
+  activeInterval = hours;
+  
+  // Highlight active button
+  const buttons = document.querySelectorAll('#time-filter-group button');
+  buttons.forEach(btn => btn.classList.remove('active'));
+  
+  if (hours === 1) document.getElementById('btn-1h').classList.add('active');
+  else if (hours === 6) document.getElementById('btn-6h').classList.add('active');
+  else if (hours === 12) document.getElementById('btn-12h').classList.add('active');
+  else if (hours === 24) document.getElementById('btn-24h').classList.add('active');
+  
+  loadAllRouterData();
+}
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
