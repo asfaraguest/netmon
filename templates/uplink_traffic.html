@@ -135,56 +135,73 @@ function createChartForRouter(router) {
   const gridColor = isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.05)';
   
   const ctx = canvas.getContext('2d');
+  
+  // Gradients for area fills
+  const gradientIn = ctx.createLinearGradient(0, 0, 0, 220);
+  gradientIn.addColorStop(0, 'rgba(0, 122, 255, 0.22)');
+  gradientIn.addColorStop(1, 'rgba(0, 122, 255, 0)');
+  
+  const gradientOut = ctx.createLinearGradient(0, 0, 0, 220);
+  gradientOut.addColorStop(0, 'rgba(52, 199, 89, 0.18)');
+  gradientOut.addColorStop(1, 'rgba(52, 199, 89, 0)');
+  
   charts[router.id] = new Chart(ctx, {
     type: 'line',
     data: {
       labels: [],
       datasets: [
         {
-          label: 'RX (Download)',
+          label: 'Inbound (Download)',
           data: [],
-          borderColor: '#58a6ff',
-          backgroundColor: 'rgba(88,166,255,0.12)',
+          borderColor: '#007aff',
+          backgroundColor: gradientIn,
           fill: true,
-          tension: 0.3,
-          borderWidth: 2,
-          pointRadius: 1
+          tension: 0.38,
+          borderWidth: 2.2,
+          pointRadius: 0,
+          pointHoverRadius: 4
         },
         {
-          label: 'TX (Upload)',
+          label: 'Outbound (Upload)',
           data: [],
-          borderColor: '#bc8cff',
-          backgroundColor: 'rgba(188,140,255,0.12)',
+          borderColor: '#34c759',
+          backgroundColor: gradientOut,
           fill: true,
-          tension: 0.3,
-          borderWidth: 2,
-          pointRadius: 1
+          tension: 0.38,
+          borderWidth: 2.2,
+          pointRadius: 0,
+          pointHoverRadius: 4
         }
       ]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      interaction: {
+        mode: 'index',
+        intersect: false
+      },
       plugins: {
-        legend: {
-          display: true,
-          position: 'top',
-          labels: { color: tickColor, font: { size: 11 } }
-        },
+        legend: { display: false },
         tooltip: {
-          mode: 'index',
-          intersect: false,
+          padding: 10,
+          cornerRadius: 12,
+          backgroundColor: isLight ? 'rgba(255, 255, 255, 0.95)' : 'rgba(20, 20, 20, 0.95)',
+          titleColor: isLight ? '#1d1d1f' : '#f5f5f7',
+          bodyColor: isLight ? '#4b5563' : '#8b949e',
+          borderColor: isLight ? '#e4e4e7' : '#30363d',
+          borderWidth: 1,
           callbacks: {
-            label: function(ctx) {
-              return ` ${ctx.dataset.label}: ${formatSpeed(ctx.parsed.y)}`;
+            label: function(context) {
+              return ' ' + context.dataset.label.split(' ')[0] + ': ' + formatSpeed(context.parsed.y);
             }
           }
         }
       },
       scales: {
         x: {
-          grid: { color: gridColor },
-          ticks: { color: tickColor, font: { size: 10 } }
+          grid: { display: false },
+          ticks: { font: { size: 10 }, color: tickColor, maxTicksLimit: 12 }
         },
         y: {
           grid: { color: gridColor },
@@ -192,7 +209,8 @@ function createChartForRouter(router) {
             color: tickColor,
             font: { size: 10 },
             callback: function(v) { return formatSpeed(v); }
-          }
+          },
+          border: { display: false }
         }
       }
     }
