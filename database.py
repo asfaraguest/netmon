@@ -904,7 +904,7 @@ class Database:
             alert_rows = c.execute('''
                 SELECT device_id, COUNT(*) as cnt
                 FROM alerts
-                WHERE timestamp >= ? AND timestamp < ?
+                WHERE created_at >= ? AND created_at < ?
                 GROUP BY device_id
             ''', (month_start, month_end)).fetchall()
 
