@@ -71,8 +71,8 @@ if [[ -d "$INSTALL_DIR" ]]; then
   
   # Set permissions
   if [[ $OS == "Linux" ]]; then
-    chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR"
-    chmod -R 755 "$INSTALL_DIR"
+    chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR" || true
+    chmod -R 755 "$INSTALL_DIR" || true
   fi
 else
   # If running in local directory (development or custom setup)
