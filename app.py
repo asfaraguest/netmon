@@ -45,6 +45,11 @@ def floorplan():
     db.add_access_log({'source': request.remote_addr, 'message': 'Accessed Floor Plan', 'type': 'access'})
     return render_template('floorplan.html')
 
+@app.route('/uplink-traffic')
+def uplink_traffic():
+    db.add_access_log({'source': request.remote_addr, 'message': 'Accessed Router Uplink Traffic', 'type': 'access'})
+    return render_template('uplink_traffic.html')
+
 @app.route('/zones')
 def zones_page():
     db.add_access_log({'source': request.remote_addr, 'message': 'Accessed Zones', 'type': 'access'})

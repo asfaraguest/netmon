@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+{% block title %}Router Uplink Traffic{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Router Uplinks</h1>
+    <p class="page-sub">Real-time and historic WAN interface throughput for all routers</p>
+  </div>
+  <div class="page-actions">
+    <div class="btn-group me-2" role="group" id="time-filter-group">
+      <button class="btn-nm btn-sm btn-ghost" onclick="changeInterval(0.25)" id="btn-15m">15m</button>
+      <button class="btn-nm btn-sm btn-ghost active" onclick="changeInterval(1)" id="btn-1h">1h</button>
+      <button class="btn-nm btn-sm btn-ghost" onclick="changeInterval(6)" id="btn-6h">6h</button>
+      <button class="btn-nm btn-sm btn-ghost" onclick="changeInterval(24)" id="btn-24h">24h</button>
+    </div>
+    <a href="/devices" class="btn-nm btn-sm" style="text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+      <i class="bi bi-chevron-left"></i> Kembali ke Devices
+    </a>
+  </div>
+</div>
+
+<!-- Container for Router Cards -->
+<div id="router-loading" class="nm-panel p-5 text-center my-4">
+  <div class="spinner-border text-primary" role="status">
+    <span class="visually-hidden">Loading...</span>
+  </div>
+  <p class="mt-2 text-muted">Memuat daftar router...</p>
+</div>
+
+<div id="no-router-alert" class="nm-panel p-5 text-center my-4" style="display: none;">
+  <i class="bi bi-exclamation-triangle-fill text-warning" style="font-size: 2.5rem;"></i>
+  <h4 class="mt-3">Tidak Ada Router Terdeteksi</h4>
+  <p class="text-muted">Pastikan ada perangkat bertipe "Router" yang ditambahkan ke sistem.</p>
+</div>
+
+<div class="row g-4" id="router-grid" style="display: none;">
+  <!-- Rendered dynamically via JS -->
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let activeInterval = 1; // Default to 1 hour
+let pollTimer = null;
+let charts = {}; // Store Chart instances by device ID
+let routersList = [];
+
+// Helper to format bandwidth
+function formatSpeed(bps) {
+  if (bps === null || bps === undefined) return '0 bps';
+  const val = parseFloat(bps);
+  if (val >= 1e9) return (val / 1e9).toFixed(2) + ' Gbps';
+  if (val >= 1e6) return (val / 1e6).toFixed(2) + ' Mbps';
+  if (val >= 1000) return (val / 1000).toFixed(2) + ' Kbps';
+  return val.toFixed(0) + ' bps';
+}
+
+function initPage() {
+  fetch('/api/devices')
+    .then(r => r.json())
+    .then(devices => {
+      document.getElementById('router-loading').style.display = 'none';
+      routersList = devices.filter(d => d.type === 'router');
+      
+      if (routersList.length === 0) {
+        document.getElementById('no-router-alert').style.display = 'block';
+        return;
+      }
+      
+      const grid = document.getElementById('router-grid');
+      grid.innerHTML = '';
+      grid.style.display = 'flex';
+      
+      routersList.forEach(router => {
+        const cardCol = document.createElement('div');
+        cardCol.className = 'col-lg-6 col-12';
+        
+        const statusClass = router.status === 'up' ? 'dot-online' : (router.status === 'down' ? 'dot-offline' : 'dot-unknown');
+        const statusText = router.status === 'up' ? 'Online' : (router.status === 'down' ? 'Offline' : 'Unknown');
+        
+        cardCol.innerHTML = `
+          <div class="nm-panel h-100" id="router-card-${router.id}">
+            <div class="panel-header d-flex justify-content-between align-items-center">
+              <div>
+                <span class="fw-bold text-accent" style="font-size: 1.1rem;">${router.name}</span>
+                <span class="text-muted text-sm ms-2">(${router.ip})</span>
+              </div>
+              <div class="d-flex align-items-center gap-2">
+                <span class="status-dot ${statusClass}" title="${statusText}"></span>
+                <span class="text-muted text-sm">${router.uplink_speed_mbps ? router.uplink_speed_mbps + 'M Uplink' : ''}</span>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="d-flex justify-content-between mb-3 text-sm">
+                <div>
+                  <span class="text-muted">Current Rx: </span>
+                  <span class="fw-bold text-info" id="cur-rx-${router.id}">0 bps</span>
+                </div>
+                <div>
+                  <span class="text-muted">Current Tx: </span>
+                  <span class="fw-bold text-warning" id="cur-tx-${router.id}">0 bps</span>
+                </div>
+              </div>
+              <div style="position: relative; height: 260px;">
+                <canvas id="chart-${router.id}"></canvas>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        grid.appendChild(cardCol);
+        createChartForRouter(router);
+      });
+      
+      // Load initial data and start polling
+      loadAllRouterData();
+      startPolling();
+    })
+    .catch(err => {
+      console.error("Failed to load routers:", err);
+      document.getElementById('router-loading').innerHTML = `
+        <i class="bi bi-x-circle text-danger" style="font-size: 2.5rem;"></i>
+        <p class="mt-2 text-danger">Gagal memuat daftar perangkat. Silakan coba lagi.</p>
+      `;
+    });
+}
+
+function createChartForRouter(router) {
+  const canvas = document.getElementById(`chart-${router.id}`);
+  if (!canvas) return;
+  
+  const isLight = document.body.classList.contains('light-theme');
+  const tickColor = isLight ? '#6e6e73' : '#8b949e';
+  const gridColor = isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.05)';
+  
+  const ctx = canvas.getContext('2d');
+  charts[router.id] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'RX (Download)',
+          data: [],
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,0.12)',
+          fill: true,
+          tension: 0.3,
+          borderWidth: 2,
+          pointRadius: 1
+        },
+        {
+          label: 'TX (Upload)',
+          data: [],
+          borderColor: '#bc8cff',
+          backgroundColor: 'rgba(188,140,255,0.12)',
+          fill: true,
+          tension: 0.3,
+          borderWidth: 2,
+          pointRadius: 1
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          labels: { color: tickColor, font: { size: 11 } }
+        },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          callbacks: {
+            label: function(ctx) {
+              return ` ${ctx.dataset.label}: ${formatSpeed(ctx.parsed.y)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: gridColor },
+          ticks: { color: tickColor, font: { size: 10 } }
+        },
+        y: {
+          grid: { color: gridColor },
+          ticks: {
+            color: tickColor,
+            font: { size: 10 },
+            callback: function(v) { return formatSpeed(v); }
+          }
+        }
+      }
+    }
+  });
+}
+
+function loadAllRouterData() {
+  if (routersList.length === 0) return;
+  
+  routersList.forEach(router => {
+    const url = `/api/devices/${router.id}/traffic_history?hours=${activeInterval}`;
+    fetch(url)
+      .then(r => r.json())
+      .then(res => {
+        if (res.status !== 'success' || !charts[router.id]) return;
+        const pts = res.points || [];
+        
+        // Format labels based on selection range
+        const fmt = activeInterval <= 1
+          ? d => new Date(d).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'})
+          : d => new Date(d).toLocaleString([], {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+          
+        const labels = pts.map(p => { try { return fmt(p.ts); } catch { return p.ts; } });
+        const rxData = pts.map(p => p.rx_bps || 0);
+        const txData = pts.map(p => p.tx_bps || 0);
+        
+        // Update current throughput displays (latest values)
+        const latestRx = rxData.length > 0 ? rxData[rxData.length - 1] : 0;
+        const latestTx = txData.length > 0 ? txData[txData.length - 1] : 0;
+        
+        const curRxEl = document.getElementById(`cur-rx-${router.id}`);
+        const curTxEl = document.getElementById(`cur-tx-${router.id}`);
+        if (curRxEl) curRxEl.textContent = formatSpeed(latestRx);
+        if (curTxEl) curTxEl.textContent = formatSpeed(latestTx);
+        
+        // Update chart
+        const chart = charts[router.id];
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = rxData;
+        chart.data.datasets[1].data = txData;
+        chart.update('none');
+      })
+      .catch(err => console.error(`Error loading traffic for router ${router.id}:`, err));
+  });
+}
+
+function changeInterval(hours) {
+  activeInterval = hours;
+  
+  // Highlight active button
+  const buttons = document.querySelectorAll('#time-filter-group button');
+  buttons.forEach(btn => btn.classList.remove('active'));
+  
+  if (hours === 0.25) document.getElementById('btn-15m').classList.add('active');
+  else if (hours === 1) document.getElementById('btn-1h').classList.add('active');
+  else if (hours === 6) document.getElementById('btn-6h').classList.add('active');
+  else if (hours === 24) document.getElementById('btn-24h').classList.add('active');
+  
+  loadAllRouterData();
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  // Poll every 10 seconds
+  pollTimer = setInterval(loadAllRouterData, 10000);
+  console.log("[Uplink Monitor] Started active polling interval.");
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+    console.log("[Uplink Monitor] Suspended polling interval.");
+  }
+}
+
+// Implement page activity control using Page Visibility API
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopPolling();
+  } else {
+    // Only resume polling if we are currently active on this page context
+    startPolling();
+  }
+});
+
+// Run initialization
+document.addEventListener('DOMContentLoaded', () => {
+  initPage();
+});
+</script>
+{% endblock %}
