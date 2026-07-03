@@ -330,7 +330,7 @@ function printReport() {
 function deleteReport(id, monthTitle, event) {
   if (event) event.stopPropagation();
   showConfirm('Delete Report', `Apakah Anda yakin ingin menghapus Laporan Bulanan ${monthTitle}?`, () => {
-    fetch(`/api/reports/${id}`, { method: 'DELETE' })
+    fetch(`/api/reports/${id}/delete`, { method: 'POST' })
       .then(r => r.json())
       .then(res => {
         if (res.status === 'success') {

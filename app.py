@@ -97,7 +97,7 @@ def get_device_type_counts():
 def get_device(device_id):
     return jsonify(db.get_device(device_id) or {})
 
-@app.route('/api/devices/<int:device_id>', methods=['PUT'])
+@app.route('/api/devices/<int:device_id>', methods=['PUT', 'POST'])
 def update_device(device_id):
     import sqlite3
     try:
@@ -110,6 +110,7 @@ def update_device(device_id):
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+@app.route('/api/devices/<int:device_id>/delete', methods=['POST'])
 @app.route('/api/devices/<int:device_id>', methods=['DELETE'])
 def delete_device(device_id):
     db.delete_device(device_id)
@@ -506,7 +507,7 @@ def add_zone():
         traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@app.route('/api/zones/<int:zone_id>', methods=['PUT'])
+@app.route('/api/zones/<int:zone_id>', methods=['PUT', 'POST'])
 def update_zone(zone_id):
     import traceback
     try:
@@ -517,6 +518,7 @@ def update_zone(zone_id):
         traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+@app.route('/api/zones/<int:zone_id>/delete', methods=['POST'])
 @app.route('/api/zones/<int:zone_id>', methods=['DELETE'])
 def delete_zone(zone_id):
     import traceback
@@ -802,6 +804,7 @@ def generate_monthly_report():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
 
+@app.route('/api/reports/<int:report_id>/delete', methods=['POST'])
 @app.route('/api/reports/<int:report_id>', methods=['DELETE'])
 def delete_monthly_report(report_id):
     try:

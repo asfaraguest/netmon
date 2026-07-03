@@ -401,14 +401,14 @@ function saveZone() {
   if (!name) { showToast('Zone name required', 'warning'); return; }
   const data = {name, description: document.getElementById('zone-desc').value, color: document.getElementById('zone-color').value};
   const url    = id ? `/api/zones/${id}` : '/api/zones';
-  const method = id ? 'PUT' : 'POST';
+  const method = 'POST';
   fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
     .then(() => { zoneModal.hide(); loadZones(); showToast(id ? 'Zone updated' : 'Zone added', 'success'); });
 }
 
 function deleteZone(id, name) {
   showConfirm('Delete Zone', `Apakah Anda Yakin ingin menghapus zona "${name}"? Perangkat di zona ini akan dipindahkan ke Default Zone.`, () => {
-    fetch(`/api/zones/${id}`, {method:'DELETE'}).then(() => { loadZones(); showToast('Zone deleted', 'info'); });
+    fetch(`/api/zones/${id}/delete`, {method:'POST'}).then(() => { loadZones(); showToast('Zone deleted', 'info'); });
   });
 }
 

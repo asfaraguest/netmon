@@ -420,7 +420,7 @@ function saveZone() {
   };
   
   const url = id ? `/api/zones/${id}` : '/api/zones';
-  const method = id ? 'PUT' : 'POST';
+  const method = 'POST';
   
   fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
     .then(r => r.json())
@@ -433,7 +433,7 @@ function saveZone() {
 
 function confirmDeleteZone(id, name) {
   showConfirm('Hapus Zone', `Apakah Anda yakin ingin menghapus zona "${name}"? Perangkat di dalamnya akan dipindahkan ke Default Zone.`, () => {
-    fetch(`/api/zones/${id}`, {method:'DELETE'}).then(() => {
+    fetch(`/api/zones/${id}/delete`, {method:'POST'}).then(() => {
       showToast('Zone dihapus', 'info');
       loadZones();
     });

@@ -579,7 +579,7 @@ function saveDevice() {
     wan_iface_idx:  document.getElementById('dev-wan-iface').value
   };
   const url    = id ? `/api/devices/${id}` : '/api/devices';
-  const method = id ? 'PUT' : 'POST';
+  const method = 'POST';
   fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
     .then(r=>r.json()).then(() => {
       devModal.hide();
@@ -590,7 +590,7 @@ function saveDevice() {
 
 function confirmDelete(id, name) {
   showConfirm('Delete Device', `Apakah Anda yakin ingin menghapus perangkat "${name}"?`, () => {
-    fetch(`/api/devices/${id}`, {method:'DELETE'}).then(() => {
+    fetch(`/api/devices/${id}/delete`, {method:'POST'}).then(() => {
       showToast('Device deleted', 'info'); loadAll();
     });
   });
