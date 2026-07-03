@@ -892,6 +892,29 @@ class Database:
                 continue
             device_data[did][mname].append((ts, val))
             
+        # Query health metrics (cpu, memory, temperature) and alerts for the routers
+        with self.conn() as c:
+            health_rows = c.execute('''
+                SELECT device_id, metric_name, CAST(metric_value AS REAL) as val
+                FROM snmp_metrics
+                WHERE metric_name IN ('cpu_usage', 'memory_usage', 'temperature')
+                  AND timestamp >= ? AND timestamp < ?
+            ''', (month_start, month_end)).fetchall()
+            
+            alert_rows = c.execute('''
+                SELECT device_id, COUNT(*) as cnt
+                FROM alerts
+                WHERE timestamp >= ? AND timestamp < ?
+                GROUP BY device_id
+            ''', (month_start, month_end)).fetchall()
+
+        health_vals = defaultdict(list)
+        for hr in health_rows:
+            if hr['val'] is not None:
+                health_vals[(hr['device_id'], hr['metric_name'])].append(hr['val'])
+                
+        device_alert_counts = {ar['device_id']: ar['cnt'] for ar in alert_rows}
+            
         total_backbone_rx_bps_sum = 0.0
         total_backbone_tx_bps_sum = 0.0
         backbone_peaks_rx = []
@@ -900,6 +923,22 @@ class Database:
         for router in routers:
             rid = router['id']
             rdata = device_data[rid]
+            
+            # Calculate health statistics
+            cpu_list = health_vals[(rid, 'cpu_usage')]
+            mem_list = health_vals[(rid, 'memory_usage')]
+            temp_list = health_vals[(rid, 'temperature')]
+            
+            avg_cpu = sum(cpu_list) / len(cpu_list) if cpu_list else 0.0
+            peak_cpu = max(cpu_list) if cpu_list else 0.0
+            
+            avg_mem = sum(mem_list) / len(mem_list) if mem_list else 0.0
+            peak_mem = max(mem_list) if mem_list else 0.0
+            
+            avg_temp = sum(temp_list) / len(temp_list) if temp_list else 0.0
+            peak_temp = max(temp_list) if temp_list else 0.0
+            
+            alert_count = device_alert_counts.get(rid, 0)
             
             # Calculate rx (wan_in) statistics
             rx_points = rdata['wan_in']
@@ -962,7 +1001,16 @@ class Database:
                 'avg_rx_mbps': round(avg_rx_bps / 1e6, 2),
                 'avg_tx_mbps': round(avg_tx_bps / 1e6, 2),
                 'peak_rx_mbps': round(max_rx_bps / 1e6, 2),
-                'peak_tx_mbps': round(max_tx_bps / 1e6, 2)
+                'peak_tx_mbps': round(max_tx_bps / 1e6, 2),
+                
+                # Health metrics
+                'avg_cpu': round(avg_cpu, 1),
+                'peak_cpu': round(peak_cpu, 1),
+                'avg_mem': round(avg_mem, 1),
+                'peak_mem': round(peak_mem, 1),
+                'avg_temp': round(avg_temp, 1),
+                'peak_temp': round(peak_temp, 1),
+                'total_alerts': alert_count
             }
             if no_data:
                 router_stats['no_data'] = True

@@ -124,6 +124,28 @@
           </div>
         </div>
 
+        <!-- Section 3: Router Health & Resource Utilization -->
+        <div class="mt-4" id="router-health-section" style="display: none;">
+          <h5 class="fw-700 text-primary mb-3"><i class="bi bi-heart-pulse-fill me-2 text-accent"></i>Kesehatan & Utilitas Resource Router</h5>
+          
+          <div class="table-responsive" style="border: 1px solid var(--border-lt); border-radius: 8px;">
+            <table class="table table-hover align-middle mb-0 text-xs">
+              <thead style="background: var(--bg-hover);">
+                <tr>
+                  <th style="font-weight:600; padding: 12px;">Router</th>
+                  <th style="font-weight:600; padding: 12px; text-align: center;">CPU (Rerata / Puncak)</th>
+                  <th style="font-weight:600; padding: 12px; text-align: center;">RAM (Rerata / Puncak)</th>
+                  <th style="font-weight:600; padding: 12px; text-align: center;">Suhu (Rerata / Puncak)</th>
+                  <th style="font-weight:600; padding: 12px; text-align: center;">Total Alert (Bulan Ini)</th>
+                </tr>
+              </thead>
+              <tbody id="router-health-rows">
+                <!-- Rendered dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -285,6 +307,46 @@ function selectReport(id) {
       </tr>
     `;
   }).join('');
+
+  // Render health rows
+  const healthSection = document.getElementById('router-health-section');
+  const healthTbody = document.getElementById('router-health-rows');
+  
+  if (healthSection && healthTbody) {
+    // Check if any router has health info
+    const hasHealth = data.routers.some(r => r.avg_cpu !== undefined || r.total_alerts !== undefined);
+    if (hasHealth) {
+      healthSection.style.display = 'block';
+      healthTbody.innerHTML = data.routers.map(router => {
+        const cpuStr = router.avg_cpu !== undefined ? `${router.avg_cpu}% / ${router.peak_cpu}%` : '—';
+        const memStr = router.avg_mem !== undefined ? `${router.avg_mem}% / ${router.peak_mem}%` : '—';
+        const tempStr = router.avg_temp && router.avg_temp > 0 ? `${router.avg_temp}°C / ${router.peak_temp}°C` : '—';
+        const alertsCount = router.total_alerts !== undefined ? router.total_alerts : 0;
+        
+        let alertBadge = '<span class="badge bg-success-lt text-success">0 Alerts</span>';
+        if (alertsCount > 10) {
+          alertBadge = `<span class="badge bg-danger-lt text-danger">${alertsCount} Alerts</span>`;
+        } else if (alertsCount > 0) {
+          alertBadge = `<span class="badge bg-warning-lt text-warning">${alertsCount} Alerts</span>`;
+        }
+
+        return `
+          <tr>
+            <td style="padding: 12px;">
+              <div class="fw-600 text-primary">${esc(router.name)}</div>
+              <div class="text-muted mono-sm" style="font-size: 10px;">${esc(router.ip)}</div>
+            </td>
+            <td style="padding: 12px; text-align: center; font-weight: 500;">${cpuStr}</td>
+            <td style="padding: 12px; text-align: center; font-weight: 500;">${memStr}</td>
+            <td style="padding: 12px; text-align: center; font-weight: 500;">${tempStr}</td>
+            <td style="padding: 12px; text-align: center;">${alertBadge}</td>
+          </tr>
+        `;
+      }).join('');
+    } else {
+      healthSection.style.display = 'none';
+    }
+  }
 }
 
 function generateReport() {
