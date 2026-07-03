@@ -92,14 +92,26 @@ function initPage() {
               </div>
             </div>
             <div class="panel-body">
-              <div class="d-flex justify-content-between mb-3 text-sm">
-                <div>
-                  <span class="text-muted">Current Rx: </span>
-                  <span class="fw-bold text-info" id="cur-rx-${router.id}">0 bps</span>
+              <div class="row g-2 mb-3 text-sm">
+                <div class="col-6">
+                  <div>
+                    <span class="text-muted">Current Rx: </span>
+                    <span class="fw-bold text-info" id="cur-rx-${router.id}">0 bps</span>
+                  </div>
+                  <div>
+                    <span class="text-muted">Peak Rx: </span>
+                    <span class="fw-bold" style="color: #007aff;" id="peak-rx-${router.id}">0 bps</span>
+                  </div>
                 </div>
-                <div>
-                  <span class="text-muted">Current Tx: </span>
-                  <span class="fw-bold text-warning" id="cur-tx-${router.id}">0 bps</span>
+                <div class="col-6 text-end">
+                  <div>
+                    <span class="text-muted">Current Tx: </span>
+                    <span class="fw-bold text-warning" id="cur-tx-${router.id}">0 bps</span>
+                  </div>
+                  <div>
+                    <span class="text-muted">Peak Tx: </span>
+                    <span class="fw-bold" style="color: #34c759;" id="peak-tx-${router.id}">0 bps</span>
+                  </div>
                 </div>
               </div>
               <div style="position: relative; height: 260px;">
@@ -241,10 +253,19 @@ function loadAllRouterData() {
         const latestRx = rxData.length > 0 ? rxData[rxData.length - 1] : 0;
         const latestTx = txData.length > 0 ? txData[txData.length - 1] : 0;
         
+        // Calculate peaks
+        const peakRx = rxData.length > 0 ? Math.max(...rxData) : 0;
+        const peakTx = txData.length > 0 ? Math.max(...txData) : 0;
+        
         const curRxEl = document.getElementById(`cur-rx-${router.id}`);
         const curTxEl = document.getElementById(`cur-tx-${router.id}`);
         if (curRxEl) curRxEl.textContent = formatSpeed(latestRx);
         if (curTxEl) curTxEl.textContent = formatSpeed(latestTx);
+        
+        const peakRxEl = document.getElementById(`peak-rx-${router.id}`);
+        const peakTxEl = document.getElementById(`peak-tx-${router.id}`);
+        if (peakRxEl) peakRxEl.textContent = formatSpeed(peakRx);
+        if (peakTxEl) peakTxEl.textContent = formatSpeed(peakTx);
         
         // Update chart
         const chart = charts[router.id];
