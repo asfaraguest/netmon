@@ -78,7 +78,7 @@ enable_proxy() {
     
     # 1. Buat file konfigurasi jika belum ada
     if [[ ! -f "$NGINX_AVAILABLE" ]]; then
-        generate_nginx_config()
+        generate_nginx_config
     fi
     
     # 2. Buat symlink di sites-enabled
