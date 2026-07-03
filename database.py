@@ -611,8 +611,10 @@ class Database:
                     WITH iface_bucket AS (
                         SELECT
                             iface_name,
-                            strftime('%Y-%m-%dT%H:%M:', sampled_at) ||
-                            (CAST(CAST(strftime('%S', sampled_at) AS INTEGER)/30 AS INTEGER)*30) || 'Z' AS bucket,
+                            CASE
+                                WHEN CAST(strftime('%S', sampled_at) AS INTEGER) < 30 THEN strftime('%Y-%m-%dT%H:%M:00Z', sampled_at)
+                                ELSE strftime('%Y-%m-%dT%H:%M:30Z', sampled_at)
+                            END AS bucket,
                             AVG(rx_bps) AS avg_rx,
                             AVG(tx_bps) AS avg_tx
                         FROM interface_traffic

@@ -292,8 +292,7 @@ function openDeviceDetail(id) {
     fetchRealtimeStats();
     if (detailPollInterval) clearInterval(detailPollInterval);
     detailPollInterval = setInterval(fetchRealtimeStats, 3000);
-    loadHistoryInterfaces(activeDetailDeviceId);
-    loadHistoryChart(activeDetailDeviceId, null, 1);
+
   };
 
   if (dev) {
@@ -814,112 +813,7 @@ function updateChartData(iface) {
   }
 }
 
-// ── State untuk history chart ──
-let _histHours = 1;
-let _histIface = null;
-let _histChart = null;
 
-function loadHistoryChart(deviceId, ifaceName, hours) {
-  if (!deviceId) return;
-  if (hours !== undefined) _histHours = hours;
-  if (ifaceName !== undefined) _histIface = ifaceName;
-  const url = `/api/devices/${deviceId}/traffic_history?hours=${_histHours}` +
-              (_histIface ? `&iface=${encodeURIComponent(_histIface)}` : '');
-  fetch(url).then(r => r.json()).then(res => {
-    if (res.status !== 'success') return;
-    const pts    = res.points || [];
-    const fmt    = _histHours <= 1
-      ? d => new Date(d).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})
-      : d => new Date(d).toLocaleString([],{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
-    const labels = pts.map(p => { try { return fmt(p.ts); } catch { return p.ts; } });
-    const rxData = pts.map(p => p.rx_bps || 0);
-    const txData = pts.map(p => p.tx_bps || 0);
-    const canvas = document.getElementById('historyChart');
-    if (!canvas) return;
-
-    const isClient = res.is_client_chart === true;
-    const labelFmt = isClient 
-      ? ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y} clients`
-      : ctx => ` ${ctx.dataset.label}: ${formatBandwidthSimple(ctx.parsed.y)}`;
-      
-    const yTickFmt = isClient 
-      ? v => v + ' clients'
-      : v => formatBandwidthSimple(v);
-
-    const histIfaceSelect = document.getElementById('hist-iface-select');
-    if (histIfaceSelect) {
-      histIfaceSelect.style.display = isClient ? 'none' : 'block';
-    }
-    const histTitle = document.querySelector('#history-chart-panel .panel-header > span');
-    if (histTitle) {
-      histTitle.innerHTML = isClient 
-        ? '<i class="bi bi-people-fill me-2 text-accent"></i>Client History'
-        : '<i class="bi bi-graph-up-arrow me-2 text-accent"></i>Traffic History';
-    }
-
-    if (_histChart) {
-      _histChart.data.labels = labels;
-      _histChart.data.datasets[0].data = rxData;
-      _histChart.data.datasets[1].data = txData;
-      _histChart.data.datasets[0].label = isClient ? 'Connected Clients' : 'RX (Inbound)';
-      _histChart.data.datasets[1].hidden = isClient;
-      _histChart.options.plugins.tooltip.callbacks.label = labelFmt;
-      _histChart.options.scales.y.ticks.callback = yTickFmt;
-      _histChart.options.plugins.legend.display = !isClient;
-      _histChart.update('none');
-    } else {
-      const isLight = document.body.classList.contains('light-theme');
-      const tickColor = isLight ? '#6e6e73' : '#8b949e';
-      const gridColor = isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.05)';
-
-      _histChart = new Chart(canvas.getContext('2d'), {
-        type: 'line',
-        data: { labels, datasets: [
-          { label: isClient ? 'Connected Clients' : 'RX (Inbound)',  data:rxData, borderColor:'#58a6ff',
-            backgroundColor:'rgba(88,166,255,0.12)', fill:true, tension:0.3,
-            borderWidth:2, pointRadius:1 },
-          { label:'TX (Outbound)', data:txData, borderColor:'#bc8cff',
-            backgroundColor:'rgba(188,140,255,0.12)', fill:true, tension:0.3,
-            borderWidth:2, pointRadius:1, hidden: isClient }
-        ]},
-        options: {
-          responsive:true, maintainAspectRatio:false, animation:false,
-          plugins: {
-            legend:{ display:!isClient, labels:{color:tickColor,font:{size:11}} },
-            tooltip:{ callbacks:{ label: labelFmt } }
-          },
-          scales: {
-            x:{ grid:{display:false}, ticks:{color:tickColor,font:{size:10},maxTicksLimit:8,maxRotation:0} },
-            y:{ grid:{color:gridColor}, ticks:{color:tickColor,font:{size:10},
-                callback: yTickFmt } }
-          }
-        }
-      });
-    }
-    const noData = document.getElementById('hist-no-data');
-    if (noData) noData.style.display = pts.length === 0 ? '' : 'none';
-  }).catch(err => console.warn('[History]', err));
-}
-
-function loadHistoryInterfaces(deviceId) {
-  fetch(`/api/devices/${deviceId}/traffic_interfaces`)
-    .then(r => r.json())
-    .then(res => {
-      const sel = document.getElementById('hist-iface-select');
-      if (!sel) return;
-      sel.innerHTML = '<option value="">Semua interface (agregat)</option>' +
-        (res.interfaces || []).map(i => `<option value="${esc(i.name)}">${esc(i.name)}</option>`).join('');
-    }).catch(()=>{});
-}
-
-function exportHistoryChart() {
-  if (!_histChart) { showToast('Belum ada data grafik', 'warning'); return; }
-  const a    = document.createElement('a');
-  const name = document.getElementById('det-title')?.textContent || 'device';
-  a.download = `traffic_${name.replace(/\s+/g,'_')}_${_histHours}h.png`;
-  a.href     = _histChart.toBase64Image('image/png', 1.0);
-  a.click();
-}
 
 // ---- Day/Night (Light/Dark) Theme Toggle ----
 document.addEventListener('DOMContentLoaded', () => {
@@ -946,21 +840,7 @@ document.addEventListener('DOMContentLoaded', () => {
         trafficChartInstance.update();
       }
     }
-    if (_histChart) {
-      if (_histChart.options && _histChart.options.scales) {
-        if (_histChart.options.scales.x) {
-          if (_histChart.options.scales.x.ticks) _histChart.options.scales.x.ticks.color = tickColor;
-        }
-        if (_histChart.options.scales.y) {
-          if (_histChart.options.scales.y.ticks) _histChart.options.scales.y.ticks.color = tickColor;
-          if (_histChart.options.scales.y.grid) _histChart.options.scales.y.grid.color = gridColor;
-        }
-        if (_histChart.options.plugins && _histChart.options.plugins.legend && _histChart.options.plugins.legend.labels) {
-          _histChart.options.plugins.legend.labels.color = tickColor;
-        }
-        _histChart.update();
-      }
-    }
+
   }
 
   function updateThemeUI(isLight) {
