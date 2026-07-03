@@ -259,8 +259,8 @@ body.theme-morphism .page-header {
   text-decoration: none;
 }
 .btn-nm:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: var(--border);
+  background: var(--bg-hover);
+  border-color: var(--text-muted);
   color: var(--text-primary);
 }
 .btn-nm:active {
