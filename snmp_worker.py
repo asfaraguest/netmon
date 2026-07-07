@@ -98,6 +98,7 @@ class SNMPWorker:
         self._if_prev = {}
         self.db_write_lock = threading.RLock()
         self._ping_history = {}
+        self._snmp_failing = set()
 
     def get_scan_status(self): return dict(self._status)
     def stop_scan(self):       self._stop.set()
@@ -616,6 +617,7 @@ class SNMPWorker:
                 elif old_st == 'unknown':
                     upd['last_seen'] = now
 
+                self._snmp_failing.discard(ip)
                 self.db.update_device(did, upd)
                 if upd.get('uptime'):
                     self.db.save_metric(did, 'uptime', upd['uptime'])
@@ -668,13 +670,18 @@ class SNMPWorker:
                         upd['last_seen'] = now
                     # Only alert if SNMP was the one that actually failed (we didn't revive SNMP in verify block)
                     if not result:
-                        self._alert(device, 'warning',
-                                    f"SNMP unreachable on {device.get('name',ip)} ({ip}) — check community/config")
+                        if ip not in self._snmp_failing:
+                            self._alert(device, 'warning', f"SNMP unreachable on {device.get('name',ip)} ({ip}) — check community/config")
+                            self._snmp_failing.add(ip)
+                    else:
+                        if ip in self._snmp_failing:
+                            self._snmp_failing.remove(ip)
                     print(f"[SNMP] FAILED for {ip} — device alive via ping but SNMP not responding")
                     self.db.update_device(did, upd)
             else:
                 # Genuinely offline -> lempar notifikasi perangkat offline ke dashboard
                 with self.db_write_lock:
+                    self._snmp_failing.discard(ip)
                     self.db.update_device(did, {'status':'down','last_polled':now,
                                                  'cpu_usage': None, 'memory_usage': None, 'temperature': None})
                     if old_st != 'down':
