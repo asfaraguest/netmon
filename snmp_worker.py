@@ -670,7 +670,6 @@ class SNMPWorker:
                     if not result:
                         self._alert(device, 'warning',
                                     f"SNMP unreachable on {device.get('name',ip)} ({ip}) — check community/config")
-                        upd.update({'cpu_usage': None, 'memory_usage': None, 'temperature': None, 'wan_in': None, 'wan_out': None, 'uptime': ''})
                     print(f"[SNMP] FAILED for {ip} — device alive via ping but SNMP not responding")
                     self.db.update_device(did, upd)
             else:

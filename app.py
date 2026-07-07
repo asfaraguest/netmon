@@ -497,9 +497,19 @@ def get_device_downtime_forensics(device_id):
     history = db.get_downtime_analysis(device_id, limit=5)
     
     # Check if the device is ONLINE but SNMP is unreachable (snmp_enabled but cpu_usage is None)
-    is_snmp_unreachable = (device.get('status') == 'up' and 
-                           device.get('snmp_enabled') == 1 and 
-                           device.get('cpu_usage') is None)
+    is_snmp_unreachable = False
+    if device.get('status') == 'up' and device.get('snmp_enabled') == 1:
+        # Check if we have received any SNMP metrics in the last 3 minutes.
+        # If the device is UP but no metrics are flowing, SNMP is failing.
+        with db.conn() as c:
+            recent_metric = c.execute('''
+                SELECT 1 FROM snmp_metrics 
+                WHERE device_id = ? AND metric_name = 'cpu_usage' 
+                AND timestamp >= datetime('now', '-3 minutes')
+                LIMIT 1
+            ''', (device_id,)).fetchone()
+            if not recent_metric:
+                is_snmp_unreachable = True
                            
     if is_snmp_unreachable:
         latest = {
