@@ -1398,13 +1398,17 @@ class SNMPWorker:
                         except ValueError:
                             pass
                     
-                    limit_bps = speed_bps * 1.05 if speed_bps > 0 else 100e9
+                    # Prevent false positives on PPPoE/virtual interfaces that report 0 or fake low speeds
+                    # by falling back to the auto-detected physical uplink speed
+                    uplink_bps_fallback = float(device.get('uplink_speed_mbps') or 1000) * 1e6
+                    effective_speed = max(speed_bps, uplink_bps_fallback)
+                    limit_bps = effective_speed * 1.05 if effective_speed > 0 else 100e9
                     
                     if wan_in_bps > limit_bps or wan_out_bps > limit_bps:
-                        cap_mbps = (speed_bps / 1e6) if speed_bps > 0 else 100000.0
+                        cap_mbps = (effective_speed / 1e6) if effective_speed > 0 else 100000.0
                         print(f"[Traffic] Spike terdeteksi pada device_id={did} WAN interface={target_idx} (wan_in={wan_in_bps:.1f}, wan_out={wan_out_bps:.1f} melebihi kapasitas link {cap_mbps:.1f} Mbps)")
-                        wan_in_bps = 0.0
-                        wan_out_bps = 0.0
+                        # Skip recording this anomalous poll to avoid ruining the graph (return None instead of 0)
+                        return None
                     
                     return {"wan_in": wan_in_bps, "wan_out": wan_out_bps}
         except Exception:
