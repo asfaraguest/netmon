@@ -648,7 +648,15 @@ class Database:
                       (device_id, iface_name, iface_idx, rx_bps, tx_bps))
 
     def get_interface_traffic(self, device_id, iface_name=None, hours=1):
-        limit = min(int(hours * 120) + 10, 3000)
+        try:
+            poll_interval = max(5, int(self.get_settings().get('traffic_poll_interval', 10)))
+        except Exception:
+            poll_interval = 10
+        # Limit utk baris mentah (single iface) harus ngikutin traffic_poll_interval AKTUAL,
+        # bukan asumsi tetap 30 detik/sample -- kalau tidak, view rentang lebar bisa kepotong
+        # dan kehilangan data TERBARU (LIMIT ambil yg paling lama dulu krn ORDER BY ASC).
+        raw_limit = min(int(hours * 3600 / poll_interval) + 50, 20000)
+        bucket_limit = min(int(hours * 120) + 10, 3000)
         with self.conn() as c:
             if iface_name:
                 rows = c.execute('''
@@ -656,7 +664,7 @@ class Database:
                     WHERE device_id=? AND iface_name=?
                       AND sampled_at >= datetime('now', ? || ' hours')
                     ORDER BY sampled_at ASC LIMIT ?
-                ''', (device_id, iface_name, f'-{int(hours)}', limit)).fetchall()
+                ''', (device_id, iface_name, f'-{int(hours)}', raw_limit)).fetchall()
             else:
                 rows = c.execute('''
                     WITH iface_bucket AS (
@@ -677,7 +685,7 @@ class Database:
                     FROM iface_bucket
                     GROUP BY bucket
                     ORDER BY bucket ASC LIMIT ?
-                ''', (device_id, f'-{int(hours)}', limit)).fetchall()
+                ''', (device_id, f'-{int(hours)}', bucket_limit)).fetchall()
             return [{'ts': r[0], 'rx_bps': r[1], 'tx_bps': r[2]} for r in rows]
 
     def get_backbone_traffic_history(self, hours):
