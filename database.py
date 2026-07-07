@@ -266,18 +266,29 @@ class Database:
                 
                 c.execute('''
                     UPDATE devices 
-                    SET wan_in = 0, wan_out = 0 
+                    SET wan_in = 0
                     WHERE wan_in > (IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05)
-                       OR wan_out > (IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05)
+                ''')
+                
+                c.execute('''
+                    UPDATE devices 
+                    SET wan_out = 0
+                    WHERE wan_out > (IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05)
                 ''')
                 
                 c.execute('''
                     UPDATE interface_traffic 
-                    SET rx_bps = 0, tx_bps = 0
+                    SET rx_bps = 0
                     WHERE rx_bps > (
                         SELECT (IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05) 
                         FROM devices WHERE devices.id = interface_traffic.device_id
-                    ) OR tx_bps > (
+                    )
+                ''')
+                
+                c.execute('''
+                    UPDATE interface_traffic 
+                    SET tx_bps = 0
+                    WHERE tx_bps > (
                         SELECT (IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05) 
                         FROM devices WHERE devices.id = interface_traffic.device_id
                     )
