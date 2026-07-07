@@ -259,7 +259,7 @@ class Database:
                     SET metric_value = '0' 
                     WHERE metric_name IN ('wan_in', 'wan_out') 
                     AND CAST(metric_value AS REAL) > (
-                        SELECT (IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05) 
+                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05, 5000000000.0) 
                         FROM devices WHERE devices.id = snmp_metrics.device_id
                     )
                 ''')
@@ -267,20 +267,20 @@ class Database:
                 c.execute('''
                     UPDATE devices 
                     SET wan_in = 0
-                    WHERE wan_in > (IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05)
+                    WHERE wan_in > MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05, 5000000000.0)
                 ''')
                 
                 c.execute('''
                     UPDATE devices 
                     SET wan_out = 0
-                    WHERE wan_out > (IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05)
+                    WHERE wan_out > MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05, 5000000000.0)
                 ''')
                 
                 c.execute('''
                     UPDATE interface_traffic 
                     SET rx_bps = 0
                     WHERE rx_bps > (
-                        SELECT (IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05) 
+                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * 1.05, 5000000000.0) 
                         FROM devices WHERE devices.id = interface_traffic.device_id
                     )
                 ''')

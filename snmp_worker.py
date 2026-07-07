@@ -1402,7 +1402,13 @@ class SNMPWorker:
                     # by falling back to the auto-detected physical uplink speed
                     uplink_bps_fallback = float(device.get('uplink_speed_mbps') or 1000) * 1e6
                     effective_speed = max(speed_bps, uplink_bps_fallback)
+                    
+                    # Custom rule: 
+                    # If link is 1 Gbps, limit is ~1 Gbps (plus 5% tolerance).
+                    # If link is 10 Gbps, limit is capped at 5 Gbps (since total ISP BW is only 6 Gbps).
                     limit_bps = effective_speed * 1.05 if effective_speed > 0 else 100e9
+                    if limit_bps > 5000000000.0:  # If calculated limit is > 5 Gbps
+                        limit_bps = 5000000000.0  # Cap the absolute anomaly threshold to 5 Gbps
                     
                     if wan_in_bps > limit_bps or wan_out_bps > limit_bps:
                         cap_mbps = (effective_speed / 1e6) if effective_speed > 0 else 100000.0
