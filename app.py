@@ -496,8 +496,25 @@ def get_device_downtime_forensics(device_id):
         
     history = db.get_downtime_analysis(device_id, limit=5)
     
+    # Check if the device is ONLINE but SNMP is unreachable (snmp_enabled but cpu_usage is None)
+    is_snmp_unreachable = (device.get('status') == 'up' and 
+                           device.get('snmp_enabled') == 1 and 
+                           device.get('cpu_usage') is None)
+                           
+    if is_snmp_unreachable:
+        latest = {
+            'device_id': device_id,
+            'down_time': datetime.now().isoformat(),
+            'up_time': datetime.now().isoformat(),
+            'duration_sec': 0,
+            'ping_pattern': 'normal',
+            'snmp_pattern': 'snmp_failed',
+            'reboot_detected': 0,
+            'justification': "SNMP Unreachable (Protokol SNMP Tidak Merespon)",
+            'confidence': 90.0
+        }
     # Check if the device is currently down to show ongoing analysis
-    if device.get('status') == 'down':
+    elif device.get('status') == 'down':
         down_time_str = device.get('last_seen')
         if not down_time_str:
             down_time_str = device.get('last_polled') or datetime.now().isoformat()
@@ -578,7 +595,15 @@ def get_device_downtime_forensics(device_id):
     api_key = settings.get('groq_api_key', '')
     
     root_cause = latest['justification']
-    if latest['up_time'] is None:
+    if is_snmp_unreachable:
+        narration = (
+            f"Konektivitas fisik ke perangkat {device.get('name')} ({device.get('ip')}) dalam kondisi normal via Ping, "
+            f"namun query SNMP mengalami timeout (UDP port 161). Pastikan:\n"
+            f"1. Community String di NetMon ('{device.get('snmp_community', 'public')}') cocok dengan konfigurasi SNMP di MikroTik.\n"
+            f"2. IP NetMon telah diizinkan (Allowed Address) di setting SNMP MikroTik.\n"
+            f"3. Service SNMP di MikroTik sudah diaktifkan (/ip snmp set enabled=yes)."
+        )
+    elif latest['up_time'] is None:
         reboot_text = "Status reboot belum dapat divalidasi karena perangkat masih offline."
         ping_text = "Koneksi terputus secara tiba-tiba tanpa penurunan kualitas latency sebelumnya." if latest['ping_pattern'] == 'instant_drop' else "Terjadi penurunan kualitas latensi secara bertahap sebelum koneksi terputus."
         snmp_text = "Metrik sumber daya (CPU/RAM) terpantau normal sebelum kejadian." if latest['snmp_pattern'] != 'resource_overload' else "Terjadi lonjakan pemakaian CPU/RAM sebelum koneksi terputus."
@@ -591,25 +616,40 @@ def get_device_downtime_forensics(device_id):
         
     if api_key:
         try:
-            prompt_status = "Sedang Berlangsung / Offline" if latest['up_time'] is None else "Sudah Kembali Online"
-            prompt = (
-                f"Analisa penyebab downtime (perangkat mati/offline) berikut dan berikan narasi/justifikasi dalam bahasa Indonesia (maksimal 3 kalimat).\n\n"
-                f"Detail Perangkat:\n"
-                f"- Nama: {device.get('name')}\n"
-                f"- Tipe: {device.get('type')}\n"
-                f"- Vendor: {device.get('vendor')}\n"
-                f"Detail Kejadian:\n"
-                f"- Status Kejadian: {prompt_status}\n"
-                f"- Waktu Down: {latest['down_time']}\n"
-                f"- Waktu Up: {latest['up_time'] or 'Masih offline'}\n"
-                f"- Durasi Down: {latest['duration_sec']} detik\n"
-                f"- Pola Latensi Ping: {latest['ping_pattern']}\n"
-                f"- Pola Metrik SNMP: {latest['snmp_pattern']}\n"
-                f"- Reboot Terdeteksi: {'Ya' if latest['reboot_detected'] else 'Tidak' if latest['up_time'] else 'Belum dapat dipastikan'}\n"
-                f"- Kesimpulan Heuristik Sistem: {latest['justification']} (Akurasi: {latest['confidence']}%)\n\n"
-                f"Tentukan root cause dan berikan narasi penjelasan detail maks 3 kalimat dalam bahasa Indonesia. Kembalikan respon JSON dalam format persis seperti ini: "
-                f'{{"root_cause": "analisis singkat penyebab", "narration": "narasi penjelasan detail maks 3 kalimat dalam bahasa Indonesia"}}'
-            )
+            if is_snmp_unreachable:
+                prompt = (
+                    f"Analisa penyebab kegagalan SNMP (SNMP Unreachable) berikut dan berikan rekomendasi perintah RouterOS/MikroTik untuk memperbaikinya dalam bahasa Indonesia (maksimal 3 kalimat).\n\n"
+                    f"Detail Perangkat:\n"
+                    f"- Nama: {device.get('name')}\n"
+                    f"- Tipe: {device.get('type')}\n"
+                    f"- IP: {device.get('ip')}\n"
+                    f"- SNMP Community di NetMon: {device.get('snmp_community', 'public')}\n"
+                    f"Kondisi Saat Ini:\n"
+                    f"- Koneksi Fisik: ONLINE / PING OK\n"
+                    f"- Query SNMP: TIMEOUT / PORT UDP 161 TIDAK MERESPON\n\n"
+                    f"Tentukan root cause dan berikan rekomendasi perintah/langkah perbaikan RouterOS. Kembalikan respon JSON dalam format persis seperti ini: "
+                    f'{{"root_cause": "analisis singkat penyebab", "narration": "perintah RouterOS dan rekomendasi perbaikan maks 3 kalimat dalam bahasa Indonesia"}}'
+                )
+            else:
+                prompt_status = "Sedang Berlangsung / Offline" if latest['up_time'] is None else "Sudah Kembali Online"
+                prompt = (
+                    f"Analisa penyebab downtime (perangkat mati/offline) berikut dan berikan narasi/justifikasi dalam bahasa Indonesia (maksimal 3 kalimat).\n\n"
+                    f"Detail Perangkat:\n"
+                    f"- Nama: {device.get('name')}\n"
+                    f"- Tipe: {device.get('type')}\n"
+                    f"- Vendor: {device.get('vendor')}\n"
+                    f"Detail Kejadian:\n"
+                    f"- Status Kejadian: {prompt_status}\n"
+                    f"- Waktu Down: {latest['down_time']}\n"
+                    f"- Waktu Up: {latest['up_time'] or 'Masih offline'}\n"
+                    f"- Durasi Down: {latest['duration_sec']} detik\n"
+                    f"- Pola Latensi Ping: {latest['ping_pattern']}\n"
+                    f"- Pola Metrik SNMP: {latest['snmp_pattern']}\n"
+                    f"- Reboot Terdeteksi: {'Ya' if latest['reboot_detected'] else 'Tidak' if latest['up_time'] else 'Belum dapat dipastikan'}\n"
+                    f"- Kesimpulan Heuristik Sistem: {latest['justification']} (Akurasi: {latest['confidence']}%)\n\n"
+                    f"Tentukan root cause dan berikan narasi penjelasan detail maks 3 kalimat dalam bahasa Indonesia. Kembalikan respon JSON dalam format persis seperti ini: "
+                    f'{{"root_cause": "analisis singkat penyebab", "narration": "narasi penjelasan detail maks 3 kalimat dalam bahasa Indonesia"}}'
+                )
             
             import urllib.request
             import json

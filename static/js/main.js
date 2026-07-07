@@ -1026,6 +1026,9 @@ window.loadBlackBoxForensics = function() {
           } else if (rc.includes('kabel') || rc.includes('link')) {
              alertBoxEl.style.borderColor = '#0d6efd'; // blue
              alertBoxEl.style.background = 'rgba(13, 110, 253, 0.03)';
+          } else if (rc.includes('snmp')) {
+             alertBoxEl.style.borderColor = '#bc8cff'; // purple
+             alertBoxEl.style.background = 'rgba(188, 140, 255, 0.03)';
           } else {
             alertBoxEl.style.borderColor = '#17a2b8'; // cyan
             alertBoxEl.style.background = 'rgba(23, 162, 184, 0.03)';
