@@ -1040,15 +1040,20 @@ window.loadBlackBoxForensics = function() {
           historyTbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Tidak ada riwayat downtime.</td></tr>';
         } else {
           historyTbody.innerHTML = history.map(item => {
-            const dur = formatDowntimeDuration(item.duration_sec);
-            const reboot = item.reboot_detected
-              ? '<span class="badge bg-danger text-xs px-2 py-0.5">YA</span>'
-              : '<span class="badge bg-secondary text-xs px-2 py-0.5">TIDAK</span>';
+            const isOngoing = (item.up_time === null || item.up_time === undefined || item.up_time === '—');
+            const dur = isOngoing
+              ? `<span class="text-warning fw-600">${formatDowntimeDuration(item.duration_sec)} (Ongoing)</span>`
+              : formatDowntimeDuration(item.duration_sec);
+            const reboot = isOngoing
+              ? '<span class="text-muted text-xs">—</span>'
+              : (item.reboot_detected
+                ? '<span class="badge bg-danger text-xs px-2 py-0.5">YA</span>'
+                : '<span class="badge bg-secondary text-xs px-2 py-0.5">TIDAK</span>');
               
             return `
               <tr>
                 <td class="mono-sm text-secondary">${fmtDowntimeTime(item.down_time)}</td>
-                <td class="mono-sm text-secondary">${fmtDowntimeTime(item.up_time || '—')}</td>
+                <td class="mono-sm text-secondary">${isOngoing ? '<span class="badge bg-danger">OFFLINE</span>' : fmtDowntimeTime(item.up_time)}</td>
                 <td class="mono-sm text-secondary">${dur}</td>
                 <td>${reboot}</td>
                 <td class="text-xs fw-500 text-white">${esc(item.justification)}</td>

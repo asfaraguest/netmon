@@ -495,24 +495,103 @@ def get_device_downtime_forensics(device_id):
         return jsonify({'status': 'error', 'message': 'Device not found'}), 404
         
     history = db.get_downtime_analysis(device_id, limit=5)
-    if not history:
+    
+    # Check if the device is currently down to show ongoing analysis
+    if device.get('status') == 'down':
+        down_time_str = device.get('last_seen')
+        if not down_time_str:
+            down_time_str = device.get('last_polled') or datetime.now().isoformat()
+            
+        try:
+            down_t = datetime.fromisoformat(down_time_str)
+            duration_sec = int((datetime.now() - down_t).total_seconds())
+        except Exception:
+            duration_sec = 0
+            
+        ping_pattern = 'instant_drop'
+        ping_history = snmp_worker._ping_history.get(device.get('ip'), [])
+        if len(ping_history) >= 3:
+            live_pings = [p for p in ping_history if p[0]]
+            if live_pings:
+                rtts = [p[1] for p in live_pings]
+                avg_rtt = sum(rtts) / len(rtts)
+                spikes = [r for r in rtts if r > avg_rtt * 3.0 and r > 50]
+                if len(spikes) > 0 or len(live_pings) < len(ping_history) - 2:
+                    ping_pattern = 'gradual_degrade'
+                    
+        snmp_pattern = 'normal_metrics'
+        cpu_trend = []
+        ram_trend = []
+        with db.conn() as c:
+            rows = c.execute('''
+                SELECT metric_name, metric_value FROM snmp_metrics
+                WHERE device_id = ? AND timestamp <= ? AND timestamp >= datetime(?, '-10 minutes')
+                ORDER BY timestamp DESC LIMIT 20
+            ''', (device_id, down_time_str, down_time_str)).fetchall()
+            for r in rows:
+                val = r['metric_value']
+                try:
+                    val_f = float(val)
+                    if r['metric_name'] == 'cpu_usage':
+                        cpu_trend.append(val_f)
+                    elif r['metric_name'] == 'memory_usage':
+                        ram_trend.append(val_f)
+                except Exception:
+                    pass
+                    
+        if cpu_trend and max(cpu_trend) > 85.0:
+            snmp_pattern = 'resource_overload'
+        elif ram_trend and max(ram_trend) > 90.0:
+            snmp_pattern = 'resource_overload'
+            
+        if snmp_pattern == 'resource_overload':
+            justification = "Potensi OS Crash / Overload Resource"
+            confidence = 80.0
+        elif ping_pattern == 'gradual_degrade':
+            justification = "Potensi Congestion / Network Loop"
+            confidence = 85.0
+        else:
+            justification = "Perangkat Offline (Mati Lampu atau Kabel Terputus)"
+            confidence = 75.0
+            
+        latest = {
+            'device_id': device_id,
+            'down_time': down_time_str,
+            'up_time': None,
+            'duration_sec': duration_sec,
+            'ping_pattern': ping_pattern,
+            'snmp_pattern': snmp_pattern,
+            'reboot_detected': 0,
+            'justification': justification + " [Sedang Berlangsung]",
+            'confidence': confidence
+        }
+        history = [latest] + history
+    elif history:
+        latest = history[0]
+    else:
+        latest = None
+        
+    if not latest:
         return jsonify({'status': 'success', 'history': [], 'analysis': None})
         
-    latest = history[0]
-    
-    # Try calling AI for narration & root cause if api key exists
     settings = db.get_settings()
     api_key = settings.get('groq_api_key', '')
     
     root_cause = latest['justification']
-    reboot_text = "perangkat terdeteksi melakukan booting ulang setelah menyala kembali." if latest['reboot_detected'] else "perangkat tidak restart, melainkan hanya kehilangan konektivitas jaringan."
-    ping_text = "Koneksi terputus secara tiba-tiba tanpa penurunan kualitas latency sebelumnya." if latest['ping_pattern'] == 'instant_drop' else "Terjadi penurunan kualitas latensi secara bertahap hingga RTO sebelum koneksi terputus sepenuhnya."
-    snmp_text = "Metrik sumber daya (CPU/RAM) terpantau normal sebelum kejadian." if latest['snmp_pattern'] != 'resource_overload' else "Terjadi lonjakan pemakaian CPU/RAM sebelum koneksi terputus."
-    
-    narration = f"Berdasarkan analisis BlackBox, {latest['justification']}. {ping_text} {snmp_text} Serta {reboot_text}"
-    
+    if latest['up_time'] is None:
+        reboot_text = "Status reboot belum dapat divalidasi karena perangkat masih offline."
+        ping_text = "Koneksi terputus secara tiba-tiba tanpa penurunan kualitas latency sebelumnya." if latest['ping_pattern'] == 'instant_drop' else "Terjadi penurunan kualitas latensi secara bertahap sebelum koneksi terputus."
+        snmp_text = "Metrik sumber daya (CPU/RAM) terpantau normal sebelum kejadian." if latest['snmp_pattern'] != 'resource_overload' else "Terjadi lonjakan pemakaian CPU/RAM sebelum koneksi terputus."
+        narration = f"Perangkat saat ini sedang OFFLINE. Analisis sementara menunjukkan kemungkinan {latest['justification']}. {ping_text} {snmp_text} {reboot_text}"
+    else:
+        reboot_text = "perangkat terdeteksi melakukan booting ulang setelah menyala kembali." if latest['reboot_detected'] else "perangkat tidak restart, melainkan hanya kehilangan konektivitas jaringan."
+        ping_text = "Koneksi terputus secara tiba-tiba tanpa penurunan kualitas latency sebelumnya." if latest['ping_pattern'] == 'instant_drop' else "Terjadi penurunan kualitas latensi secara bertahap hingga RTO sebelum koneksi terputus sepenuhnya."
+        snmp_text = "Metrik sumber daya (CPU/RAM) terpantau normal sebelum kejadian." if latest['snmp_pattern'] != 'resource_overload' else "Terjadi lonjakan pemakaian CPU/RAM sebelum koneksi terputus."
+        narration = f"Berdasarkan analisis BlackBox, {latest['justification']}. {ping_text} {snmp_text} Serta {reboot_text}"
+        
     if api_key:
         try:
+            prompt_status = "Sedang Berlangsung / Offline" if latest['up_time'] is None else "Sudah Kembali Online"
             prompt = (
                 f"Analisa penyebab downtime (perangkat mati/offline) berikut dan berikan narasi/justifikasi dalam bahasa Indonesia (maksimal 3 kalimat).\n\n"
                 f"Detail Perangkat:\n"
@@ -520,12 +599,13 @@ def get_device_downtime_forensics(device_id):
                 f"- Tipe: {device.get('type')}\n"
                 f"- Vendor: {device.get('vendor')}\n"
                 f"Detail Kejadian:\n"
+                f"- Status Kejadian: {prompt_status}\n"
                 f"- Waktu Down: {latest['down_time']}\n"
-                f"- Waktu Up: {latest['up_time']}\n"
+                f"- Waktu Up: {latest['up_time'] or 'Masih offline'}\n"
                 f"- Durasi Down: {latest['duration_sec']} detik\n"
                 f"- Pola Latensi Ping: {latest['ping_pattern']}\n"
                 f"- Pola Metrik SNMP: {latest['snmp_pattern']}\n"
-                f"- Reboot Terdeteksi: {'Ya' if latest['reboot_detected'] else 'Tidak'}\n"
+                f"- Reboot Terdeteksi: {'Ya' if latest['reboot_detected'] else 'Tidak' if latest['up_time'] else 'Belum dapat dipastikan'}\n"
                 f"- Kesimpulan Heuristik Sistem: {latest['justification']} (Akurasi: {latest['confidence']}%)\n\n"
                 f"Tentukan root cause dan berikan narasi penjelasan detail maks 3 kalimat dalam bahasa Indonesia. Kembalikan respon JSON dalam format persis seperti ini: "
                 f'{{"root_cause": "analisis singkat penyebab", "narration": "narasi penjelasan detail maks 3 kalimat dalam bahasa Indonesia"}}'
