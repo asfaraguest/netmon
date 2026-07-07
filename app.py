@@ -488,6 +488,95 @@ def get_device_realtime_stats(device_id):
         'clients': []
     })
 
+@app.route('/api/devices/<int:device_id>/downtime_forensics', methods=['GET'])
+def get_device_downtime_forensics(device_id):
+    device = db.get_device(device_id)
+    if not device:
+        return jsonify({'status': 'error', 'message': 'Device not found'}), 404
+        
+    history = db.get_downtime_analysis(device_id, limit=5)
+    if not history:
+        return jsonify({'status': 'success', 'history': [], 'analysis': None})
+        
+    latest = history[0]
+    
+    # Try calling AI for narration & root cause if api key exists
+    settings = db.get_settings()
+    api_key = settings.get('groq_api_key', '')
+    
+    root_cause = latest['justification']
+    reboot_text = "perangkat terdeteksi melakukan booting ulang setelah menyala kembali." if latest['reboot_detected'] else "perangkat tidak restart, melainkan hanya kehilangan konektivitas jaringan."
+    ping_text = "Koneksi terputus secara tiba-tiba tanpa penurunan kualitas latency sebelumnya." if latest['ping_pattern'] == 'instant_drop' else "Terjadi penurunan kualitas latensi secara bertahap hingga RTO sebelum koneksi terputus sepenuhnya."
+    snmp_text = "Metrik sumber daya (CPU/RAM) terpantau normal sebelum kejadian." if latest['snmp_pattern'] != 'resource_overload' else "Terjadi lonjakan pemakaian CPU/RAM sebelum koneksi terputus."
+    
+    narration = f"Berdasarkan analisis BlackBox, {latest['justification']}. {ping_text} {snmp_text} Serta {reboot_text}"
+    
+    if api_key:
+        try:
+            prompt = (
+                f"Analisa penyebab downtime (perangkat mati/offline) berikut dan berikan narasi/justifikasi dalam bahasa Indonesia (maksimal 3 kalimat).\n\n"
+                f"Detail Perangkat:\n"
+                f"- Nama: {device.get('name')}\n"
+                f"- Tipe: {device.get('type')}\n"
+                f"- Vendor: {device.get('vendor')}\n"
+                f"Detail Kejadian:\n"
+                f"- Waktu Down: {latest['down_time']}\n"
+                f"- Waktu Up: {latest['up_time']}\n"
+                f"- Durasi Down: {latest['duration_sec']} detik\n"
+                f"- Pola Latensi Ping: {latest['ping_pattern']}\n"
+                f"- Pola Metrik SNMP: {latest['snmp_pattern']}\n"
+                f"- Reboot Terdeteksi: {'Ya' if latest['reboot_detected'] else 'Tidak'}\n"
+                f"- Kesimpulan Heuristik Sistem: {latest['justification']} (Akurasi: {latest['confidence']}%)\n\n"
+                f"Tentukan root cause dan berikan narasi penjelasan detail maks 3 kalimat dalam bahasa Indonesia. Kembalikan respon JSON dalam format persis seperti ini: "
+                f'{{"root_cause": "analisis singkat penyebab", "narration": "narasi penjelasan detail maks 3 kalimat dalam bahasa Indonesia"}}'
+            )
+            
+            import urllib.request
+            import json
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            payload = {
+                "model": "llama-3.3-70b-versatile",
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a network analysis assistant. Respond ONLY with a raw JSON object containing \"root_cause\" (string) and \"narration\" (string in Indonesian, max 3 sentences)."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.2
+            }
+            
+            req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+            with urllib.request.urlopen(req, timeout=8) as response:
+                res_data = json.loads(response.read().decode('utf-8'))
+                text_resp = res_data['choices'][0]['message']['content'].strip()
+                ai_res = json.loads(text_resp)
+                
+                root_cause = ai_res.get('root_cause', root_cause)
+                narration = ai_res.get('narration', narration)
+        except Exception as e:
+            print(f"[BlackBox AI API] AI call failed, fallback to local narration: {e}")
+            
+    return jsonify({
+        'status': 'success',
+        'history': history,
+        'analysis': {
+            'justification': latest['justification'],
+            'confidence': latest['confidence'],
+            'root_cause': root_cause,
+            'narration': narration
+        }
+    })
+
 # ============================================================
 # API – ZONES
 # ============================================================

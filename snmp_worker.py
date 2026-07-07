@@ -56,6 +56,36 @@ def _client(ip, version, community, port, timeout=2.0, retries=1):
     return PyWrapper(c)
 
 
+def parse_uptime_to_seconds(uptime_str):
+    if not uptime_str:
+        return 0
+    try:
+        return float(uptime_str) / 100.0
+    except ValueError:
+        pass
+    try:
+        parts = uptime_str.split(',')
+        days = 0
+        time_part = uptime_str
+        if len(parts) > 1:
+            days_str = parts[0].lower().replace('days', '').replace('day', '').strip()
+            days = int(days_str)
+            time_part = parts[1].strip()
+        time_parts = time_part.split(':')
+        hours = 0
+        minutes = 0
+        seconds = 0.0
+        if len(time_parts) == 3:
+            hours = int(time_parts[0])
+            minutes = int(time_parts[1])
+            seconds = float(time_parts[2])
+        elif len(time_parts) == 2:
+            minutes = int(time_parts[0])
+            seconds = float(time_parts[1])
+        return (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
+    except Exception:
+        return 0
+
 class SNMPWorker:
     def __init__(self, db, socketio):
         self.db = db
@@ -67,6 +97,7 @@ class SNMPWorker:
         self._interfaces_cache = {}
         self._if_prev = {}
         self.db_write_lock = threading.RLock()
+        self._ping_history = {}
 
     def get_scan_status(self): return dict(self._status)
     def stop_scan(self):       self._stop.set()
@@ -170,6 +201,10 @@ class SNMPWorker:
     # ─── poll a single device ────────────────────────────────────────
 
     def _ping(self, ip):
+        import time
+        start_time = time.time()
+        is_alive = False
+        
         # 1. Try standard OS Ping first (quickest check if host responds to ICMP)
         import subprocess
         import platform
@@ -193,27 +228,33 @@ class SNMPWorker:
                 timeout=3.0
             )
             if res.returncode == 0:
-                return True
+                is_alive = True
         except Exception:
             pass
 
         # 2. Fallback to TCP connection check on common ports (if ICMP is blocked)
-        import socket
-        common_ports = [22, 80, 443, 445]
-        for port in common_ports:
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(0.2)  # Fast 200ms timeout
-                result = s.connect_ex((ip, port))
-                s.close()
-                # 0: Connected successfully
-                # 111 (Linux) or 10061 (Windows): Connection Refused (means host is active and rejected it)
-                if result == 0 or result in (111, 10061):
-                    return True
-            except Exception:
-                pass
+        if not is_alive:
+            import socket
+            common_ports = [22, 80, 443, 445]
+            for port in common_ports:
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(0.2)  # Fast 200ms timeout
+                    result = s.connect_ex((ip, port))
+                    s.close()
+                    if result == 0 or result in (111, 10061):
+                        is_alive = True
+                        break
+                except Exception:
+                    pass
 
-        return False
+        elapsed = (time.time() - start_time) * 1000.0  # in ms
+        if ip not in self._ping_history:
+            self._ping_history[ip] = []
+        self._ping_history[ip].append((is_alive, elapsed))
+        self._ping_history[ip] = self._ping_history[ip][-10:]
+        
+        return is_alive
 
     def _get_resource_metrics(self, ip, community, port, version, vendor_lower, descr_lower, sys_obj_id=None):
         cpu_usage = None
@@ -571,6 +612,7 @@ class SNMPWorker:
                 if old_st == 'down':
                     upd['last_seen'] = now
                     self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE")
+                    self.analyze_downtime_event(device, device.get('last_seen') or now, now, upd.get('uptime'))
                 elif old_st == 'unknown':
                     upd['last_seen'] = now
 
@@ -595,6 +637,7 @@ class SNMPWorker:
                     if old_st == 'down':
                         upd['last_seen'] = now
                         self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE")
+                        self.analyze_downtime_event(device, device.get('last_seen') or now, now, upd.get('uptime'))
                     self.db.update_device(did, upd)
                     is_alive = True
                 else:
@@ -620,6 +663,7 @@ class SNMPWorker:
                     if old_st == 'down':
                         upd['last_seen'] = now
                         self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE (ping only)")
+                        self.analyze_downtime_event(device, device.get('last_seen') or now, now, None)
                     elif old_st == 'unknown':
                         upd['last_seen'] = now
                     # Only alert if SNMP was the one that actually failed (we didn't revive SNMP in verify block)
@@ -672,6 +716,7 @@ class SNMPWorker:
                     if old_st == 'down':
                         upd['last_seen'] = now
                         self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE")
+                        self.analyze_downtime_event(device, device.get('last_seen') or now, now, None)
                     elif old_st == 'unknown':
                         upd['last_seen'] = now
                     self.db.update_device(did, upd)
@@ -1644,3 +1689,96 @@ class SNMPWorker:
         t = self._guess_type(d, vendor=vendor)
         return {'switch':'switch','router':'router','server':'server',
                 'access_point':'wifi','firewall':'shield','printer':'printer'}.get(t,'device')
+
+    def analyze_downtime_event(self, device, down_time_str, up_time_str, current_uptime_str=None):
+        try:
+            did = device['id']
+            ip = device['ip']
+            
+            # 1. Parse times
+            try:
+                down_t = datetime.fromisoformat(down_time_str)
+                up_t = datetime.fromisoformat(up_time_str)
+                duration_sec = int((up_t - down_t).total_seconds())
+            except Exception:
+                duration_sec = 0
+            
+            if duration_sec <= 0:
+                return
+            
+            # 2. Analyze Ping Pattern from history
+            ping_history = self._ping_history.get(ip, [])
+            ping_pattern = 'instant_drop'
+            if len(ping_history) >= 3:
+                live_pings = [p for p in ping_history if p[0]]
+                if live_pings:
+                    rtts = [p[1] for p in live_pings]
+                    avg_rtt = sum(rtts) / len(rtts)
+                    spikes = [r for r in rtts if r > avg_rtt * 3.0 and r > 50]
+                    if len(spikes) > 0 or len(live_pings) < len(ping_history) - 2:
+                        ping_pattern = 'gradual_degrade'
+            
+            # 3. Analyze SNMP Metrics before down
+            snmp_pattern = 'normal_metrics'
+            cpu_trend = []
+            ram_trend = []
+            with self.db_write_lock:
+                with self.db.conn() as c:
+                    rows = c.execute('''
+                        SELECT metric_name, metric_value FROM snmp_metrics
+                        WHERE device_id = ? AND timestamp <= ? AND timestamp >= datetime(?, '-10 minutes')
+                        ORDER BY timestamp DESC LIMIT 20
+                    ''', (did, down_time_str, down_time_str)).fetchall()
+                    for r in rows:
+                        val = r['metric_value']
+                        try:
+                            val_f = float(val)
+                            if r['metric_name'] == 'cpu_usage':
+                                cpu_trend.append(val_f)
+                            elif r['metric_name'] == 'memory_usage':
+                                ram_trend.append(val_f)
+                        except Exception:
+                            pass
+            
+            if cpu_trend and max(cpu_trend) > 85.0:
+                snmp_pattern = 'resource_overload'
+            elif ram_trend and max(ram_trend) > 90.0:
+                snmp_pattern = 'resource_overload'
+                
+            # 4. Check Reboot
+            reboot_detected = 0
+            if current_uptime_str:
+                uptime_sec = parse_uptime_to_seconds(current_uptime_str)
+                if uptime_sec > 0 and uptime_sec < (duration_sec + 60):
+                    reboot_detected = 1
+            
+            # 5. Determine Heuristic Root Cause
+            justification = "Koneksi Terputus / Jaringan Tidak Stabil"
+            confidence = 70.0
+            
+            if reboot_detected:
+                if snmp_pattern == 'resource_overload':
+                    justification = "OS Crash akibat Overload Resource (CPU/Memory penuh sebelum restart)"
+                    confidence = 90.0
+                else:
+                    justification = "Mati Lampu / Power Loss (Perangkat mati mendadak lalu menyala kembali)"
+                    confidence = 95.0
+            else:
+                if ping_pattern == 'gradual_degrade':
+                    justification = "Congestion / Network Loop (Penurunan performa jaringan bertahap hingga RTO)"
+                    confidence = 85.0
+                elif ping_pattern == 'instant_drop':
+                    justification = "Kabel Lan Lepas / Port Down (Link jaringan terputus tetapi perangkat tidak restart)"
+                    confidence = 90.0
+            
+            # Save analysis results
+            with self.db_write_lock:
+                self.db.save_downtime_analysis(
+                    did, down_time_str, up_time_str, duration_sec, 
+                    ping_pattern, snmp_pattern, reboot_detected, justification, confidence
+                )
+                
+            print(f"[BlackBox] Downtime analyzed for {ip}: {justification} (Confidence: {confidence}%)")
+            
+        except Exception as e:
+            print(f"[BlackBox Error] Failed to analyze downtime: {e}")

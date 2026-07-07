@@ -248,6 +248,13 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function openDeviceDetail(id) {
+  // Reset tabs to default (Monitoring)
+  const monTab = document.getElementById('det-tab-monitor');
+  if (monTab) {
+    const tabTrigger = new bootstrap.Tab(monTab);
+    tabTrigger.show();
+  }
+
   activeDetailDeviceId = id;
   interfaceTrafficData = {};
   chartLabels = [];
@@ -973,3 +980,109 @@ window.hideLoading = function() {
     overlay.classList.remove('active');
   }
 };
+
+window.loadBlackBoxForensics = function() {
+  if (!activeDetailDeviceId) return;
+  
+  const emptyEl = document.getElementById('det-bb-empty');
+  const resultEl = document.getElementById('det-bb-result');
+  const historyTbody = document.getElementById('det-bb-history-tbody');
+  
+  if (historyTbody) {
+    historyTbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3"><i class="bi bi-arrow-repeat spin me-1"></i>Loading forensics data…</td></tr>';
+  }
+  
+  fetch(`/api/devices/${activeDetailDeviceId}/downtime_forensics`)
+    .then(r => r.json())
+    .then(res => {
+      if (res.status !== 'success' || !activeDetailDeviceId) return;
+      
+      // Update Latest Analysis Box
+      if (!res.analysis) {
+        if (emptyEl) emptyEl.style.display = 'block';
+        if (resultEl) resultEl.style.display = 'none';
+      } else {
+        if (emptyEl) emptyEl.style.display = 'none';
+        if (resultEl) resultEl.style.display = 'block';
+        
+        const rootCauseEl = document.getElementById('det-bb-root-cause');
+        const confidenceEl = document.getElementById('det-bb-confidence');
+        const narrationEl = document.getElementById('det-bb-narration');
+        const alertBoxEl = document.getElementById('det-bb-alert-box');
+        
+        if (rootCauseEl) rootCauseEl.textContent = res.analysis.root_cause || 'Koneksi Terputus';
+        if (confidenceEl) confidenceEl.textContent = `${res.analysis.confidence || 70}%`;
+        if (narrationEl) narrationEl.textContent = res.analysis.narration || '';
+        
+        // Dynamic border color based on root cause
+        if (alertBoxEl) {
+          const rc = (res.analysis.root_cause || '').toLowerCase();
+          if (rc.includes('mati lampu') || rc.includes('power loss')) {
+            alertBoxEl.style.borderColor = '#ffc107'; // yellow
+            alertBoxEl.style.background = 'rgba(255, 193, 7, 0.03)';
+          } else if (rc.includes('overload') || rc.includes('crash')) {
+            alertBoxEl.style.borderColor = '#dc3545'; // red
+            alertBoxEl.style.background = 'rgba(220, 53, 69, 0.03)';
+          } else if (rc.includes('kabel') || rc.includes('link')) {
+             alertBoxEl.style.borderColor = '#0d6efd'; // blue
+             alertBoxEl.style.background = 'rgba(13, 110, 253, 0.03)';
+          } else {
+            alertBoxEl.style.borderColor = '#17a2b8'; // cyan
+            alertBoxEl.style.background = 'rgba(23, 162, 184, 0.03)';
+          }
+        }
+      }
+      
+      // Update History Table
+      if (historyTbody) {
+        const history = res.history || [];
+        if (history.length === 0) {
+          historyTbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Tidak ada riwayat downtime.</td></tr>';
+        } else {
+          historyTbody.innerHTML = history.map(item => {
+            const dur = formatDowntimeDuration(item.duration_sec);
+            const reboot = item.reboot_detected
+              ? '<span class="badge bg-danger text-xs px-2 py-0.5">YA</span>'
+              : '<span class="badge bg-secondary text-xs px-2 py-0.5">TIDAK</span>';
+              
+            return `
+              <tr>
+                <td class="mono-sm text-secondary">${fmtDowntimeTime(item.down_time)}</td>
+                <td class="mono-sm text-secondary">${fmtDowntimeTime(item.up_time || '—')}</td>
+                <td class="mono-sm text-secondary">${dur}</td>
+                <td>${reboot}</td>
+                <td class="text-xs fw-500 text-white">${esc(item.justification)}</td>
+              </tr>
+            `;
+          }).join('');
+        }
+      }
+    })
+    .catch(err => {
+      console.error("Error loading downtime forensics:", err);
+      if (historyTbody) {
+        historyTbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger py-3">Gagal mengambil data.</td></tr>';
+      }
+    });
+};
+
+function formatDowntimeDuration(sec) {
+  if (!sec || sec <= 0) return '0s';
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m < 60) return `${m}m ${s}s`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return `${h}j ${remM}m`;
+}
+
+function fmtDowntimeTime(ts) {
+  if (!ts || ts === '—') return '—';
+  try {
+    const d = new Date(ts.replace(' ', 'T'));
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+  } catch(e) {
+    return ts;
+  }
+}

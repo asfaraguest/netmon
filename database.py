@@ -144,11 +144,27 @@ class Database:
                     sampled_at  TEXT DEFAULT (datetime('now'))
                 );
 
+                CREATE TABLE IF NOT EXISTS downtime_analysis (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id      INTEGER,
+                    down_time      TEXT NOT NULL,
+                    up_time        TEXT,
+                    duration_sec   INTEGER,
+                    ping_pattern   TEXT,
+                    snmp_pattern   TEXT,
+                    reboot_detected INTEGER DEFAULT 0,
+                    justification  TEXT,
+                    confidence     REAL,
+                    created_at     TEXT DEFAULT (datetime('now')),
+                    FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_alerts_device ON alerts(device_id);
                 CREATE INDEX IF NOT EXISTS idx_access_logs_created ON access_logs(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_metrics_device ON snmp_metrics(device_id, metric_name);
                 CREATE INDEX IF NOT EXISTS idx_if_traffic ON interface_traffic(device_id, iface_name, sampled_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_downtime_device ON downtime_analysis(device_id);
             ''')
 
             # Migration: Add any missing fields to devices table if they don't exist (preserving DB state)
@@ -1056,3 +1072,25 @@ class Database:
     def delete_monthly_report(self, report_id):
         with self.conn() as c:
             c.execute('DELETE FROM monthly_reports WHERE id = ?', (report_id,))
+
+    # ============================================================
+    # DOWNTIME ANALYSIS (BLACKBOX FORENSICS)
+    # ============================================================
+
+    def save_downtime_analysis(self, device_id, down_time, up_time, duration_sec, ping_pattern, snmp_pattern, reboot_detected, justification, confidence):
+        with self.conn() as c:
+            c.execute('''
+                INSERT INTO downtime_analysis 
+                (device_id, down_time, up_time, duration_sec, ping_pattern, snmp_pattern, reboot_detected, justification, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (device_id, down_time, up_time, duration_sec, ping_pattern, snmp_pattern, reboot_detected, justification, confidence))
+
+    def get_downtime_analysis(self, device_id, limit=10):
+        with self.conn() as c:
+            rows = c.execute('''
+                SELECT * FROM downtime_analysis 
+                WHERE device_id = ? 
+                ORDER BY down_time DESC 
+                LIMIT ?
+            ''', (device_id, limit)).fetchall()
+            return [dict(r) for r in rows]
