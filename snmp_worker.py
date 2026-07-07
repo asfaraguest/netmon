@@ -103,6 +103,28 @@ class SNMPWorker:
     def get_scan_status(self): return dict(self._status)
     def stop_scan(self):       self._stop.set()
 
+    # ─── anomaly / spike cap helper ─────────────────────────────────
+    def _anomaly_limit_bps(self, effective_speed_bps):
+        """Batas atas (bps) untuk mendeteksi spike/anomali traffic.
+        Diambil dari settings:
+          - anomaly_cap_multiplier : toleransi terhadap kapasitas link (default 1.05)
+          - anomaly_cap_gbps      : plafon mutlak dalam Gbps (default 5.0)
+        """
+        try:
+            mult = float(self.db.get_settings().get('anomaly_cap_multiplier', 1.05))
+        except (ValueError, TypeError):
+            mult = 1.05
+        try:
+            cap_gbps = float(self.db.get_settings().get('anomaly_cap_gbps', 5.0))
+        except (ValueError, TypeError):
+            cap_gbps = 5.0
+        cap_bps = cap_gbps * 1e9
+        if effective_speed_bps and effective_speed_bps > 0:
+            limit = effective_speed_bps * mult
+        else:
+            limit = cap_bps
+        return min(limit, cap_bps)
+
     # ─── low-level helpers ───────────────────────────────────────────
 
     async def _async_get(self, ip, community, oids, port, version, timeout):
@@ -1174,8 +1196,8 @@ class SNMPWorker:
                         except ValueError:
                             pass
                 
-                limit_bps = speed_bps * 1.05 if speed_bps > 0 else 100e9
-                
+                limit_bps = self._anomaly_limit_bps(speed_bps)
+
                 # Rollover / Reboot protection for 32-bit counters
                 if d_rx < 0:
                     if is_64bit:
@@ -1406,9 +1428,7 @@ class SNMPWorker:
                     # Custom rule: 
                     # If link is 1 Gbps, limit is ~1 Gbps (plus 5% tolerance).
                     # If link is 10 Gbps, limit is capped at 5 Gbps (since total ISP BW is only 6 Gbps).
-                    limit_bps = effective_speed * 1.05 if effective_speed > 0 else 100e9
-                    if limit_bps > 5000000000.0:  # If calculated limit is > 5 Gbps
-                        limit_bps = 5000000000.0  # Cap the absolute anomaly threshold to 5 Gbps
+                    limit_bps = self._anomaly_limit_bps(effective_speed)
                     
                     if wan_in_bps > limit_bps or wan_out_bps > limit_bps:
                         cap_mbps = (effective_speed / 1e6) if effective_speed > 0 else 100000.0
