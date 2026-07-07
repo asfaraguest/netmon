@@ -1056,7 +1056,7 @@ window.loadBlackBoxForensics = function() {
             return `
               <tr>
                 <td class="mono-sm text-secondary">${fmtDowntimeTime(item.down_time)}</td>
-                <td class="mono-sm text-secondary">${isOngoing ? '<span class="badge bg-danger">OFFLINE</span>' : fmtDowntimeTime(item.up_time)}</td>
+                <td class="mono-sm text-secondary">${isOngoing ? (item.snmp_pattern === 'snmp_failed' ? '<span class="badge" style="background:#bc8cff;color:#000;">SNMP FAILED</span>' : '<span class="badge bg-danger">OFFLINE</span>') : fmtDowntimeTime(item.up_time)}</td>
                 <td class="mono-sm text-secondary">${dur}</td>
                 <td>${reboot}</td>
                 <td class="text-xs fw-500 text-white">${esc(item.justification)}</td>

@@ -505,14 +505,15 @@ def get_device_downtime_forensics(device_id):
         latest = {
             'device_id': device_id,
             'down_time': datetime.now().isoformat(),
-            'up_time': datetime.now().isoformat(),
+            'up_time': None,
             'duration_sec': 0,
             'ping_pattern': 'normal',
             'snmp_pattern': 'snmp_failed',
             'reboot_detected': 0,
-            'justification': "SNMP Unreachable (Protokol SNMP Tidak Merespon)",
+            'justification': "SNMP Unreachable (Protokol SNMP Tidak Merespon) [Sedang Berlangsung]",
             'confidence': 90.0
         }
+        history = [latest] + history
     # Check if the device is currently down to show ongoing analysis
     elif device.get('status') == 'down':
         down_time_str = device.get('last_seen')
