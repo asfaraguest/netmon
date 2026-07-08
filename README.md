@@ -26,6 +26,8 @@ Real-time network monitoring with SNMP auto-discovery, interactive floor plan al
 | **Context-Aware Rollovers** | Distinguishes 32-bit SNMP counter rollovers from device reboots based on polling delta time (dt) |
 | **Responsive Mobile UI** | Fully adaptive interface with an off-canvas sidebar and wrapping filters for smartphone browsers |
 | **Router Uplinks Dashboard** | Dedicated multi-chart page for tracking live and historical throughput across all WAN router interfaces |
+| **BlackBox Forensics** | AI-like heuristic analysis diagnosing downtime root causes (Thermal shutdown, CPU exhaustion, DDoS, Fiber cuts, etc.) |
+| **Dynamic Traffic Retention** | Configurable settings to auto-cleanup historic traffic data and fine-tune anomaly threshold multipliers via the UI |
 
 ---
 

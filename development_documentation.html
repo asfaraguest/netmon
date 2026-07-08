@@ -235,6 +235,15 @@
           </ul>
         </td>
       </tr>
+      <tr>
+        <td><strong>8 Juli 2026</strong></td>
+        <td>
+          <ul>
+            <li><strong>Dynamic Traffic Anomaly Cleanups</strong>: Menambahkan kapabilitas manajemen memori traffic historis melalui UI <em>Settings</em>. Termasuk konfigurasi batas penyimpanan dan perkalian ambang (multiplier) anomali traffic secara dinamis.</li>
+            <li><strong>BlackBox Forensics Expansion</strong>: Ekspansi algoritma diagnostik mesin heuristik. Mampu membedakan dengan spesifik antara <em>Thermal Shutdown</em> (>85°C), CPU <em>Exhaustion</em> (>95%), <em>Memory Leak</em>, Serangan DDoS (Bandwidth Saturation), Pemutusan arus/restart sengaja (Scheduler), hingga kegagalan <em>Upstream Link</em> massal (Fiber Cut/Zone down).</li>
+          </ul>
+        </td>
+      </tr>
     </tbody>
   </table>
 
@@ -419,6 +428,31 @@
           </ul>
         </li>
         <li>Mengubah respons offline Device Detection endpoint dari status 404 menjadi 400 guna meniadakan error warning resource loading pada konsol browser.</li>
+      </ul>
+    </li>
+  </ul>
+
+  <h3>6.11 Ekspansi Algoritma BlackBox Forensics</h3>
+  <ul>
+    <li><strong>Berkas yang Dimodifikasi</strong>: <code>snmp_worker.py</code></li>
+    <li><strong>Detail Teknis</strong>:
+      <ul>
+        <li><strong>Thermal Shutdown</strong>: Menarik metrik <code>temperature</code>, lalu memberikan justifikasi Overheating jika suhu lebih dari 85°C.</li>
+        <li><strong>Memory Leak vs CPU Exhaustion</strong>: Memisahkan diagnosis generik <em>Resource Overload</em> dengan mendeteksi RAM &gt; 95% secara independen dari CPU &gt; 95%, sehingga membedakan kebocoran memori dengan <em>routing loop</em>.</li>
+        <li><strong>DDoS &amp; Bandwidth Saturation</strong>: Mengkomparasi throughput <code>wan_in</code>/<code>wan_out</code> dengan persentase 95% dari <code>uplink_speed_mbps</code> sebelum perangkat tumbang. Jika tersaturasi, diagnosa berubah dari <em>Congestion</em> ke Indikasi Serangan/Pipa Penuh.</li>
+        <li><strong>Mass Failure (Upstream Fiber Cut)</strong>: Modifikasi menambahkan pengesampingan (<em>override</em>) justifikasi lokal jika terdapat &ge; 2 perangkat yang mati dalam jeda waktu 30 detik bersamaan, menandakan kegagalan terletak pada jaringan induk (<em>Distribution/Core/Zone</em>).</li>
+        <li><strong>Fix Scheduler Reboot Accuracy</strong>: Mengimplementasikan <em>state machine</em> penundaan (<code>_pending_analysis</code>) yang menunggu daemon SNMP Mikrotik aktif sepenuhnya untuk menarik `sysUpTime` terkini, guna menghindari false positive "Kabel LAN Lepas" pada perangkat yang sengaja direstart secara jadwal.</li>
+      </ul>
+    </li>
+  </ul>
+
+  <h3>6.12 Manajemen Data Traffic Historis & Anomali Dinamis</h3>
+  <ul>
+    <li><strong>Berkas yang Dimodifikasi</strong>: <code>database.py</code>, <code>app.py</code>, <code>snmp_worker.py</code>, <code>settings.html</code></li>
+    <li><strong>Detail Teknis</strong>:
+      <ul>
+        <li>Menginjeksikan endpoint REST baru <code>/api/settings/cleanup-anomalies</code> yang mengeksekusi penghapusan deret waktu spesifik untuk lonjakan traffic liar yang melampaui batasan kapasitas fisik, tanpa melukai deret waktu normal.</li>
+        <li>Mengekspos input <code>anomaly_cap_multiplier</code> (contoh: 2.5x dari kecepatan uplink) dan konfigurasi <em>retention</em> harian di halaman Settings UI yang berefek instan terhadap algoritma penyaringan visual, laporan, dan pembersihan database.</li>
       </ul>
     </li>
   </ul>
