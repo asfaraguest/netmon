@@ -254,56 +254,69 @@ class Database:
             c.execute('INSERT OR IGNORE INTO zones (id, name, color, description) VALUES (1, "Default Zone", "#00d4ff", "Default network zone")')
             c.execute('INSERT OR IGNORE INTO floorplans (id) VALUES (1)')
 
-            # Clean up legacy traffic spikes by comparing against each device's dynamically detected uplink_speed_mbps
-            try:
-                # Ambil multiplier dan cap (dalam Gbps) dari tabel settings (atau gunakan default)
+    def cleanup_traffic_anomalies(self):
+        """Hapus (nolkan) traffic historis yang melebihi cap anomali saat ini.
+        DESTRUKTIF & TIDAK BISA DIBATALKAN -- sengaja HANYA dipanggil manual (lewat tombol
+        di Settings), BUKAN otomatis tiap startup, supaya data lama tidak diam-diam
+        terhapus setiap kali aplikasi restart hanya karena nilai cap/uplink_speed_mbps
+        kebetulan berubah sejak data itu direkam.
+        Return dict jumlah baris yang kena di tiap tabel, supaya hasilnya bisa diaudit."""
+        result = {'snmp_metrics': 0, 'devices_wan_in': 0, 'devices_wan_out': 0,
+                  'interface_rx': 0, 'interface_tx': 0, 'error': None}
+        try:
+            with self.conn() as c:
                 mult_row = c.execute("SELECT value FROM settings WHERE key='anomaly_cap_multiplier'").fetchone()
                 cap_row = c.execute("SELECT value FROM settings WHERE key='anomaly_cap_gbps'").fetchone()
                 mult = float(mult_row[0]) if mult_row else 1.05
                 cap_bps = float(cap_row[0]) * 1000000000.0 if cap_row else 5000000000.0
 
-                c.execute('''
-                    UPDATE snmp_metrics 
-                    SET metric_value = '0' 
-                    WHERE metric_name IN ('wan_in', 'wan_out') 
+                cur = c.execute('''
+                    UPDATE snmp_metrics
+                    SET metric_value = '0'
+                    WHERE metric_name IN ('wan_in', 'wan_out')
                     AND CAST(metric_value AS REAL) > (
-                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?) 
+                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?)
                         FROM devices WHERE devices.id = snmp_metrics.device_id
                     )
                 ''', (mult, cap_bps))
-                
-                c.execute('''
-                    UPDATE devices 
+                result['snmp_metrics'] = cur.rowcount
+
+                cur = c.execute('''
+                    UPDATE devices
                     SET wan_in = 0
                     WHERE wan_in > MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?)
                 ''', (mult, cap_bps))
-                
-                c.execute('''
-                    UPDATE devices 
+                result['devices_wan_in'] = cur.rowcount
+
+                cur = c.execute('''
+                    UPDATE devices
                     SET wan_out = 0
                     WHERE wan_out > MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?)
                 ''', (mult, cap_bps))
-                
-                c.execute('''
-                    UPDATE interface_traffic 
+                result['devices_wan_out'] = cur.rowcount
+
+                cur = c.execute('''
+                    UPDATE interface_traffic
                     SET rx_bps = 0
                     WHERE rx_bps > (
-                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?) 
+                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?)
                         FROM devices WHERE devices.id = interface_traffic.device_id
                     )
                 ''', (mult, cap_bps))
-                
-                c.execute('''
-                    UPDATE interface_traffic 
+                result['interface_rx'] = cur.rowcount
+
+                cur = c.execute('''
+                    UPDATE interface_traffic
                     SET tx_bps = 0
                     WHERE tx_bps > (
-                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?) 
+                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?)
                         FROM devices WHERE devices.id = interface_traffic.device_id
                     )
                 ''', (mult, cap_bps))
-
-            except Exception as e:
-                print(f"[DB migration] Traffic cleanup failed: {e}")
+                result['interface_tx'] = cur.rowcount
+        except Exception as e:
+            result['error'] = str(e)
+        return result
 
     # ============================================================
     # DEVICES

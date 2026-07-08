@@ -951,6 +951,17 @@ def save_settings():
             pass
     return jsonify({'status': 'success'})
 
+@app.route('/api/settings/cleanup-anomalies', methods=['POST'])
+def cleanup_traffic_anomalies():
+    """Bersihkan (nolkan) traffic historis di atas cap anomali saat ini.
+    DESTRUKTIF & TIDAK BISA DIBATALKAN -- sengaja harus dipicu manual dari UI,
+    bukan berjalan otomatis, supaya user sadar & bisa cek dulu nilai cap-nya
+    sebelum data lama berpotensi terhapus."""
+    result = db.cleanup_traffic_anomalies()
+    if result.get('error'):
+        return jsonify({'status': 'error', 'message': result['error']}), 500
+    return jsonify({'status': 'success', 'result': result})
+
 @app.route('/api/ai/test', methods=['POST'])
 def test_groq():
     import urllib.request
