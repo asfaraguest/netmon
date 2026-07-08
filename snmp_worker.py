@@ -636,6 +636,10 @@ class SNMPWorker:
                     upd['last_seen'] = now
                     self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE")
                     self.analyze_downtime_event(device, device.get('last_seen') or now, now, upd.get('uptime'))
+                    self._pending_analysis.pop(ip, None)
+                elif ip in self._pending_analysis:
+                    down_time = self._pending_analysis.pop(ip)
+                    self.analyze_downtime_event(device, down_time, now, upd.get('uptime'))
                 elif old_st == 'unknown':
                     upd['last_seen'] = now
 
@@ -653,11 +657,13 @@ class SNMPWorker:
                 import time
                 print(f"[Verification] {ip} seems offline via SNMP and Ping. Retrying SNMP poll...")
                 time.sleep(2.0)
-                verify_snmp = self._get(ip, community, [OID['sysDescr'], '1.3.6.1.2.1.1.2.0'], port, version)
+                verify_snmp = self._get(ip, community, [OID['sysDescr'], '1.3.6.1.2.1.1.2.0', '1.3.6.1.2.1.1.3.0'], port, version)
                 if verify_snmp:
                     print(f"[Verification] SNMP responded on retry for {ip}. Keeping device UP.")
                     result = verify_snmp
                     upd = {'status': 'up', 'last_polled': now}
+                    if verify_snmp.get('1.3.6.1.2.1.1.3.0'):
+                        upd['uptime'] = verify_snmp['1.3.6.1.2.1.1.3.0']
                     if old_st == 'down':
                         upd['last_seen'] = now
                         self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE")
@@ -687,7 +693,7 @@ class SNMPWorker:
                     if old_st == 'down':
                         upd['last_seen'] = now
                         self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE (ping only)")
-                        self.analyze_downtime_event(device, device.get('last_seen') or now, now, None)
+                        self._pending_analysis[ip] = device.get('last_seen') or now
                     elif old_st == 'unknown':
                         upd['last_seen'] = now
                     # Only alert if SNMP was the one that actually failed (we didn't revive SNMP in verify block)
@@ -704,6 +710,7 @@ class SNMPWorker:
                 # Genuinely offline -> lempar notifikasi perangkat offline ke dashboard
                 with self.db_write_lock:
                     self._snmp_failing.discard(ip)
+                    self._pending_analysis.pop(ip, None)
                     self.db.update_device(did, {'status':'down','last_polled':now,
                                                  'cpu_usage': None, 'memory_usage': None, 'temperature': None})
                     if old_st != 'down':
@@ -750,6 +757,7 @@ class SNMPWorker:
                         upd['last_seen'] = now
                     self.db.update_device(did, upd)
                 else:
+                    self._pending_analysis.pop(ip, None)
                     self.db.update_device(did, {'status':'down','last_polled':now})
                     if old_st != 'down':
                         s = self.db.get_settings()
@@ -1757,30 +1765,31 @@ class SNMPWorker:
             
             # 3. Analyze SNMP Metrics before down
             snmp_pattern = 'normal_metrics'
-            cpu_trend = []
-            ram_trend = []
+            cpu_trend, ram_trend, tmp_trend, wan_in_trend, wan_out_trend = [], [], [], [], []
             with self.db_write_lock:
                 with self.db.conn() as c:
                     rows = c.execute('''
                         SELECT metric_name, metric_value FROM snmp_metrics
                         WHERE device_id = ? AND timestamp <= ? AND timestamp >= datetime(?, '-10 minutes')
-                        ORDER BY timestamp DESC LIMIT 20
+                        ORDER BY timestamp DESC LIMIT 100
                     ''', (did, down_time_str, down_time_str)).fetchall()
                     for r in rows:
-                        val = r['metric_value']
                         try:
-                            val_f = float(val)
-                            if r['metric_name'] == 'cpu_usage':
-                                cpu_trend.append(val_f)
-                            elif r['metric_name'] == 'memory_usage':
-                                ram_trend.append(val_f)
-                        except Exception:
-                            pass
-            
-            if cpu_trend and max(cpu_trend) > 85.0:
-                snmp_pattern = 'resource_overload'
-            elif ram_trend and max(ram_trend) > 90.0:
-                snmp_pattern = 'resource_overload'
+                            val_f = float(r['metric_value'])
+                            if r['metric_name'] == 'cpu_usage': cpu_trend.append(val_f)
+                            elif r['metric_name'] == 'memory_usage': ram_trend.append(val_f)
+                            elif r['metric_name'] == 'temperature': tmp_trend.append(val_f)
+                            elif r['metric_name'] == 'wan_in': wan_in_trend.append(val_f)
+                            elif r['metric_name'] == 'wan_out': wan_out_trend.append(val_f)
+                        except Exception: pass
+
+            uplink_bps = float(device.get('uplink_speed_mbps') or 1000) * 1e6 * 0.95
+            bw_sat = (wan_in_trend and max(wan_in_trend) > uplink_bps) or (wan_out_trend and max(wan_out_trend) > uplink_bps)
+
+            if tmp_trend and max(tmp_trend) > 85.0: snmp_pattern = 'thermal_shutdown'
+            elif ram_trend and max(ram_trend) > 95.0: snmp_pattern = 'memory_leak'
+            elif cpu_trend and max(cpu_trend) > 95.0: snmp_pattern = 'cpu_exhaustion'
+            elif bw_sat: snmp_pattern = 'bandwidth_saturation'
                 
             # 4. Check Reboot
             reboot_detected = 0
@@ -1794,19 +1803,43 @@ class SNMPWorker:
             confidence = 70.0
             
             if reboot_detected:
-                if snmp_pattern == 'resource_overload':
-                    justification = "OS Crash akibat Overload Resource (CPU/Memory penuh sebelum restart)"
+                if snmp_pattern == 'thermal_shutdown':
+                    justification = "Thermal Shutdown (Perangkat mati akibat Overheating > 85°C)"
+                    confidence = 95.0
+                elif snmp_pattern == 'memory_leak':
+                    justification = "OS Crash: Memory Exhaustion (Kemungkinan OOM/Memory Leak)"
+                    confidence = 90.0
+                elif snmp_pattern == 'cpu_exhaustion':
+                    justification = "OS Crash: CPU Saturation (Routing Loop / Proses Hang)"
                     confidence = 90.0
                 else:
-                    justification = "Mati Lampu / Power Loss (Perangkat mati mendadak lalu menyala kembali)"
+                    justification = "Restart Sengaja / Mati Lampu (Perangkat reboot normal)"
                     confidence = 95.0
             else:
                 if ping_pattern == 'gradual_degrade':
-                    justification = "Congestion / Network Loop (Penurunan performa jaringan bertahap hingga RTO)"
-                    confidence = 85.0
+                    if snmp_pattern == 'bandwidth_saturation':
+                        justification = "Link Saturated / DDoS (Trafik penuh >95% menyebabkan Ping RTO)"
+                        confidence = 90.0
+                    else:
+                        justification = "Congestion / Network Loop (Penurunan performa jaringan bertahap hingga RTO)"
+                        confidence = 85.0
                 elif ping_pattern == 'instant_drop':
-                    justification = "Kabel Lan Lepas / Port Down (Link jaringan terputus tetapi perangkat tidak restart)"
+                    if current_uptime_str is None:
+                        justification = "Perangkat Restart / Mati Listrik / Kabel Lan Lepas"
+                    else:
+                        justification = "Kabel Lan Lepas / Port Down (Link jaringan terputus tanpa reboot)"
                     confidence = 90.0
+
+            # 6. Mass Failure Override
+            with self.db_write_lock:
+                with self.db.conn() as c:
+                    concurrent_downs = c.execute('''
+                        SELECT COUNT(DISTINCT device_id) FROM downtime_analysis 
+                        WHERE abs(strftime('%s', down_time) - strftime('%s', ?)) <= 30
+                    ''', (down_time_str,)).fetchone()[0]
+            if concurrent_downs >= 2:
+                justification = "Parent Link / Upstream Failure (Kematian massal bersama perangkat lain)"
+                confidence = 95.0
             
             # Save analysis results
             with self.db_write_lock:
