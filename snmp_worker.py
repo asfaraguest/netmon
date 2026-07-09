@@ -99,6 +99,7 @@ class SNMPWorker:
         self.db_write_lock = threading.RLock()
         self._ping_history = {}
         self._snmp_failing = set()
+        self._pending_analysis = {}
 
     def get_scan_status(self): return dict(self._status)
     def stop_scan(self):       self._stop.set()
