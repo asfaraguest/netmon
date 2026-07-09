@@ -1464,21 +1464,21 @@ body.theme-forest .btn-close-white {
 
 /* 1. BRUTALISM */
 body.theme-brutalism {
-  --bg-base: #f4f0db;
-  --bg-card: #ffffff;
-  --bg-card-solid: #ffffff;
-  --bg-hover: #ffde4d;
-  --border: #000000;
-  --border-lt: #000000;
-  --accent: #ff4e00;
-  --accent-dim: rgba(255, 78, 0, 0.15);
-  --text-primary: #000000;
-  --text-secondary: #111111;
-  --text-muted: #444444;
+  --bg-base: #e8e8e8;
+  --bg-card: #f5f5f5;
+  --bg-card-solid: #f0f0f0;
+  --bg-hover: #c0c0c0;
+  --border: #2a2a2a;
+  --border-lt: #3a3a3a;
+  --accent: #4a4a4a;
+  --accent-dim: rgba(74, 74, 74, 0.15);
+  --text-primary: #1a1a1a;
+  --text-secondary: #2e2e2e;
+  --text-muted: #5a5a5a;
   --radius: 0px;
   --radius-sm: 0px;
   --radius-lg: 0px;
-  color: #000000 !important;
+  color: #1a1a1a !important;
 }
 body.theme-brutalism *,
 body.theme-brutalism .text-muted,
@@ -1492,7 +1492,7 @@ body.theme-brutalism .nm-label,
 body.theme-brutalism .logo-text,
 body.theme-brutalism .about-val,
 body.theme-brutalism .live-badge {
-  color: #000000 !important;
+  color: #1a1a1a !important;
 }
 body.theme-brutalism .nm-panel,
 body.theme-brutalism .sidebar,
@@ -1503,73 +1503,73 @@ body.theme-brutalism .modal-content,
 body.theme-brutalism .custom-confirm-dialog,
 body.theme-brutalism .custom-loading-dialog,
 body.theme-brutalism .nm-toast {
-  border: 3px solid #000000 !important;
-  box-shadow: 4px 4px 0px 0px #000000 !important;
+  border: 3px solid #2a2a2a !important;
+  box-shadow: 4px 4px 0px 0px #2a2a2a !important;
   border-radius: 0px !important;
 }
 body.theme-brutalism .btn-nm {
-  background: #ffffff !important;
-  color: #000000 !important;
+  background: #f0f0f0 !important;
+  color: #1a1a1a !important;
 }
 body.theme-brutalism .btn-nm:hover {
-  background: #ffde4d !important;
-  color: #000000 !important;
+  background: #c0c0c0 !important;
+  color: #1a1a1a !important;
   transform: translate(-2px, -2px);
-  box-shadow: 6px 6px 0px 0px #000000 !important;
+  box-shadow: 6px 6px 0px 0px #2a2a2a !important;
 }
-body.theme-brutalism .btn-success { background: #39e078 !important; border-color: #000000 !important; color: #000000 !important; }
-body.theme-brutalism .btn-danger  { background: #ff5252 !important; border-color: #000000 !important; color: #000000 !important; }
-body.theme-brutalism .btn-primary { background: #ffde4d !important; border-color: #000000 !important; color: #000000 !important; }
-body.theme-brutalism .btn-confirm-cancel { background: #ffffff !important; border-color: #000000 !important; color: #000000 !important; }
+body.theme-brutalism .btn-success { background: #8fbc8f !important; border-color: #2a2a2a !important; color: #1a1a1a !important; }
+body.theme-brutalism .btn-danger  { background: #cd5c5c !important; border-color: #2a2a2a !important; color: #1a1a1a !important; }
+body.theme-brutalism .btn-primary { background: #a9a9a9 !important; border-color: #2a2a2a !important; color: #1a1a1a !important; }
+body.theme-brutalism .btn-confirm-cancel { background: #dcdcdc !important; border-color: #2a2a2a !important; color: #1a1a1a !important; }
 body.theme-brutalism .sidebar {
-  background: #f4f0db !important;
-  border-right: 3px solid #000000 !important;
+  background: #d4d4d4 !important;
+  border-right: 3px solid #2a2a2a !important;
 }
 body.theme-brutalism .sidebar-logo {
-  border-bottom: 3px solid #000000 !important;
+  border-bottom: 3px solid #2a2a2a !important;
 }
 body.theme-brutalism .sidebar-logo .bi {
-  color: #ff4e00 !important;
+  color: #4a4a4a !important;
 }
 body.theme-brutalism .sidebar .slabel,
 body.theme-brutalism .sidebar .sval,
 body.theme-brutalism .sidebar .sidebar-conn {
-  color: #000000 !important;
+  color: #1a1a1a !important;
 }
 body.theme-brutalism .sidebar-clock {
-  background: #ffffff !important;
-  border: 3px solid #000000 !important;
+  background: #f0f0f0 !important;
+  border: 3px solid #2a2a2a !important;
   border-radius: 0 !important;
-  box-shadow: 4px 4px 0px 0px #000000 !important;
+  box-shadow: 4px 4px 0px 0px #2a2a2a !important;
   margin: 10px 12px 14px 12px !important;
 }
 body.theme-brutalism .clock-time {
   font-family: 'IBM Plex Mono', monospace !important;
-  color: #000000 !important;
+  color: #1a1a1a !important;
   font-weight: 800 !important;
 }
 body.theme-brutalism .clock-date {
   font-family: 'IBM Plex Mono', monospace !important;
-  color: #000000 !important;
+  color: #1a1a1a !important;
   font-weight: 800 !important;
   text-transform: uppercase;
 }
 body.theme-brutalism .sidebar-status {
-  border-top: 3px solid #000000 !important;
+  border-top: 3px solid #2a2a2a !important;
 }
 body.theme-brutalism .sidebar .nav-item {
   border-radius: 0 !important;
-  color: #000000 !important;
+  color: #1a1a1a !important;
 }
 body.theme-brutalism .sidebar .nav-item:hover {
-  background: #ffde4d !important;
+  background: #c0c0c0 !important;
 }
 body.theme-brutalism .sidebar .nav-item i {
-  color: #ff4e00 !important;
+  color: #4a4a4a !important;
 }
 body.theme-brutalism .sidebar #theme-toggle-btn {
-  border: 3px solid #000000 !important;
-  color: #000000 !important;
+  border: 3px solid #2a2a2a !important;
+  color: #1a1a1a !important;
   border-radius: 0 !important;
 }
 body.theme-brutalism .logo-text,
@@ -1583,12 +1583,12 @@ body.theme-brutalism .custom-confirm-title {
   text-transform: uppercase;
 }
 body.theme-brutalism .nav-item.active {
-  background: #ffde4d !important;
-  border: 3px solid #000000 !important;
+  background: #b0b0b0 !important;
+  border: 3px solid #2a2a2a !important;
 }
 body.theme-brutalism .live-badge {
-  background: #ffde4d !important;
-  border: 2px solid #000000 !important;
+  background: #c0c0c0 !important;
+  border: 2px solid #2a2a2a !important;
   font-weight: 800 !important;
 }
 
