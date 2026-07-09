@@ -1462,23 +1462,23 @@ body.theme-forest .btn-close-white {
   filter: none !important;
 }
 
-/* 1. BRUTALISM */
+/* 1. BRUTALISM — Neo-Brutalism × Modern Minimalist */
 body.theme-brutalism {
-  --bg-base: #e8e8e8;
-  --bg-card: #f5f5f5;
-  --bg-card-solid: #f0f0f0;
-  --bg-hover: #c0c0c0;
-  --border: #2a2a2a;
-  --border-lt: #3a3a3a;
-  --accent: #4a4a4a;
-  --accent-dim: rgba(74, 74, 74, 0.15);
-  --text-primary: #1a1a1a;
-  --text-secondary: #2e2e2e;
-  --text-muted: #5a5a5a;
-  --radius: 0px;
-  --radius-sm: 0px;
-  --radius-lg: 0px;
-  color: #1a1a1a !important;
+  --bg-base: #f5f5f0;
+  --bg-card: #ffffff;
+  --bg-card-solid: #ffffff;
+  --bg-hover: #eef2ff;
+  --border: #1e1e2e;
+  --border-lt: #d1d5db;
+  --accent: #4f46e5;
+  --accent-dim: rgba(79, 70, 229, 0.10);
+  --text-primary: #1e1e2e;
+  --text-secondary: #3f3f50;
+  --text-muted: #6b7280;
+  --radius: 4px;
+  --radius-sm: 3px;
+  --radius-lg: 6px;
+  color: #1e1e2e !important;
 }
 body.theme-brutalism *,
 body.theme-brutalism .text-muted,
@@ -1492,7 +1492,13 @@ body.theme-brutalism .nm-label,
 body.theme-brutalism .logo-text,
 body.theme-brutalism .about-val,
 body.theme-brutalism .live-badge {
-  color: #1a1a1a !important;
+  color: #1e1e2e !important;
+}
+body.theme-brutalism .text-muted,
+body.theme-brutalism .about-lbl,
+body.theme-brutalism .kpi-sub,
+body.theme-brutalism .page-sub {
+  color: #6b7280 !important;
 }
 body.theme-brutalism .nm-panel,
 body.theme-brutalism .sidebar,
@@ -1503,74 +1509,93 @@ body.theme-brutalism .modal-content,
 body.theme-brutalism .custom-confirm-dialog,
 body.theme-brutalism .custom-loading-dialog,
 body.theme-brutalism .nm-toast {
-  border: 3px solid #2a2a2a !important;
-  box-shadow: 4px 4px 0px 0px #2a2a2a !important;
-  border-radius: 0px !important;
+  border: 2px solid #1e1e2e !important;
+  box-shadow: 3px 3px 0px 0px #1e1e2e !important;
+  border-radius: 4px !important;
+}
+body.theme-brutalism .nm-panel,
+body.theme-brutalism .modal-content,
+body.theme-brutalism .custom-confirm-dialog,
+body.theme-brutalism .custom-loading-dialog {
+  background: #ffffff !important;
 }
 body.theme-brutalism .btn-nm {
-  background: #f0f0f0 !important;
-  color: #1a1a1a !important;
+  background: #ffffff !important;
+  color: #1e1e2e !important;
+  transition: all 0.15s ease !important;
 }
 body.theme-brutalism .btn-nm:hover {
-  background: #c0c0c0 !important;
-  color: #1a1a1a !important;
+  background: #eef2ff !important;
+  color: #4f46e5 !important;
   transform: translate(-2px, -2px);
-  box-shadow: 6px 6px 0px 0px #2a2a2a !important;
+  box-shadow: 5px 5px 0px 0px #1e1e2e !important;
 }
-body.theme-brutalism .btn-success { background: #8fbc8f !important; border-color: #2a2a2a !important; color: #1a1a1a !important; }
-body.theme-brutalism .btn-danger  { background: #cd5c5c !important; border-color: #2a2a2a !important; color: #1a1a1a !important; }
-body.theme-brutalism .btn-primary { background: #a9a9a9 !important; border-color: #2a2a2a !important; color: #1a1a1a !important; }
-body.theme-brutalism .btn-confirm-cancel { background: #dcdcdc !important; border-color: #2a2a2a !important; color: #1a1a1a !important; }
+body.theme-brutalism .btn-success { background: #22c55e !important; border: 2px solid #1e1e2e !important; color: #ffffff !important; box-shadow: 3px 3px 0px 0px #1e1e2e !important; }
+body.theme-brutalism .btn-danger  { background: #ef4444 !important; border: 2px solid #1e1e2e !important; color: #ffffff !important; box-shadow: 3px 3px 0px 0px #1e1e2e !important; }
+body.theme-brutalism .btn-primary { background: #4f46e5 !important; border: 2px solid #1e1e2e !important; color: #ffffff !important; box-shadow: 3px 3px 0px 0px #1e1e2e !important; }
+body.theme-brutalism .btn-confirm-cancel { background: #f3f4f6 !important; border: 2px solid #1e1e2e !important; color: #1e1e2e !important; box-shadow: 3px 3px 0px 0px #1e1e2e !important; }
+body.theme-brutalism .btn-success:hover,
+body.theme-brutalism .btn-danger:hover,
+body.theme-brutalism .btn-primary:hover,
+body.theme-brutalism .btn-confirm-cancel:hover {
+  transform: translate(-2px, -2px) !important;
+  box-shadow: 5px 5px 0px 0px #1e1e2e !important;
+}
 body.theme-brutalism .sidebar {
-  background: #d4d4d4 !important;
-  border-right: 3px solid #2a2a2a !important;
+  background: #fafaf8 !important;
+  border-right: 2px solid #1e1e2e !important;
 }
 body.theme-brutalism .sidebar-logo {
-  border-bottom: 3px solid #2a2a2a !important;
+  border-bottom: 2px solid #e5e7eb !important;
 }
 body.theme-brutalism .sidebar-logo .bi {
-  color: #4a4a4a !important;
+  color: #4f46e5 !important;
 }
-body.theme-brutalism .sidebar .slabel,
+body.theme-brutalism .sidebar .slabel {
+  color: #6b7280 !important;
+}
 body.theme-brutalism .sidebar .sval,
 body.theme-brutalism .sidebar .sidebar-conn {
-  color: #1a1a1a !important;
+  color: #1e1e2e !important;
 }
 body.theme-brutalism .sidebar-clock {
-  background: #f0f0f0 !important;
-  border: 3px solid #2a2a2a !important;
-  border-radius: 0 !important;
-  box-shadow: 4px 4px 0px 0px #2a2a2a !important;
+  background: #ffffff !important;
+  border: 2px solid #1e1e2e !important;
+  border-radius: 4px !important;
+  box-shadow: 3px 3px 0px 0px #1e1e2e !important;
   margin: 10px 12px 14px 12px !important;
 }
 body.theme-brutalism .clock-time {
   font-family: 'IBM Plex Mono', monospace !important;
-  color: #1a1a1a !important;
-  font-weight: 800 !important;
+  color: #1e1e2e !important;
+  font-weight: 700 !important;
 }
 body.theme-brutalism .clock-date {
   font-family: 'IBM Plex Mono', monospace !important;
-  color: #1a1a1a !important;
-  font-weight: 800 !important;
+  color: #6b7280 !important;
+  font-weight: 600 !important;
   text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 body.theme-brutalism .sidebar-status {
-  border-top: 3px solid #2a2a2a !important;
+  border-top: 2px solid #e5e7eb !important;
 }
 body.theme-brutalism .sidebar .nav-item {
-  border-radius: 0 !important;
-  color: #1a1a1a !important;
+  border-radius: 4px !important;
+  color: #1e1e2e !important;
+  transition: all 0.15s ease !important;
 }
 body.theme-brutalism .sidebar .nav-item:hover {
-  background: #c0c0c0 !important;
+  background: #eef2ff !important;
 }
 body.theme-brutalism .sidebar .nav-item i {
-  color: #4a4a4a !important;
+  color: #4f46e5 !important;
 }
 body.theme-brutalism .sidebar #theme-toggle-btn {
-  border: 3px solid #2a2a2a !important;
-  color: #1a1a1a !important;
-  border-radius: 0 !important;
+  border: 2px solid #1e1e2e !important;
+  color: #1e1e2e !important;
+  border-radius: 4px !important;
+  transition: all 0.15s ease !important;
 }
 body.theme-brutalism .logo-text,
 body.theme-brutalism .panel-header,
@@ -1579,17 +1604,35 @@ body.theme-brutalism h2,
 body.theme-brutalism h3,
 body.theme-brutalism .custom-confirm-title {
   font-family: 'IBM Plex Mono', monospace !important;
-  font-weight: 800 !important;
+  font-weight: 700 !important;
   text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 body.theme-brutalism .nav-item.active {
-  background: #b0b0b0 !important;
-  border: 3px solid #2a2a2a !important;
+  background: #4f46e5 !important;
+  border: 2px solid #1e1e2e !important;
+  color: #ffffff !important;
+  box-shadow: 3px 3px 0px 0px #1e1e2e !important;
+}
+body.theme-brutalism .nav-item.active span,
+body.theme-brutalism .nav-item.active i {
+  color: #ffffff !important;
 }
 body.theme-brutalism .live-badge {
-  background: #c0c0c0 !important;
-  border: 2px solid #2a2a2a !important;
-  font-weight: 800 !important;
+  background: #4f46e5 !important;
+  border: 2px solid #1e1e2e !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+body.theme-brutalism .nm-input,
+body.theme-brutalism .nm-select {
+  background: #ffffff !important;
+  transition: all 0.15s ease !important;
+}
+body.theme-brutalism .nm-input:focus,
+body.theme-brutalism .nm-select:focus {
+  border-color: #4f46e5 !important;
+  box-shadow: 3px 3px 0px 0px #4f46e5 !important;
 }
 
 /* 2. MINIMALISM */
