@@ -245,6 +245,8 @@ class Database:
                 'alert_retention_days': '30',
                 'log_retention_days': '90',
                 'traffic_retention_hours': '720',
+                'report_metrics_retention_hours': '1440',
+                'interface_chart_retention_hours': '168',
                 'anomaly_cap_multiplier': '1.05',
                 'anomaly_cap_gbps': '5.0',
             }
@@ -759,12 +761,17 @@ class Database:
             ''', (device_id, f'-{int(hours)}')).fetchall()
             return [{'name': r[0], 'idx': r[1]} for r in rows]
 
-    def cleanup_interface_traffic(self, retention_hours=168):
+    def cleanup_interface_traffic(self, interface_retention_hours=168, metrics_retention_hours=None):
+        # metrics_retention_hours default None -> pakai interface_retention_hours (kompatibel mundur
+        # kalau caller lama cuma kirim 1 parameter). snmp_metrics itu sumber data laporan bulanan,
+        # jadi dikasih retensi jauh lebih panjang dp interface_traffic (yang cuma buat chart recent).
+        if metrics_retention_hours is None:
+            metrics_retention_hours = interface_retention_hours
         with self.conn() as c:
             c.execute("DELETE FROM interface_traffic WHERE sampled_at < datetime('now', ? || ' hours')",
-                      (f'-{int(retention_hours)}',))
+                      (f'-{int(interface_retention_hours)}',))
             c.execute("DELETE FROM snmp_metrics WHERE timestamp < datetime('now', ? || ' hours')",
-                      (f'-{int(retention_hours)}',))
+                      (f'-{int(metrics_retention_hours)}',))
 
 
     def get_metric_history(self, device_id, name, hours=1):

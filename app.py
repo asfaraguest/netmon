@@ -1169,7 +1169,11 @@ def poll_traffic():
 
     # Cleanup data lama (simpan 30 hari = 720 jam terakhir secara default)
     try:
-        db.cleanup_interface_traffic(retention_hours=int(db.get_settings().get('traffic_retention_hours', 720)))
+        settings = db.get_settings()
+        db.cleanup_interface_traffic(
+            interface_retention_hours=int(settings.get('interface_chart_retention_hours', 168)),
+            metrics_retention_hours=int(settings.get('report_metrics_retention_hours', 1440))
+        )
     except Exception as e:
         print(f"[Cleanup] {e}")
 
@@ -1187,6 +1191,15 @@ def run_monthly_report_cron():
     except Exception as e:
         print(f"[Report Cron] Failed to generate monthly report: {e}")
 
+def run_weekly_vacuum():
+    print("[Vacuum Cron] Running weekly VACUUM...")
+    try:
+        with db.conn() as c:
+            c.execute("VACUUM")
+        print("[Vacuum Cron] VACUUM completed successfully!")
+    except Exception as e:
+        print(f"[Vacuum Cron] Failed: {e}")
+
 if __name__ == '__main__':
     settings = db.get_settings()
     poll_interval = max(10, int(settings.get('poll_interval', 30)))
@@ -1195,6 +1208,7 @@ if __name__ == '__main__':
     scheduler.add_job(poll_traffic, 'interval', seconds=traffic_poll_interval, id='traffic_poll', max_instances=1)
     # Automatically generate monthly report at 23:50 on the last day of the month before oldest data prunes
     scheduler.add_job(run_monthly_report_cron, 'cron', day='last', hour=23, minute=50, id='monthly_report_cron')
+    scheduler.add_job(run_weekly_vacuum, 'cron', day_of_week='sun', hour=3, minute=0, id='weekly_vacuum')
     scheduler.start()
     port = int(os.environ.get('PORT', 5000))
     host = os.environ.get('HOST', '0.0.0.0')
