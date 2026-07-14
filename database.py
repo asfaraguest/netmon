@@ -25,6 +25,10 @@ class Database:
         c = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=NORMAL")
+        c.execute("PRAGMA cache_size=-2000")
+        c.execute("PRAGMA temp_store=MEMORY")
+        c.execute("PRAGMA mmap_size=268435456")
         try:
             yield c
             c.commit()
@@ -36,6 +40,10 @@ class Database:
 
     def _init_db(self):
         with self.conn() as c:
+            try:
+                c.execute("DROP INDEX IF EXISTS idx_metrics_device")
+            except Exception:
+                pass
             c.executescript('''
                 CREATE TABLE IF NOT EXISTS devices (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,8 +170,11 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_alerts_device ON alerts(device_id);
                 CREATE INDEX IF NOT EXISTS idx_access_logs_created ON access_logs(created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_metrics_device ON snmp_metrics(device_id, metric_name);
+                CREATE INDEX IF NOT EXISTS idx_metrics_device ON snmp_metrics(device_id, metric_name, timestamp);
+                CREATE INDEX IF NOT EXISTS idx_metrics_name_time ON snmp_metrics(metric_name, timestamp, device_id, metric_value);
+                CREATE INDEX IF NOT EXISTS idx_metrics_timestamp ON snmp_metrics(timestamp);
                 CREATE INDEX IF NOT EXISTS idx_if_traffic ON interface_traffic(device_id, iface_name, sampled_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_traffic_timestamp ON interface_traffic(sampled_at);
                 CREATE INDEX IF NOT EXISTS idx_downtime_device ON downtime_analysis(device_id);
             ''')
 
