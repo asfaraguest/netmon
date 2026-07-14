@@ -28,6 +28,10 @@ Real-time network monitoring with SNMP auto-discovery, interactive floor plan al
 | **Router Uplinks Dashboard** | Dedicated multi-chart page for tracking live and historical throughput across all WAN router interfaces |
 | **BlackBox Forensics** | AI-like heuristic analysis diagnosing downtime root causes (Thermal shutdown, CPU exhaustion, DDoS, Fiber cuts, etc.) |
 | **Dynamic Traffic Retention** | Configurable settings to auto-cleanup historic traffic data and fine-tune anomaly threshold multipliers via the UI |
+| **Split Data Retention** | Separate Report Data Retention (min 31 days) and Interface Chart Retention (default 7 days) to save SQLite disk space |
+| **Weekly Database Vacuum** | Automatic weekly SQLite `VACUUM` scheduled every Sunday at 03:00 in the background to physically shrink database files |
+| **Covering Index & DB Tuning** | Covering index `idx_metrics_name_time` and SQLite connection optimizations (WAL, mmap memory-mapped I/O) to load large queries under 2 seconds |
+| **Automated Regression Testing** | Dedicated `test_report_accuracy.py` test suite at root to validate monthly bandwidth calculations, time-weighted average logic, and outlier filtering |
 
 ---
 
@@ -300,7 +304,7 @@ You are an expert full-stack developer tasked with building "NetMon", an advance
 3. `alerts`: id, device_id, severity, message, timestamp, acknowledged (boolean).
 4. `access_logs`: id, source_ip, message, log_type, timestamp.
 5. `interface_traffic`: id, device_id, timestamp, rx_bytes, tx_bytes.
-6. `settings`: key, value (stores traffic_retention_hours, poll_interval, etc.)
+6. `settings`: key, value (stores report_metrics_retention_hours, interface_chart_retention_hours, poll_interval, anomaly_cap_multiplier, etc.)
 
 ### Backend Core Logic (`snmp_worker.py`):
 1. **Dual-Interval Polling**: Implement two separate APScheduler jobs. 
@@ -308,7 +312,7 @@ You are an expert full-stack developer tasked with building "NetMon", an advance
    - Job 2: Traffic Polling (every 10s) -> Polls `ifInOctets` and `ifOutOctets` (32-bit & 64-bit counters) for routers.
 2. **Bandwidth Calculation**: Calculate delta bytes between polls divided by delta time (`dt`) to get Bps (Bytes per second). Multiply by 8 to get bps.
 3. **Rollover Protection**: Differentiate between a 32-bit SNMP counter rollover (happens at 4.29GB) and a device reboot (where uptime decreases). Adjust the math dynamically to prevent false "negative" or "anomalous spike" bandwidth readings.
-4. **Data Retention**: Run a background cleanup task every hour to delete `interface_traffic` data older than `traffic_retention_hours` from `settings`.
+4. **Data Retention & Disk Optimization**: Run a background cleanup task every hour to delete `interface_traffic` data older than `interface_chart_retention_hours` and `snmp_metrics` data older than `report_metrics_retention_hours`. Run a weekly background job to execute SQLite `VACUUM` every Sunday at 03:00 to optimize disk space.
 
 ### Frontend Core Features:
 1. **Dashboard (`dashboard.html`)**: Shows summary cards (Total, Up, Down), recent alerts feed, and real-time total backbone throughput graph (Chart.js).

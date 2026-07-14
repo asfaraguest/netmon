@@ -143,14 +143,14 @@
   <div style="text-align: center; margin-bottom: 40px;">
     <h1 style="border: none; color: #007aff; font-size: 32px; margin-bottom: 5px;">NetMon</h1>
     <p style="font-size: 16px; color: #8e8e93; margin: 0;">Dokumentasi Pengembangan & Arsitektur Sistem</p>
-    <p style="font-size: 12px; color: #aeaeb2; margin: 5px 0 0 0;">Periode Laporan: 1 Juni 2026 – 2 Juli 2026</p>
+    <p style="font-size: 12px; color: #aeaeb2; margin: 5px 0 0 0;">Periode Laporan: 1 Juni 2026 – 15 Juli 2026</p>
   </div>
 
   <hr style="border: none; border-top: 1px solid #e5e5ea; margin-bottom: 30px;">
 
   <h2>1. Ringkasan Eksekutif</h2>
   <p><strong>NetMon</strong> adalah aplikasi pemantauan jaringan (<em>Network Monitoring</em>) terintegrasi yang menyatukan penangkapan data SNMP otomatis, visualisasi topologi interaktif (Floor Plan), manajemen zona, antarmuka terminal interaktif (TUI), serta sistem penyaringan peringatan palsu cerdas bertenaga AI.</p>
-  <p>Selama periode pengembangan dari <strong>1 Juni 2026 hingga 2 Juli 2026</strong>, NetMon telah melalui serangkaian pembaruan arsitektural besar untuk meningkatkan performa konkurensi (khususnya pada lingkungan Windows/WSL), stabilitas penangkapan data SNMP, efisiensi rendering antarmuka di sisi klien, serta integrasi kecerdasan buatan (<em>Artificial Intelligence</em>) untuk meredam alarm palsu (<em>false warnings</em>).</p>
+  <p>Selama periode pengembangan dari <strong>1 Juni 2026 hingga 15 Juli 2026</strong>, NetMon telah melalui serangkaian pembaruan arsitektural besar untuk meningkatkan performa konkurensi (khususnya pada lingkungan Windows/WSL), stabilitas penangkapan data SNMP, efisiensi rendering antarmuka di sisi klien, serta integrasi kecerdasan buatan (<em>Artificial Intelligence</em>) untuk meredam alarm palsu (<em>false warnings</em>).</p>
 
   <div class="info-box">
     <p>Pemberitahuan: Dokumen ini dirancang dengan gaya kompatibilitas Microsoft Word. Anda dapat membuka file ini langsung menggunakan Microsoft Word atau mengunggahnya ke Google Docs, lalu menyimpannya sebagai format dokumen (.docx).</p>
@@ -236,11 +236,32 @@
         </td>
       </tr>
       <tr>
-        <td><strong>8 Juli 2026</strong></td>
+        <td><strong>3 - 13 Juli 2026</strong></td>
         <td>
           <ul>
             <li><strong>Dynamic Traffic Anomaly Cleanups</strong>: Menambahkan kapabilitas manajemen memori traffic historis melalui UI <em>Settings</em>. Termasuk konfigurasi batas penyimpanan dan perkalian ambang (multiplier) anomali traffic secara dinamis.</li>
-            <li><strong>BlackBox Forensics Expansion</strong>: Ekspansi algoritma diagnostik mesin heuristik. Mampu membedakan dengan spesifik antara <em>Thermal Shutdown</em> (>85°C), CPU <em>Exhaustion</em> (>95%), <em>Memory Leak</em>, Serangan DDoS (Bandwidth Saturation), Pemutusan arus/restart sengaja (Scheduler), hingga kegagalan <em>Upstream Link</em> massal (Fiber Cut/Zone down).</li>
+            <li><strong>Deduplikasi Alert &amp; Memory Optimization</strong>: Mengintegrasikan log filter untuk mencegah duplikasi alarm SNMP unreachable berulang serta memperbaiki kebocoran memori (memory leak) pada background threads.</li>
+            <li><strong>Pembersihan Granular Anomali</strong>: Menambahkan query cleanup traffic anomali secara presisi tanpa melukai data valid, dan memindahkan pembersihan destruktif ke aksi manual UI Settings.</li>
+          </ul>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>14 Juli 2026</strong></td>
+        <td>
+          <ul>
+            <li><strong>BlackBox Forensics Expansion</strong>: Ekspansi algoritma diagnostik mesin heuristik. Mampu membedakan dengan spesifik antara <em>Thermal Shutdown</em> (&gt;85°C), CPU <em>Exhaustion</em> (&gt;95%), <em>Memory Leak</em>, Serangan DDoS (Bandwidth Saturation), Pemutusan arus/restart sengaja (Scheduler), hingga kegagalan <em>Upstream Link</em> massal (Fiber Cut/Zone down).</li>
+            <li><strong>Pemisahan Retensi Data</strong>: Memisahkan variabel retensi data laporan bulanan (Report Data Retention, min 31 hari) dengan retensi grafik detail (Interface Chart Retention, default 7 hari) untuk efisiensi disk.</li>
+            <li><strong>Vacuum Database Otomatis</strong>: Menerapkan scheduler pembersihan file database secara fisik menggunakan <code>VACUUM</code> mingguan otomatis setiap hari Minggu pukul 03:00.</li>
+          </ul>
+        </td>
+      </tr>
+      <tr>
+        <td><strong>15 Juli 2026</strong></td>
+        <td>
+          <ul>
+            <li><strong>Modern Minimalist Fusion UI</strong>: Mendesain ulang gaya visual dashboard dengan palet abu-abu/perak (silver-gray pattern) dengan aksen warna Indigo premium (<code>#4f46e5</code> / <code>#6366f1</code>), border yang ramping, bayangan transparan, font Outfit, dan transisi hover yang halus.</li>
+            <li><strong>Covering Index &amp; SQLite PRAGMA Tuning</strong>: Menambahkan covering index <code>idx_metrics_name_time</code> and mengaktifkan memory-mapped I/O (<code>mmap_size</code> 256MB), <code>WAL</code>, <code>NORMAL</code>, <code>temp_store</code> untuk melaju kueri di bawah 2 detik.</li>
+            <li><strong>Regression Test Suite</strong>: Membuat file pengetesan regresi terintegrasi <code>test_report_accuracy.py</code> di root repository untuk menjamin akurasi data.</li>
           </ul>
         </td>
       </tr>
@@ -457,6 +478,40 @@
     </li>
   </ul>
 
+  <h3>6.13 Pemisahan Retensi Data &amp; Pembersihan Disk Otomatis (VACUUM)</h3>
+  <ul>
+    <li><strong>Berkas yang Dimodifikasi</strong>: <code>database.py</code>, <code>app.py</code>, <code>templates/settings.html</code></li>
+    <li><strong>Detail Teknis</strong>:
+      <ul>
+        <li>Memisah konfigurasi retensi tunggal <code>traffic_retention_hours</code> menjadi dua variabel retensi terpisah secara dinamis: <code>report_metrics_retention_hours</code> (untuk metrik laporan bulanan jangka panjang seperti wan_in/wan_out/cpu/memory/temp, minimal 744 jam/31 hari, default 1440 jam) dan <code>interface_chart_retention_hours</code> (untuk data grafik resolusi tinggi per-interface, default 168 jam/7 hari) guna menghemat penggunaan ruang disk secara signifikan.</li>
+        <li>Mengintegrasikan job scheduler mingguan baru <code>run_weekly_vacuum</code> di <code>app.py</code> yang dijadwalkan secara otomatis setiap hari Minggu pukul 03:00 untuk membebaskan ruang disk database SQLite secara berkala menggunakan perintah <code>VACUUM</code>.</li>
+      </ul>
+    </li>
+  </ul>
+
+  <h3>6.14 Desain Ulang Antarmuka: Modern Minimalist Fusion</h3>
+  <ul>
+    <li><strong>Berkas yang Dimodifikasi</strong>: <code>static/css/style.css</code>, <code>templates/base.html</code>, dll.</li>
+    <li><strong>Detail Teknis</strong>:
+      <ul>
+        <li>Melakukan perombakan visual antarmuka pengguna (UI) dari palette Neo-Brutalism kaku menjadi gaya Modern Minimalist Fusion yang premium.</li>
+        <li>Menggunakan palette warna abu-abu/perak (silver-gray pattern) dengan aksen warna Indigo premium (<code>#4f46e5</code> / <code>#6366f1</code>), warna latar gelap yang kontras (<code>#0b0f17</code>), border yang ramping, bayangan transparan halus, font Outfit, serta transisi hover mikro-animasi yang responsif dan elegan di seluruh dashboard web.</li>
+      </ul>
+    </li>
+  </ul>
+
+  <h3>6.15 Regression Test &amp; SQLite Index Tuning</h3>
+  <ul>
+    <li><strong>Berkas yang Dimodifikasi</strong>: <code>database.py</code>, <code>test_report_accuracy.py</code></li>
+    <li><strong>Detail Teknis</strong>:
+      <ul>
+        <li>Memperkenalkan test suite regresi otomatis baru <code>test_report_accuracy.py</code> di root repository untuk memvalidasi performa hitung time-weighted average, penanganan anomali collision, penangkapan no-data, dan isolasi filter bulan kalender.</li>
+        <li>Mengoptimasi kecepatan pemrosesan data historis SQLite dengan mendefinisikan covering index <code>idx_metrics_name_time</code> pada <code>snmp_metrics(metric_name, timestamp, device_id, metric_value)</code> dan index <code>idx_traffic_timestamp</code> pada <code>interface_traffic(sampled_at)</code>.</li>
+        <li>Melakukan tuning performa koneksi SQLite pada <code>conn()</code> dengan mengaktifkan optimasi kueri bertenaga besar melalui <code>PRAGMA synchronous=NORMAL</code>, <code>cache_size=-2000</code>, <code>temp_store=MEMORY</code>, dan <code>mmap_size=268435456</code> (256MB) untuk mengaktifkan memory-mapped I/O sehingga pemuatan chart 7 hari di bawah 2 detik.</li>
+      </ul>
+    </li>
+  </ul>
+
   <!-- Physical page break for MS Word / Google Docs -->
   <div style="page-break-before: always;"></div>
 
@@ -471,7 +526,7 @@
       </div>
       <div style="flex: 1; min-width: 150px;">
         <label style="display: block; font-size: 12px; font-weight: 600; color: #1c1c1e; margin-bottom: 5px;">Tanggal Selesai</label>
-        <input type="date" id="report-end" value="2026-07-02" style="width: 100%; padding: 8px; border: 1px solid #d1d1d6; border-radius: 6px; font-size: 13px; font-family: inherit;">
+        <input type="date" id="report-end" value="2026-07-15" style="width: 100%; padding: 8px; border: 1px solid #d1d1d6; border-radius: 6px; font-size: 13px; font-family: inherit;">
       </div>
     </div>
     
@@ -526,7 +581,16 @@
       "2026-06-29": "Menambahkan penyimpanan retensi telemetri lalu lintas data selama 7 hari di database SQLite.",
       "2026-06-30": "Meningkatkan performa floorplan canvas dengan requestDraw() berbasis event dan mengganti shadowBlur dengan akselerasi GPU.",
       "2026-07-01": "Migrasi AI False Warning Detector ke Groq API (Llama 3.3 70B), membuat fitur klik detail insiden dashboard, optimasi cache token, dan auto-restart service di update.sh.",
-      "2026-07-02": "Penerapan filter kalender bulanan, isolasi discard timestamp berbasis metric-name, optimalisasi perhitungan time-weighted average di laporan bulanan, dan integrasi pilihan interface WAN manual di UI."
+      "2026-07-02": "Penerapan filter kalender bulanan, isolasi discard timestamp berbasis metric-name, optimalisasi perhitungan time-weighted average di laporan bulanan, dan integrasi pilihan interface WAN manual di UI.",
+      "2026-07-03": "Menerapkan penanganan deduplikasi alert SNMP unreachable untuk meredam alarm berulang.",
+      "2026-07-06": "Memperbaiki kebocoran memori (memory leaks) pada daemon polling SNMP di background threads.",
+      "2026-07-07": "Mengintegrasikan limitasi uplink capacity dan toleransi anomali dinamis ke sistem deteksi anomali traffic.",
+      "2026-07-08": "Menerapkan pembersihan granular data traffic anomali SQLite untuk mencegah collateral damage pada data valid.",
+      "2026-07-09": "Penyempurnaan absolute anomaly cap 5 Gbps untuk optimasi load bandwidth tinggi di router 10G.",
+      "2026-07-10": "Mengekspos setelan retensi data dan multiplier anomali secara dinamis ke database settings dan UI Settings.",
+      "2026-07-13": "Memindahkan pembersihan anomali destruktif dari database startup ke tombol pembersihan manual di UI Settings.",
+      "2026-07-14": "Ekspansi besar mesin heuristik BlackBox Forensics (Thermal shutdown, RAM leak detection, DDoS, Fiber cut, reboot Mikrotik).",
+      "2026-07-15": "Desain ulang antarmuka Modern Minimalist Fusion (palette Indigo & Gray-silver). Menerapkan pemisahan retensi data telemetri (Report vs Chart), menambahkan otomatisasi weekly VACUUM database, membuat test suite test_report_accuracy.py, serta mengimplementasikan covering index database dan tuning PRAGMA SQLite (WAL, NORMAL, mmap)."
     };
 
     // Kegiatan generik cadangan untuk tanggal yang tidak terdaftar
