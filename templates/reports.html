@@ -546,8 +546,10 @@ function renderBackboneReportChart(points) {
     const parts = pt.date.split('-');
     return parts.length === 3 ? `${parts[2]}/${parts[1]}` : pt.date;
   });
-  const dataIn = points.map(pt => pt.rx_avg_mbps);
-  const dataOut = points.map(pt => pt.tx_avg_mbps);
+  const dataInAvg = points.map(pt => pt.rx_avg_mbps);
+  const dataInPeak = points.map(pt => pt.rx_peak_mbps || 0.0);
+  const dataOutAvg = points.map(pt => pt.tx_avg_mbps);
+  const dataOutPeak = points.map(pt => pt.tx_peak_mbps || 0.0);
   
   const isDark = document.body.classList.contains('dark-mode') || document.documentElement.getAttribute('data-theme') === 'dark';
   const tickColor = '#8e8e93';
@@ -561,22 +563,44 @@ function renderBackboneReportChart(points) {
         datasets: [
           {
             label: 'Download (Avg)',
-            data: dataIn,
+            data: dataInAvg,
             borderColor: '#28a745',
-            backgroundColor: 'rgba(40,167,69,0.05)',
+            backgroundColor: 'rgba(40,167,69,0.02)',
             borderWidth: 2,
-            pointRadius: 2,
-            fill: true,
+            pointRadius: 1,
+            fill: false,
+            tension: 0.3
+          },
+          {
+            label: 'Download (Peak)',
+            data: dataInPeak,
+            borderColor: '#93c54b',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            borderDash: [4, 4],
+            pointRadius: 1,
+            fill: false,
             tension: 0.3
           },
           {
             label: 'Upload (Avg)',
-            data: dataOut,
-            borderColor: '#00d4ff',
-            backgroundColor: 'rgba(0,212,255,0.05)',
+            data: dataOutAvg,
+            borderColor: '#007bff',
+            backgroundColor: 'rgba(0,123,255,0.02)',
             borderWidth: 2,
-            pointRadius: 2,
-            fill: true,
+            pointRadius: 1,
+            fill: false,
+            tension: 0.3
+          },
+          {
+            label: 'Upload (Peak)',
+            data: dataOutPeak,
+            borderColor: '#63c2de',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            borderDash: [4, 4],
+            pointRadius: 1,
+            fill: false,
             tension: 0.3
           }
         ]
@@ -585,7 +609,15 @@ function renderBackboneReportChart(points) {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { display: false }
+          legend: {
+            display: true,
+            position: 'bottom',
+            labels: {
+              boxWidth: 10,
+              font: { size: 9 },
+              color: tickColor
+            }
+          }
         },
         scales: {
           x: {
@@ -619,8 +651,10 @@ function renderIndividualRouterChart(canvasId, points) {
     const parts = pt.date.split('-');
     return parts.length === 3 ? `${parts[2]}/${parts[1]}` : pt.date;
   });
-  const dataIn = points.map(pt => pt.rx_avg_mbps);
-  const dataOut = points.map(pt => pt.tx_avg_mbps);
+  const dataInAvg = points.map(pt => pt.rx_avg_mbps);
+  const dataInPeak = points.map(pt => pt.rx_peak_mbps || 0.0);
+  const dataOutAvg = points.map(pt => pt.tx_avg_mbps);
+  const dataOutPeak = points.map(pt => pt.tx_peak_mbps || 0.0);
   
   const isDark = document.body.classList.contains('dark-mode') || document.documentElement.getAttribute('data-theme') === 'dark';
   const tickColor = '#8e8e93';
@@ -634,22 +668,44 @@ function renderIndividualRouterChart(canvasId, points) {
       datasets: [
         {
           label: 'Download (Avg)',
-          data: dataIn,
+          data: dataInAvg,
           borderColor: '#28a745',
-          backgroundColor: 'rgba(40,167,69,0.05)',
+          backgroundColor: 'rgba(40,167,69,0.02)',
           borderWidth: 2,
-          pointRadius: 2,
-          fill: true,
+          pointRadius: 1,
+          fill: false,
+          tension: 0.3
+        },
+        {
+          label: 'Download (Peak)',
+          data: dataInPeak,
+          borderColor: '#93c54b',
+          backgroundColor: 'transparent',
+          borderWidth: 1.5,
+          borderDash: [4, 4],
+          pointRadius: 1,
+          fill: false,
           tension: 0.3
         },
         {
           label: 'Upload (Avg)',
-          data: dataOut,
-          borderColor: '#00d4ff',
-          backgroundColor: 'rgba(0,212,255,0.05)',
+          data: dataOutAvg,
+          borderColor: '#007bff',
+          backgroundColor: 'rgba(0,123,255,0.02)',
           borderWidth: 2,
-          pointRadius: 2,
-          fill: true,
+          pointRadius: 1,
+          fill: false,
+          tension: 0.3
+        },
+        {
+          label: 'Upload (Peak)',
+          data: dataOutPeak,
+          borderColor: '#63c2de',
+          backgroundColor: 'transparent',
+          borderWidth: 1.5,
+          borderDash: [4, 4],
+          pointRadius: 1,
+          fill: false,
           tension: 0.3
         }
       ]
@@ -658,7 +714,15 @@ function renderIndividualRouterChart(canvasId, points) {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        legend: { display: false }
+        legend: {
+          display: true,
+          position: 'bottom',
+          labels: {
+            boxWidth: 10,
+            font: { size: 9 },
+            color: tickColor
+          }
+        }
       },
       scales: {
         x: {
