@@ -51,19 +51,25 @@ else
 fi
 
 echo -e "${YELLOW}Menghapus data record historis...${NC}"
-/opt/netmon/venv/bin/python << 'EOF'
+DB_PATH="$DB_PATH" /opt/netmon/venv/bin/python << 'EOF'
+import os
 import sqlite3
 try:
-    conn = sqlite3.connect('/opt/netmon/netmon.db')
+    db_path = os.environ.get('DB_PATH', '/opt/netmon/netmon.db')
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
-    # Kosongkan data telemetry & logs
-    c.execute('DELETE FROM snmp_metrics')
-    c.execute('DELETE FROM interface_traffic')
-    c.execute('DELETE FROM alerts')
-    c.execute('DELETE FROM access_logs')
-    c.execute('DELETE FROM monthly_reports')
+    # Kosongkan data telemetry, logs, alerts, & downtime analysis
+    tables = ['snmp_metrics', 'interface_traffic', 'alerts', 'access_logs', 'monthly_reports', 'downtime_analysis']
+    for table in tables:
+        c.execute(f'DELETE FROM {table}')
     
+    # Reset sequence counter autoincrement
+    try:
+        c.execute("DELETE FROM sqlite_sequence WHERE name IN ('" + "','".join(tables) + "')")
+    except sqlite3.OperationalError:
+        pass
+        
     conn.commit()  # Selesaikan transaksi delete terlebih dahulu
     
     # Jalankan VACUUM di luar transaksi aktif (Autocommit mode)

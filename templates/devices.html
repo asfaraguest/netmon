@@ -145,6 +145,16 @@
               <span>Enable SNMP polling</span>
             </div>
           </div>
+          <div class="col-md-3" id="dev-aggregate-traffic-container" style="display: none;">
+            <label class="nm-label">Aggregate Traffic</label>
+            <div class="nm-toggle-wrap">
+              <label class="nm-toggle">
+                <input type="checkbox" id="dev-include-aggregate" checked>
+                <span class="nm-slider"></span>
+              </label>
+              <span>Sertakan di grafik agregat</span>
+            </div>
+          </div>
           <div class="col-md-3">
             <label class="nm-label">Community String</label>
             <input type="text" class="nm-input" id="dev-community" value="public">
@@ -415,6 +425,13 @@ function renderTable(devices) {
   tbody.innerHTML = devices.map(d => {
     let metricsHtml = '';
     const isUnifi = d.unifi_id || String(d.vendor).toLowerCase().includes('ubiquiti') || String(d.vendor).toLowerCase().includes('unifi');
+    if (d.type === 'router') {
+      if (d.include_in_aggregate !== 0) {
+        metricsHtml += `<span class="badge-snmp on me-1" style="background:rgba(40,167,69,0.15); color:#28a745; font-size:10px; font-weight:600;" title="Disertakan dalam grafik traffic agregat">AGGR ON</span> `;
+      } else {
+        metricsHtml += `<span class="badge-snmp off me-1" style="background:rgba(220,53,69,0.15); color:#dc3545; font-size:10px; font-weight:600;" title="Dikecualikan dari grafik traffic agregat">AGGR OFF</span> `;
+      }
+    }
     if (d.snmp_enabled || isUnifi) {
       if (isUnifi) {
         metricsHtml += `<span class="badge-snmp on me-1" style="background:var(--accent-dim); color:var(--accent);">UniFi</span> `;
@@ -510,6 +527,7 @@ function openDeviceModal(device = null) {
   document.getElementById('dev-vendor').value   = device?.vendor || '';
   document.getElementById('dev-model').value    = device?.model || '';
   document.getElementById('dev-snmp-en').checked = !!device?.snmp_enabled;
+  document.getElementById('dev-include-aggregate').checked = device ? (device.include_in_aggregate !== 0) : true;
   document.getElementById('dev-community').value = device?.snmp_community || 'public';
   document.getElementById('dev-version').value  = device?.snmp_version || '2c';
   document.getElementById('dev-port').value     = device?.snmp_port || 161;
@@ -519,14 +537,17 @@ function openDeviceModal(device = null) {
   // Reset and populate the manual WAN interface dropdown
   const wanSelect = document.getElementById('dev-wan-iface');
   const wanContainer = document.getElementById('dev-wan-iface-container');
+  const aggregateContainer = document.getElementById('dev-aggregate-traffic-container');
   wanSelect.innerHTML = '<option value="">Auto Detect (Default)</option>';
   
   const typeSelect = document.getElementById('dev-type');
   const toggleWanDisplay = () => {
     if (typeSelect.value === 'router') {
       wanContainer.style.display = 'block';
+      aggregateContainer.style.display = 'block';
     } else {
       wanContainer.style.display = 'none';
+      aggregateContainer.style.display = 'none';
     }
   };
   
@@ -579,7 +600,8 @@ function saveDevice() {
     snmp_port:      parseInt(document.getElementById('dev-port').value) || 161,
     uplink_speed_mbps: parseInt(document.getElementById('dev-uplink-speed').value) || 1000,
     description:    document.getElementById('dev-desc').value.trim(),
-    wan_iface_idx:  document.getElementById('dev-wan-iface').value
+    wan_iface_idx:  document.getElementById('dev-wan-iface').value,
+    include_in_aggregate: document.getElementById('dev-include-aggregate').checked ? 1 : 0
   };
   const url    = id ? `/api/devices/${id}` : '/api/devices';
   const method = 'POST';

@@ -210,7 +210,8 @@ class Database:
                 'created_at': "TEXT DEFAULT (datetime('now'))",
                 'updated_at': "TEXT DEFAULT (datetime('now'))",
                 'source': "TEXT DEFAULT 'manual'",
-                'wan_iface_idx': "TEXT DEFAULT ''"
+                'wan_iface_idx': "TEXT DEFAULT ''",
+                'include_in_aggregate': "INTEGER DEFAULT 1"
             }
             for col, defn in columns_definitions.items():
                 try:
@@ -362,8 +363,8 @@ class Database:
                 INSERT INTO devices
                     (name, ip, mac, type, vendor, model, zone_id,
                      snmp_enabled, snmp_community, snmp_version, snmp_port,
-                     icon, pos_x, pos_y, description, status, source, uplink_speed_mbps, alerts_enabled, wan_iface_idx)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     icon, pos_x, pos_y, description, status, source, uplink_speed_mbps, alerts_enabled, wan_iface_idx, include_in_aggregate)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', (
                 data.get('name') or data.get('ip', 'Unknown'),
                 data.get('ip', ''),
@@ -385,6 +386,7 @@ class Database:
                 data.get('uplink_speed_mbps', 1000),
                 1 if data.get('alerts_enabled', True) else 0,
                 data.get('wan_iface_idx', ''),
+                1 if data.get('include_in_aggregate', True) else 0,
             ))
             return cur.lastrowid
 
@@ -394,7 +396,7 @@ class Database:
                    'icon', 'pos_x', 'pos_y', 'description', 'status',
                    'last_seen', 'last_polled', 'uptime', 'sys_name',
                    'cpu_usage', 'memory_usage', 'temperature', 'wan_in', 'wan_out',
-                   'uplink_speed_mbps', 'alerts_enabled', 'wan_iface_idx']
+                   'uplink_speed_mbps', 'alerts_enabled', 'wan_iface_idx', 'include_in_aggregate']
         fields, values = [], []
         for f in allowed:
             if f in data:
@@ -750,6 +752,7 @@ class Database:
                     FROM snmp_metrics m
                     JOIN devices d ON m.device_id = d.id
                     WHERE d.type = 'router'
+                      AND d.include_in_aggregate = 1
                       AND m.metric_name IN ('wan_in', 'wan_out')
                       AND m.timestamp >= datetime('now', ? || ' hours')
                     GROUP BY m.device_id, bucket
@@ -826,7 +829,7 @@ class Database:
         api_key = settings.get('groq_api_key', '')
 
         with self.conn() as c:
-            rows = c.execute("SELECT id, name, ip, uplink_speed_mbps FROM devices WHERE type = 'router'").fetchall()
+            rows = c.execute("SELECT id, name, ip, uplink_speed_mbps, include_in_aggregate FROM devices WHERE type = 'router'").fetchall()
             routers = [dict(r) for r in rows]
             
         report = {
@@ -1107,6 +1110,7 @@ class Database:
                 'id': rid,
                 'name': router['name'],
                 'ip': router['ip'],
+                'include_in_aggregate': router.get('include_in_aggregate', 1),
                 'total_rx_gb': round(total_rx_bytes / 1e9, 2),
                 'total_tx_gb': round(total_tx_bytes / 1e9, 2),
                 'avg_rx_mbps': round(avg_rx_bps / 1e6, 2),
@@ -1127,17 +1131,18 @@ class Database:
                 router_stats['no_data'] = True
             report['routers'].append(router_stats)
             
-            total_backbone_rx_bps_sum += avg_rx_bps
-            total_backbone_tx_bps_sum += avg_tx_bps
-            backbone_peaks_rx.append(max_rx_bps)
-            backbone_peaks_tx.append(max_tx_bps)
+            if router.get('include_in_aggregate', 1) == 1:
+                total_backbone_rx_bps_sum += avg_rx_bps
+                total_backbone_tx_bps_sum += avg_tx_bps
+                backbone_peaks_rx.append(max_rx_bps)
+                backbone_peaks_tx.append(max_tx_bps)
             
         report['backbone']['avg_in_mbps'] = round(total_backbone_rx_bps_sum / 1e6, 2)
         report['backbone']['avg_out_mbps'] = round(total_backbone_tx_bps_sum / 1e6, 2)
         report['backbone']['peak_in_mbps'] = round(max(backbone_peaks_rx) / 1e6, 2) if backbone_peaks_rx else 0.0
         report['backbone']['peak_out_mbps'] = round(max(backbone_peaks_tx) / 1e6, 2) if backbone_peaks_tx else 0.0
-        report['backbone']['total_in_gb'] = round(sum(r['total_rx_gb'] for r in report['routers']), 2)
-        report['backbone']['total_out_gb'] = round(sum(r['total_tx_gb'] for r in report['routers']), 2)
+        report['backbone']['total_in_gb'] = round(sum(r['total_rx_gb'] for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)
+        report['backbone']['total_out_gb'] = round(sum(r['total_tx_gb'] for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)
         
         # 3. Save report to DB
         with self.conn() as c:
