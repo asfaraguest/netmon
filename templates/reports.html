@@ -104,14 +104,14 @@
 
         <!-- Section 1.5: Charts -->
         <div class="row g-3 mb-4">
-          <!-- Backbone Chart -->
-          <div class="col-md-6">
-            <div class="p-3 rounded h-100" style="background: var(--bg-hover); border: 1px solid var(--border-lt); display: flex; flex-direction: column;">
+          <!-- Backbone Chart (Full Width) -->
+          <div class="col-12">
+            <div class="p-3 rounded" style="background: var(--bg-hover); border: 1px solid var(--border-lt); display: flex; flex-direction: column;">
               <div class="d-flex justify-content-between align-items-center mb-2">
                 <span class="text-sm fw-600 text-primary"><i class="bi bi-activity text-accent me-1"></i>Grafik Traffic Backbone (Agregat)</span>
                 <span class="text-xs text-muted">Harian (Avg)</span>
               </div>
-              <div style="height: 180px; position: relative; flex: 1;" id="backbone-chart-wrapper">
+              <div style="height: 220px; position: relative;" id="backbone-chart-wrapper">
                 <canvas id="backboneReportChart"></canvas>
               </div>
               <div id="backbone-chart-empty" class="text-center py-5 text-muted text-xs" style="display: none;">
@@ -119,21 +119,11 @@
               </div>
             </div>
           </div>
-          <!-- Per-Router Chart -->
-          <div class="col-md-6">
-            <div class="p-3 rounded h-100" style="background: var(--bg-hover); border: 1px solid var(--border-lt); display: flex; flex-direction: column;">
-              <div class="d-flex justify-content-between align-items-center mb-2">
-                <span class="text-sm fw-600 text-primary"><i class="bi bi-router text-accent me-1"></i>Grafik Traffic per Router</span>
-                <select class="nm-select py-0 px-2 text-xs" id="report-chart-router-select" style="width: auto; height: 24px;" onchange="updateRouterReportChart()"></select>
-              </div>
-              <div style="height: 180px; position: relative; flex: 1;" id="router-chart-wrapper">
-                <canvas id="routerReportChart"></canvas>
-              </div>
-              <div id="router-chart-empty" class="text-center py-5 text-muted text-xs" style="display: none;">
-                Data grafik tidak tersedia untuk laporan ini
-              </div>
-            </div>
-          </div>
+        </div>
+
+        <!-- Per-Router Charts Grid (2 Columns) -->
+        <div class="row g-3 mb-4" id="routers-charts-grid">
+          <!-- Generated dynamically via JS -->
         </div>
 
         <!-- Section 2: Uplink Detail per Router -->
@@ -222,7 +212,7 @@
 let currentMonthReports = [];
 let activeReport = null;
 let backboneReportChart = null;
-let routerReportChart = null;
+let routerReportChartsList = [];
 
 document.addEventListener('DOMContentLoaded', () => {
   // Set default month in input to current month
@@ -388,15 +378,53 @@ function selectReport(id) {
     }
   }
 
-  // Populate the select dropdown for router trends
-  const selectEl = document.getElementById('report-chart-router-select');
-  if (selectEl) {
-    selectEl.innerHTML = data.routers.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
-  }
-  
-  // Render backbone and selected router charts
+  // Render backbone aggregate chart
   renderBackboneReportChart(data.backbone.daily_points);
-  updateRouterReportChart();
+  
+  // Render all router charts dynamically in a 2-column grid
+  const chartsGrid = document.getElementById('routers-charts-grid');
+  if (chartsGrid) {
+    chartsGrid.innerHTML = ''; // Clear previous charts
+    
+    // Destroy previous router charts if they exist to free memory
+    if (routerReportChartsList) {
+      routerReportChartsList.forEach(chart => chart.destroy());
+    }
+    routerReportChartsList = [];
+    
+    data.routers.forEach(router => {
+      const col = document.createElement('div');
+      col.className = 'col-md-6';
+      
+      const wrapperId = `router-chart-wrapper-${router.id}`;
+      const canvasId = `routerReportChart-${router.id}`;
+      const emptyId = `router-chart-empty-${router.id}`;
+      const hasData = router.daily_points && router.daily_points.length > 0;
+      
+      col.innerHTML = `
+        <div class="p-3 rounded h-100" style="background: var(--bg-hover); border: 1px solid var(--border-lt); display: flex; flex-direction: column;">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="text-sm fw-600 text-primary"><i class="bi bi-router text-accent me-1"></i>Grafik Traffic: ${esc(router.name)}</span>
+            <span class="text-xs text-muted">Harian (Avg) - Mbps</span>
+          </div>
+          <div style="height: 160px; position: relative; flex: 1; ${hasData ? '' : 'display:none;'}" id="${wrapperId}">
+            <canvas id="${canvasId}"></canvas>
+          </div>
+          <div id="${emptyId}" class="text-center py-4 text-muted text-xs" style="${hasData ? 'display:none;' : ''}">
+            Data grafik tidak tersedia untuk router ini
+          </div>
+        </div>
+      `;
+      chartsGrid.appendChild(col);
+      
+      if (hasData) {
+        // Draw chart for this router
+        setTimeout(() => {
+          renderIndividualRouterChart(canvasId, router.daily_points);
+        }, 50);
+      }
+    });
+  }
 }
 
 function generateReport() {
@@ -581,100 +609,73 @@ function renderBackboneReportChart(points) {
   }
 }
 
-function updateRouterReportChart() {
-  if (!activeReport) return;
-  const selectEl = document.getElementById('report-chart-router-select');
-  if (!selectEl || !selectEl.value) return;
+function renderIndividualRouterChart(canvasId, points) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
   
-  const routerId = parseInt(selectEl.value);
-  const router = activeReport.data.routers.find(r => r.id === routerId);
-  
-  const canvas = document.getElementById('routerReportChart');
-  const emptyEl = document.getElementById('router-chart-empty');
-  const wrapper = document.getElementById('router-chart-wrapper');
-  
-  if (!router || !router.daily_points || router.daily_points.length === 0) {
-    if (canvas) canvas.style.display = 'none';
-    if (wrapper) wrapper.style.display = 'none';
-    if (emptyEl) emptyEl.style.display = 'block';
-    return;
-  }
-  
-  if (canvas) canvas.style.display = 'block';
-  if (wrapper) wrapper.style.display = 'block';
-  if (emptyEl) emptyEl.style.display = 'none';
-  
-  const labels = router.daily_points.map(pt => {
+  const labels = points.map(pt => {
     const parts = pt.date.split('-');
     return parts.length === 3 ? `${parts[2]}/${parts[1]}` : pt.date;
   });
-  const dataIn = router.daily_points.map(pt => pt.rx_avg_mbps);
-  const dataOut = router.daily_points.map(pt => pt.tx_avg_mbps);
+  const dataIn = points.map(pt => pt.rx_avg_mbps);
+  const dataOut = points.map(pt => pt.tx_avg_mbps);
   
   const isDark = document.body.classList.contains('dark-mode') || document.documentElement.getAttribute('data-theme') === 'dark';
   const tickColor = '#8e8e93';
   const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
   
   const ctx = canvas.getContext('2d');
-  if (routerReportChart) {
-    routerReportChart.data.labels = labels;
-    routerReportChart.data.datasets[0].data = dataIn;
-    routerReportChart.data.datasets[1].data = dataOut;
-    routerReportChart.options.scales.x.ticks.color = tickColor;
-    routerReportChart.options.scales.y.ticks.color = tickColor;
-    routerReportChart.options.scales.y.grid.color = gridColor;
-    routerReportChart.update();
-  } else {
-    routerReportChart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: labels,
-        datasets: [
-          {
-            label: 'Download (Avg)',
-            data: dataIn,
-            borderColor: '#28a745',
-            backgroundColor: 'rgba(40,167,69,0.05)',
-            borderWidth: 2,
-            pointRadius: 2,
-            fill: true,
-            tension: 0.3
-          },
-          {
-            label: 'Upload (Avg)',
-            data: dataOut,
-            borderColor: '#00d4ff',
-            backgroundColor: 'rgba(0,212,255,0.05)',
-            borderWidth: 2,
-            pointRadius: 2,
-            fill: true,
-            tension: 0.3
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false }
+  const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'Download (Avg)',
+          data: dataIn,
+          borderColor: '#28a745',
+          backgroundColor: 'rgba(40,167,69,0.05)',
+          borderWidth: 2,
+          pointRadius: 2,
+          fill: true,
+          tension: 0.3
         },
-        scales: {
-          x: {
-            grid: { display: false },
-            ticks: { color: tickColor, font: { size: 9 } }
-          },
-          y: {
-            grid: { color: gridColor },
-            ticks: {
-              color: tickColor,
-              font: { size: 9 },
-              callback: function(value) { return value + ' Mbps'; }
-            }
+        {
+          label: 'Upload (Avg)',
+          data: dataOut,
+          borderColor: '#00d4ff',
+          backgroundColor: 'rgba(0,212,255,0.05)',
+          borderWidth: 2,
+          pointRadius: 2,
+          fill: true,
+          tension: 0.3
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: tickColor, font: { size: 9 } }
+        },
+        y: {
+          grid: { color: gridColor },
+          ticks: {
+            color: tickColor,
+            font: { size: 9 },
+            callback: function(value) { return value + ' Mbps'; }
           }
         }
       }
-    });
-  }
+    }
+  });
+  
+  routerReportChartsList.push(chart);
 }
 
 function esc(str) {
