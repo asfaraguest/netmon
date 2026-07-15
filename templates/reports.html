@@ -536,6 +536,12 @@ function renderBackboneReportChart(points) {
   if (wrapper) wrapper.style.display = 'block';
   if (emptyEl) emptyEl.style.display = 'none';
   
+  // Destroy existing chart on this canvas to prevent "Canvas is already in use" errors
+  const existingChart = Chart.getChart(canvas);
+  if (existingChart) {
+    existingChart.destroy();
+  }
+  
   const labels = points.map(pt => {
     const parts = pt.date.split('-');
     return parts.length === 3 ? `${parts[2]}/${parts[1]}` : pt.date;
@@ -548,16 +554,7 @@ function renderBackboneReportChart(points) {
   const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
   
   const ctx = canvas.getContext('2d');
-  if (backboneReportChart) {
-    backboneReportChart.data.labels = labels;
-    backboneReportChart.data.datasets[0].data = dataIn;
-    backboneReportChart.data.datasets[1].data = dataOut;
-    backboneReportChart.options.scales.x.ticks.color = tickColor;
-    backboneReportChart.options.scales.y.ticks.color = tickColor;
-    backboneReportChart.options.scales.y.grid.color = gridColor;
-    backboneReportChart.update();
-  } else {
-    backboneReportChart = new Chart(ctx, {
+  backboneReportChart = new Chart(ctx, {
       type: 'line',
       data: {
         labels: labels,
@@ -612,6 +609,12 @@ function renderBackboneReportChart(points) {
 function renderIndividualRouterChart(canvasId, points) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
+  
+  // Destroy existing chart on this canvas to prevent "Canvas is already in use" errors
+  const existingChart = Chart.getChart(canvas);
+  if (existingChart) {
+    existingChart.destroy();
+  }
   
   const labels = points.map(pt => {
     const parts = pt.date.split('-');
