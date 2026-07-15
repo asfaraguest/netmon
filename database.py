@@ -869,6 +869,32 @@ class Database:
                 ORDER BY timestamp ASC
             ''', (month_start, month_end)).fetchall()
             
+            daily_rows = c.execute('''
+                SELECT
+                    device_id,
+                    strftime('%Y-%m-%d', timestamp) AS day,
+                    AVG(CASE WHEN metric_name = 'wan_in' THEN CAST(metric_value AS REAL) ELSE 0 END) AS rx_avg,
+                    AVG(CASE WHEN metric_name = 'wan_out' THEN CAST(metric_value AS REAL) ELSE 0 END) AS tx_avg,
+                    MAX(CASE WHEN metric_name = 'wan_in' THEN CAST(metric_value AS REAL) ELSE 0 END) AS rx_peak,
+                    MAX(CASE WHEN metric_name = 'wan_out' THEN CAST(metric_value AS REAL) ELSE 0 END) AS tx_peak
+                FROM snmp_metrics
+                WHERE metric_name IN ('wan_in', 'wan_out')
+                  AND timestamp >= ? AND timestamp < ?
+                GROUP BY device_id, day
+                ORDER BY day ASC
+            ''', (month_start, month_end)).fetchall()
+
+        daily_by_device = defaultdict(list)
+        for dr in daily_rows:
+            did = dr['device_id']
+            daily_by_device[did].append({
+                'date': dr['day'],
+                'rx_avg_mbps': round((dr['rx_avg'] or 0.0) / 1e6, 2),
+                'tx_avg_mbps': round((dr['tx_avg'] or 0.0) / 1e6, 2),
+                'rx_peak_mbps': round((dr['rx_peak'] or 0.0) / 1e6, 2),
+                'tx_peak_mbps': round((dr['tx_peak'] or 0.0) / 1e6, 2)
+            })
+            
         # Build lookup: device_id -> uplink_speed in bps
         device_uplink_bps = {}
         for router in routers:
@@ -1028,12 +1054,11 @@ class Database:
                 health_vals[(hr['device_id'], hr['metric_name'])].append(hr['val'])
                 
         device_alert_counts = {ar['device_id']: ar['cnt'] for ar in alert_rows}
-            
         total_backbone_rx_bps_sum = 0.0
         total_backbone_tx_bps_sum = 0.0
         backbone_peaks_rx = []
         backbone_peaks_tx = []
-        
+        backbone_daily = defaultdict(lambda: {'rx_avg': 0.0, 'tx_avg': 0.0, 'rx_peak': 0.0, 'tx_peak': 0.0})
         for router in routers:
             rid = router['id']
             rdata = device_data[rid]
@@ -1125,7 +1150,8 @@ class Database:
                 'peak_mem': round(peak_mem, 1),
                 'avg_temp': round(avg_temp, 1),
                 'peak_temp': round(peak_temp, 1),
-                'total_alerts': alert_count
+                'total_alerts': alert_count,
+                'daily_points': daily_by_device[rid]
             }
             if no_data:
                 router_stats['no_data'] = True
@@ -1136,7 +1162,23 @@ class Database:
                 total_backbone_tx_bps_sum += avg_tx_bps
                 backbone_peaks_rx.append(max_rx_bps)
                 backbone_peaks_tx.append(max_tx_bps)
+                for pt in daily_by_device[rid]:
+                    day = pt['date']
+                    backbone_daily[day]['rx_avg'] += pt['rx_avg_mbps']
+                    backbone_daily[day]['tx_avg'] += pt['tx_avg_mbps']
+                    backbone_daily[day]['rx_peak'] += pt['rx_peak_mbps']
+                    backbone_daily[day]['tx_peak'] += pt['tx_peak_mbps']
             
+        report['backbone']['daily_points'] = [
+            {
+                'date': day,
+                'rx_avg_mbps': round(stats['rx_avg'], 2),
+                'tx_avg_mbps': round(stats['tx_avg'], 2),
+                'rx_peak_mbps': round(stats['rx_peak'], 2),
+                'tx_peak_mbps': round(stats['tx_peak'], 2)
+            }
+            for day, stats in sorted(backbone_daily.items())
+        ]
         report['backbone']['avg_in_mbps'] = round(total_backbone_rx_bps_sum / 1e6, 2)
         report['backbone']['avg_out_mbps'] = round(total_backbone_tx_bps_sum / 1e6, 2)
         report['backbone']['peak_in_mbps'] = round(max(backbone_peaks_rx) / 1e6, 2) if backbone_peaks_rx else 0.0
