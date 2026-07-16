@@ -821,7 +821,7 @@ class Database:
 
     def generate_and_save_monthly_report(self, month_str):
         import json
-        from datetime import datetime
+        from datetime import datetime, timedelta
         from collections import defaultdict
         
         # 1. Fetch all routers
@@ -1131,6 +1131,47 @@ class Database:
                 max_tx_bps = 0.0
                 no_data = True
                 
+            chart_data = {"1month": [], "7days": [], "24hours": []}
+            if not no_data:
+                max_ts = max((rx_points[-1][0] if rx_points else datetime.min), (tx_points[-1][0] if tx_points else datetime.min))
+                
+                def bucket_data(points, start_ts, bucket_func):
+                    buckets = defaultdict(float)
+                    for t, v in points:
+                        if t >= start_ts:
+                            b_ts = bucket_func(t)
+                            if v > buckets[b_ts]:
+                                buckets[b_ts] = v
+                    return buckets
+
+                ts_24h = max_ts - timedelta(hours=24)
+                ts_7d = max_ts - timedelta(days=7)
+                
+                b24_rx = bucket_data(rx_points, ts_24h, lambda t: t.replace(minute=(t.minute // 15) * 15, second=0, microsecond=0))
+                b24_tx = bucket_data(tx_points, ts_24h, lambda t: t.replace(minute=(t.minute // 15) * 15, second=0, microsecond=0))
+                
+                b7d_rx = bucket_data(rx_points, ts_7d, lambda t: t.replace(hour=(t.hour // 2) * 2, minute=0, second=0, microsecond=0))
+                b7d_tx = bucket_data(tx_points, ts_7d, lambda t: t.replace(hour=(t.hour // 2) * 2, minute=0, second=0, microsecond=0))
+                
+                b1m_rx = bucket_data(rx_points, datetime.min, lambda t: t.replace(hour=(t.hour // 6) * 6, minute=0, second=0, microsecond=0))
+                b1m_tx = bucket_data(tx_points, datetime.min, lambda t: t.replace(hour=(t.hour // 6) * 6, minute=0, second=0, microsecond=0))
+
+                def merge_buckets(brx, btx):
+                    keys = sorted(set(brx.keys()) | set(btx.keys()))
+                    return [
+                        {
+                            "ts": k.strftime('%Y-%m-%d %H:%M:%S'),
+                            "rx": round(brx.get(k, 0.0) / 1e6, 2),
+                            "tx": round(btx.get(k, 0.0) / 1e6, 2)
+                        }
+                        for k in keys
+                    ]
+
+                chart_data["24hours"] = merge_buckets(b24_rx, b24_tx)
+                chart_data["7days"] = merge_buckets(b7d_rx, b7d_tx)
+                chart_data["1month"] = merge_buckets(b1m_rx, b1m_tx)
+                
+
             router_stats = {
                 'id': rid,
                 'name': router['name'],
@@ -1151,7 +1192,8 @@ class Database:
                 'avg_temp': round(avg_temp, 1),
                 'peak_temp': round(peak_temp, 1),
                 'total_alerts': alert_count,
-                'daily_points': daily_by_device[rid]
+                'daily_points': daily_by_device[rid],
+                'chart_data': chart_data
             }
             if no_data:
                 router_stats['no_data'] = True

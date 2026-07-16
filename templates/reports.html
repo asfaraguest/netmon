@@ -121,6 +121,21 @@
           </div>
         </div>
 
+        <!-- Router Charts Toggles -->
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h5 class="fw-700 text-primary m-0"><i class="bi bi-graph-up-arrow me-2 text-accent"></i>Grafik Traffic (Real Record) per Router</h5>
+          <div class="btn-group btn-group-sm" role="group" id="chart-time-toggles">
+            <input type="radio" class="btn-check" name="chartTime" id="time1month" value="1month" autocomplete="off" checked>
+            <label class="btn btn-outline-primary" for="time1month">1 Bulan</label>
+            
+            <input type="radio" class="btn-check" name="chartTime" id="time7days" value="7days" autocomplete="off">
+            <label class="btn btn-outline-primary" for="time7days">7 Hari</label>
+            
+            <input type="radio" class="btn-check" name="chartTime" id="time24hours" value="24hours" autocomplete="off">
+            <label class="btn btn-outline-primary" for="time24hours">24 Jam</label>
+          </div>
+        </div>
+
         <!-- Per-Router Charts Grid (2 Columns) -->
         <div class="row g-3 mb-4" id="routers-charts-grid">
           <!-- Generated dynamically via JS -->
@@ -214,12 +229,22 @@ let activeReport = null;
 let backboneReportChart = null;
 let routerReportChartsList = [];
 let reportRenderGeneration = 0;
+let currentChartTimeRange = '1month';
 
 document.addEventListener('DOMContentLoaded', () => {
   // Set default month in input to current month
   const now = new Date();
   const monthVal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   document.getElementById('report-month-select').value = monthVal;
+  
+  document.querySelectorAll('input[name="chartTime"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      currentChartTimeRange = e.target.value;
+      if (activeReport) {
+        renderRouterCharts(activeReport.data, reportRenderGeneration);
+      }
+    });
+  });
   
   loadReportsList();
 });
@@ -385,50 +410,63 @@ function selectReport(id) {
   renderBackboneReportChart(data.backbone.daily_points);
   
   // Render all router charts dynamically in a 2-column grid
+  renderRouterCharts(data, myGeneration);
+}
+
+function renderRouterCharts(data, myGeneration) {
   const chartsGrid = document.getElementById('routers-charts-grid');
-  if (chartsGrid) {
-    chartsGrid.innerHTML = ''; // Clear previous charts
-    
-    // Destroy previous router charts if they exist to free memory
-    if (routerReportChartsList) {
-      routerReportChartsList.forEach(chart => chart.destroy());
-    }
-    routerReportChartsList = [];
-    
-    data.routers.forEach(router => {
-      const col = document.createElement('div');
-      col.className = 'col-md-6';
-      
-      const wrapperId = `router-chart-wrapper-${router.id}`;
-      const canvasId = `routerReportChart-${router.id}`;
-      const emptyId = `router-chart-empty-${router.id}`;
-      const hasData = router.daily_points && router.daily_points.length > 0;
-      
-      col.innerHTML = `
-        <div class="p-3 rounded h-100" style="background: var(--bg-hover); border: 1px solid var(--border-lt); display: flex; flex-direction: column;">
-          <div class="d-flex justify-content-between align-items-center mb-2">
-            <span class="text-sm fw-600 text-primary"><i class="bi bi-router text-accent me-1"></i>Grafik Traffic: ${esc(router.name)}</span>
-            <span class="text-xs text-muted">Harian (Avg) - Mbps</span>
-          </div>
-          <div style="height: 160px; position: relative; flex: 1; ${hasData ? '' : 'display:none;'}" id="${wrapperId}">
-            <canvas id="${canvasId}"></canvas>
-          </div>
-          <div id="${emptyId}" class="text-center py-4 text-muted text-xs" style="${hasData ? 'display:none;' : ''}">
-            Data grafik tidak tersedia untuk router ini
-          </div>
-        </div>
-      `;
-      chartsGrid.appendChild(col);
-      
-      if (hasData) {
-        // Draw chart for this router
-        setTimeout(() => {
-          if (myGeneration !== reportRenderGeneration) return; // laporan lain sudah di-generate, skip render basi ini
-          renderIndividualRouterChart(canvasId, router.daily_points);
-        }, 50);
-      }
-    });
+  if (!chartsGrid) return;
+
+  chartsGrid.innerHTML = ''; // Clear previous charts
+  
+  if (routerReportChartsList) {
+    routerReportChartsList.forEach(chart => chart.destroy());
   }
+  routerReportChartsList = [];
+  
+  data.routers.forEach(router => {
+    const col = document.createElement('div');
+    col.className = 'col-md-6';
+    
+    const wrapperId = `router-chart-wrapper-${router.id}`;
+    const canvasId = `routerReportChart-${router.id}`;
+    const emptyId = `router-chart-empty-${router.id}`;
+    
+    let pointsToRender = router.daily_points;
+    let titleSuffix = "Harian (Avg)";
+    let isRawData = false;
+    
+    if (router.chart_data && router.chart_data[currentChartTimeRange]) {
+      pointsToRender = router.chart_data[currentChartTimeRange];
+      titleSuffix = "Real Record";
+      isRawData = true;
+    }
+    
+    const hasData = pointsToRender && pointsToRender.length > 0;
+    
+    col.innerHTML = `
+      <div class="p-3 rounded h-100" style="background: var(--bg-hover); border: 1px solid var(--border-lt); display: flex; flex-direction: column;">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="text-sm fw-600 text-primary"><i class="bi bi-router text-accent me-1"></i>Grafik Traffic: ${esc(router.name)}</span>
+          <span class="text-xs text-muted">${titleSuffix} - Mbps</span>
+        </div>
+        <div style="height: 160px; position: relative; flex: 1; ${hasData ? '' : 'display:none;'}" id="${wrapperId}">
+          <canvas id="${canvasId}"></canvas>
+        </div>
+        <div id="${emptyId}" class="text-center py-4 text-muted text-xs" style="${hasData ? 'display:none;' : ''}">
+          Data grafik tidak tersedia untuk router ini
+        </div>
+      </div>
+    `;
+    chartsGrid.appendChild(col);
+    
+    if (hasData) {
+      setTimeout(() => {
+        if (myGeneration !== reportRenderGeneration) return;
+        renderIndividualRouterChart(canvasId, pointsToRender, isRawData);
+      }, 50);
+    }
+  });
 }
 
 function generateReport() {
@@ -641,7 +679,7 @@ function renderBackboneReportChart(points) {
     });
 }
 
-function renderIndividualRouterChart(canvasId, points) {
+function renderIndividualRouterChart(canvasId, points, isRawData = false) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   
@@ -652,13 +690,84 @@ function renderIndividualRouterChart(canvasId, points) {
   }
   
   const labels = points.map(pt => {
-    const parts = pt.date.split('-');
+    if (isRawData && pt.ts) {
+      const d = new Date(pt.ts.replace(' ', 'T'));
+      return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth()+1).toString().padStart(2, '0')} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+    }
+    const parts = (pt.date || '').split('-');
     return parts.length === 3 ? `${parts[2]}/${parts[1]}` : pt.date;
   });
-  const dataInAvg = points.map(pt => pt.rx_avg_mbps);
-  const dataInPeak = points.map(pt => pt.rx_peak_mbps || 0.0);
-  const dataOutAvg = points.map(pt => pt.tx_avg_mbps);
-  const dataOutPeak = points.map(pt => pt.tx_peak_mbps || 0.0);
+  
+  let datasets = [];
+  if (isRawData) {
+    datasets = [
+      {
+        label: 'Download (Peak)',
+        data: points.map(pt => pt.rx),
+        borderColor: '#28a745',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: false,
+        tension: 0.1
+      },
+      {
+        label: 'Upload (Peak)',
+        data: points.map(pt => pt.tx),
+        borderColor: '#007bff',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: false,
+        tension: 0.1
+      }
+    ];
+  } else {
+    datasets = [
+      {
+        label: 'Download (Avg)',
+        data: points.map(pt => pt.rx_avg_mbps),
+        borderColor: '#28a745',
+        backgroundColor: 'rgba(40,167,69,0.02)',
+        borderWidth: 2,
+        pointRadius: 1,
+        fill: false,
+        tension: 0.3
+      },
+      {
+        label: 'Download (Peak)',
+        data: points.map(pt => pt.rx_peak_mbps || 0.0),
+        borderColor: '#93c54b',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [4, 4],
+        pointRadius: 1,
+        fill: false,
+        tension: 0.3
+      },
+      {
+        label: 'Upload (Avg)',
+        data: points.map(pt => pt.tx_avg_mbps),
+        borderColor: '#007bff',
+        backgroundColor: 'rgba(0,123,255,0.02)',
+        borderWidth: 2,
+        pointRadius: 1,
+        fill: false,
+        tension: 0.3
+      },
+      {
+        label: 'Upload (Peak)',
+        data: points.map(pt => pt.tx_peak_mbps || 0.0),
+        borderColor: '#63c2de',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [4, 4],
+        pointRadius: 1,
+        fill: false,
+        tension: 0.3
+      }
+    ];
+  }
   
   const isDark = document.body.classList.contains('dark-mode') || document.documentElement.getAttribute('data-theme') === 'dark';
   const tickColor = '#8e8e93';
@@ -669,50 +778,7 @@ function renderIndividualRouterChart(canvasId, points) {
     type: 'line',
     data: {
       labels: labels,
-      datasets: [
-        {
-          label: 'Download (Avg)',
-          data: dataInAvg,
-          borderColor: '#28a745',
-          backgroundColor: 'rgba(40,167,69,0.02)',
-          borderWidth: 2,
-          pointRadius: 1,
-          fill: false,
-          tension: 0.3
-        },
-        {
-          label: 'Download (Peak)',
-          data: dataInPeak,
-          borderColor: '#93c54b',
-          backgroundColor: 'transparent',
-          borderWidth: 1.5,
-          borderDash: [4, 4],
-          pointRadius: 1,
-          fill: false,
-          tension: 0.3
-        },
-        {
-          label: 'Upload (Avg)',
-          data: dataOutAvg,
-          borderColor: '#007bff',
-          backgroundColor: 'rgba(0,123,255,0.02)',
-          borderWidth: 2,
-          pointRadius: 1,
-          fill: false,
-          tension: 0.3
-        },
-        {
-          label: 'Upload (Peak)',
-          data: dataOutPeak,
-          borderColor: '#63c2de',
-          backgroundColor: 'transparent',
-          borderWidth: 1.5,
-          borderDash: [4, 4],
-          pointRadius: 1,
-          fill: false,
-          tension: 0.3
-        }
-      ]
+      datasets: datasets
     },
     options: {
       responsive: true,
