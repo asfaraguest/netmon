@@ -35,7 +35,13 @@ cd "$SCRIPT_DIR"
 
 if command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null; then
   info "Pulling latest code changes from Git..."
-  git pull
+  # When running via sudo, git pull as root can't access the normal user's
+  # gh/git credentials. Run git pull as the original (SUDO_USER) instead.
+  if [[ -n "${SUDO_USER:-}" && "$EUID" -eq 0 ]]; then
+    sudo -u "$SUDO_USER" git pull
+  else
+    git pull
+  fi
   success "Git source repository updated"
 else
   info "Not inside a git repository, using current directory files directly"
