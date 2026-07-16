@@ -213,6 +213,7 @@ let currentMonthReports = [];
 let activeReport = null;
 let backboneReportChart = null;
 let routerReportChartsList = [];
+let reportRenderGeneration = 0;
 
 document.addEventListener('DOMContentLoaded', () => {
   // Set default month in input to current month
@@ -277,6 +278,8 @@ function renderReportsList() {
 }
 
 function selectReport(id) {
+  reportRenderGeneration++;
+  const myGeneration = reportRenderGeneration;
   const report = currentMonthReports.find(r => r.id === id);
   if (!report) return;
 
@@ -420,6 +423,7 @@ function selectReport(id) {
       if (hasData) {
         // Draw chart for this router
         setTimeout(() => {
+          if (myGeneration !== reportRenderGeneration) return; // laporan lain sudah di-generate, skip render basi ini
           renderIndividualRouterChart(canvasId, router.daily_points);
         }, 50);
       }
