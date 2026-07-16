@@ -109,7 +109,7 @@
             <div class="p-3 rounded" style="background: var(--bg-hover); border: 1px solid var(--border-lt); display: flex; flex-direction: column;">
               <div class="d-flex justify-content-between align-items-center mb-2">
                 <span class="text-sm fw-600 text-primary"><i class="bi bi-activity text-accent me-1"></i>Grafik Traffic Backbone (Agregat)</span>
-                <span class="text-xs text-muted">Harian (Avg)</span>
+                <span class="text-xs text-muted" id="backbone-chart-title-suffix">Harian (Avg)</span>
               </div>
               <div style="height: 220px; position: relative;" id="backbone-chart-wrapper">
                 <canvas id="backboneReportChart"></canvas>
@@ -241,6 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
     radio.addEventListener('change', (e) => {
       currentChartTimeRange = e.target.value;
       if (activeReport) {
+        renderBackboneChart(activeReport.data);
         renderRouterCharts(activeReport.data, reportRenderGeneration);
       }
     });
@@ -407,7 +408,7 @@ function selectReport(id) {
   }
 
   // Render backbone aggregate chart
-  renderBackboneReportChart(data.backbone.daily_points);
+  renderBackboneChart(data);
   
   // Render all router charts dynamically in a 2-column grid
   renderRouterCharts(data, myGeneration);
@@ -562,7 +563,24 @@ function downloadPDF() {
   });
 }
 
-function renderBackboneReportChart(points) {
+function renderBackboneChart(data) {
+  let pointsToRender = data.backbone.daily_points;
+  let titleSuffix = "Harian (Avg)";
+  let isRawData = false;
+  
+  if (data.backbone.chart_data && data.backbone.chart_data[currentChartTimeRange]) {
+    pointsToRender = data.backbone.chart_data[currentChartTimeRange];
+    titleSuffix = "Real Record";
+    isRawData = true;
+  }
+  
+  const titleSpan = document.getElementById('backbone-chart-title-suffix');
+  if (titleSpan) titleSpan.textContent = `${titleSuffix} - Mbps`;
+  
+  renderBackboneReportChart(pointsToRender, isRawData);
+}
+
+function renderBackboneReportChart(points, isRawData = false) {
   const canvas = document.getElementById('backboneReportChart');
   const emptyEl = document.getElementById('backbone-chart-empty');
   const wrapper = document.getElementById('backbone-chart-wrapper');
@@ -585,13 +603,84 @@ function renderBackboneReportChart(points) {
   }
   
   const labels = points.map(pt => {
-    const parts = pt.date.split('-');
+    if (isRawData && pt.ts) {
+      const d = new Date(pt.ts.replace(' ', 'T'));
+      return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth()+1).toString().padStart(2, '0')} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+    }
+    const parts = (pt.date || '').split('-');
     return parts.length === 3 ? `${parts[2]}/${parts[1]}` : pt.date;
   });
-  const dataInAvg = points.map(pt => pt.rx_avg_mbps);
-  const dataInPeak = points.map(pt => pt.rx_peak_mbps || 0.0);
-  const dataOutAvg = points.map(pt => pt.tx_avg_mbps);
-  const dataOutPeak = points.map(pt => pt.tx_peak_mbps || 0.0);
+  
+  let datasets = [];
+  if (isRawData) {
+    datasets = [
+      {
+        label: 'Download (Peak)',
+        data: points.map(pt => pt.rx),
+        borderColor: '#28a745',
+        backgroundColor: 'rgba(40,167,69,0.1)',
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.1
+      },
+      {
+        label: 'Upload (Peak)',
+        data: points.map(pt => pt.tx),
+        borderColor: '#007bff',
+        backgroundColor: 'rgba(0,123,255,0.1)',
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.1
+      }
+    ];
+  } else {
+    datasets = [
+      {
+        label: 'Download (Avg)',
+        data: points.map(pt => pt.rx_avg_mbps),
+        borderColor: '#28a745',
+        backgroundColor: 'rgba(40,167,69,0.02)',
+        borderWidth: 2,
+        pointRadius: 1,
+        fill: false,
+        tension: 0.3
+      },
+      {
+        label: 'Download (Peak)',
+        data: points.map(pt => pt.rx_peak_mbps || 0.0),
+        borderColor: '#93c54b',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [4, 4],
+        pointRadius: 1,
+        fill: false,
+        tension: 0.3
+      },
+      {
+        label: 'Upload (Avg)',
+        data: points.map(pt => pt.tx_avg_mbps),
+        borderColor: '#007bff',
+        backgroundColor: 'rgba(0,123,255,0.02)',
+        borderWidth: 2,
+        pointRadius: 1,
+        fill: false,
+        tension: 0.3
+      },
+      {
+        label: 'Upload (Peak)',
+        data: points.map(pt => pt.tx_peak_mbps || 0.0),
+        borderColor: '#63c2de',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        borderDash: [4, 4],
+        pointRadius: 1,
+        fill: false,
+        tension: 0.3
+      }
+    ];
+  }
   
   const isDark = document.body.classList.contains('dark-mode') || document.documentElement.getAttribute('data-theme') === 'dark';
   const tickColor = '#8e8e93';
@@ -602,50 +691,7 @@ function renderBackboneReportChart(points) {
       type: 'line',
       data: {
         labels: labels,
-        datasets: [
-          {
-            label: 'Download (Avg)',
-            data: dataInAvg,
-            borderColor: '#28a745',
-            backgroundColor: 'rgba(40,167,69,0.02)',
-            borderWidth: 2,
-            pointRadius: 1,
-            fill: false,
-            tension: 0.3
-          },
-          {
-            label: 'Download (Peak)',
-            data: dataInPeak,
-            borderColor: '#93c54b',
-            backgroundColor: 'transparent',
-            borderWidth: 1.5,
-            borderDash: [4, 4],
-            pointRadius: 1,
-            fill: false,
-            tension: 0.3
-          },
-          {
-            label: 'Upload (Avg)',
-            data: dataOutAvg,
-            borderColor: '#007bff',
-            backgroundColor: 'rgba(0,123,255,0.02)',
-            borderWidth: 2,
-            pointRadius: 1,
-            fill: false,
-            tension: 0.3
-          },
-          {
-            label: 'Upload (Peak)',
-            data: dataOutPeak,
-            borderColor: '#63c2de',
-            backgroundColor: 'transparent',
-            borderWidth: 1.5,
-            borderDash: [4, 4],
-            pointRadius: 1,
-            fill: false,
-            tension: 0.3
-          }
-        ]
+        datasets: datasets
       },
       options: {
         responsive: true,

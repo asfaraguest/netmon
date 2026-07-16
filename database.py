@@ -1059,6 +1059,11 @@ class Database:
         backbone_peaks_rx = []
         backbone_peaks_tx = []
         backbone_daily = defaultdict(lambda: {'rx_avg': 0.0, 'tx_avg': 0.0, 'rx_peak': 0.0, 'tx_peak': 0.0})
+        backbone_raw_buckets = {
+            "1month": defaultdict(lambda: {'rx': 0.0, 'tx': 0.0}),
+            "7days": defaultdict(lambda: {'rx': 0.0, 'tx': 0.0}),
+            "24hours": defaultdict(lambda: {'rx': 0.0, 'tx': 0.0})
+        }
         for router in routers:
             rid = router['id']
             rdata = device_data[rid]
@@ -1210,6 +1215,13 @@ class Database:
                     backbone_daily[day]['tx_avg'] += pt['tx_avg_mbps']
                     backbone_daily[day]['rx_peak'] += pt['rx_peak_mbps']
                     backbone_daily[day]['tx_peak'] += pt['tx_peak_mbps']
+                    
+                # Aggregate chart_data for backbone
+                for time_range in ["1month", "7days", "24hours"]:
+                    for pt in chart_data.get(time_range, []):
+                        ts = pt['ts']
+                        backbone_raw_buckets[time_range][ts]['rx'] += pt['rx']
+                        backbone_raw_buckets[time_range][ts]['tx'] += pt['tx']
             
         report['backbone']['daily_points'] = [
             {
@@ -1221,6 +1233,17 @@ class Database:
             }
             for day, stats in sorted(backbone_daily.items())
         ]
+        report['backbone']['chart_data'] = {
+            time_range: [
+                {
+                    "ts": ts,
+                    "rx": round(vals['rx'], 2),
+                    "tx": round(vals['tx'], 2)
+                }
+                for ts, vals in sorted(buckets.items())
+            ]
+            for time_range, buckets in backbone_raw_buckets.items()
+        }
         report['backbone']['avg_in_mbps'] = round(total_backbone_rx_bps_sum / 1e6, 2)
         report['backbone']['avg_out_mbps'] = round(total_backbone_tx_bps_sum / 1e6, 2)
         report['backbone']['peak_in_mbps'] = round(max(backbone_peaks_rx) / 1e6, 2) if backbone_peaks_rx else 0.0
