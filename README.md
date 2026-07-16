@@ -8,6 +8,7 @@ Real-time network monitoring with SNMP auto-discovery, interactive floor plan al
 
 | Feature | Description |
 |---------|-------------|
+| **Real Record Bucketing** | Accurate point-to-point raw traffic sampling for Backbone and Router charts without generic averaging |
 | **SNMP Auto-Polling** | Automatically polls all SNMP-enabled devices at a configurable interval |
 | **Network Discovery** | Scans a CIDR range and discovers SNMP-responsive devices |
 | **Interactive Floor Plan** | Drag devices onto a custom background image with real-time status glow |

@@ -703,5 +703,23 @@
     <p>NetMon Network Monitoring System &bull; Dokumentasi Internal &bull; Juni - Juli 2026</p>
   </div>
 
+
+
+    <div style='margin-top: 30px; border-top: 2px solid #007aff; padding-top: 20px;'>
+    <h3>Fase Penyempurnaan: Real Record Bucketing & Codebase Verification</h3>
+    <p>
+      <strong>Objektif:</strong> Meningkatkan akurasi penyajian laporan grafik Backbone dan Router individual menggunakan metode Raw Record Bucketing untuk filter rentang waktu 24 Jam, 7 Hari, dan 1 Bulan.<br>
+      <strong>Implementasi & Verifikasi:</strong>
+      <ul>
+        <li>Membuat bucketing raw metric menggunakan <code>defaultdict</code> berdasarkan rentang waktu di dalam siklus loop router.</li>
+        <li>Sinkronisasi integrasi toggle UI (<code>reports.html</code>) antara grafik Backbone dan grafik Router.</li>
+        <li>Penggunaan parameter <code>fill: true</code> dan <code>pointRadius: 0</code> pada Chart.js untuk optimalisasi render <em>raw data</em> kepadatan tinggi tanpa <em>lag</em> visual.</li>
+        <li>Kondisional per-router (<code>include_in_aggregate = 1</code>) diterapkan langsung pada agregasi <code>rx</code> dan <code>tx</code> di sisi backend <code>database.py</code>.</li>
+        <li>Uji komprehensif dilakukan menggunakan <code>verify_backbone.py</code> via simulasi input DB, menghasilkan konfirmasi stabilitas yang lolos tanpa kesalahan (<strong>LULUS</strong>).</li>
+        <li>Penyempurnaan arsitektur database (mode WAL, timeout) dan sanitasi template UI (<code>esc()</code>) meminimalisir peluang error lintas-request dan ancaman XSS.</li>
+      </ul>
+    </p>
+    </div>
+    
 </body>
 </html>
