@@ -364,7 +364,7 @@ class Database:
                     (name, ip, mac, type, vendor, model, zone_id,
                      snmp_enabled, snmp_community, snmp_version, snmp_port,
                      icon, pos_x, pos_y, description, status, source, uplink_speed_mbps, alerts_enabled, wan_iface_idx, include_in_aggregate)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', (
                 data.get('name') or data.get('ip', 'Unknown'),
                 data.get('ip', ''),
