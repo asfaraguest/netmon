@@ -868,32 +868,7 @@ class Database:
                   AND timestamp >= ? AND timestamp < ?
                 ORDER BY timestamp ASC
             ''', (month_start, month_end)).fetchall()
-            
-            daily_rows = c.execute('''
-                SELECT
-                    device_id,
-                    strftime('%Y-%m-%d', timestamp) AS day,
-                    AVG(CASE WHEN metric_name = 'wan_in' THEN CAST(metric_value AS REAL) ELSE 0 END) AS rx_avg,
-                    AVG(CASE WHEN metric_name = 'wan_out' THEN CAST(metric_value AS REAL) ELSE 0 END) AS tx_avg,
-                    MAX(CASE WHEN metric_name = 'wan_in' THEN CAST(metric_value AS REAL) ELSE 0 END) AS rx_peak,
-                    MAX(CASE WHEN metric_name = 'wan_out' THEN CAST(metric_value AS REAL) ELSE 0 END) AS tx_peak
-                FROM snmp_metrics
-                WHERE metric_name IN ('wan_in', 'wan_out')
-                  AND timestamp >= ? AND timestamp < ?
-                GROUP BY device_id, day
-                ORDER BY day ASC
-            ''', (month_start, month_end)).fetchall()
 
-        daily_by_device = defaultdict(list)
-        for dr in daily_rows:
-            did = dr['device_id']
-            daily_by_device[did].append({
-                'date': dr['day'],
-                'rx_avg_mbps': round((dr['rx_avg'] or 0.0) / 1e6, 2),
-                'tx_avg_mbps': round((dr['tx_avg'] or 0.0) / 1e6, 2),
-                'rx_peak_mbps': round((dr['rx_peak'] or 0.0) / 1e6, 2),
-                'tx_peak_mbps': round((dr['tx_peak'] or 0.0) / 1e6, 2)
-            })
             
         # Build lookup: device_id -> uplink_speed in bps
         device_uplink_bps = {}
@@ -1031,6 +1006,31 @@ class Database:
             except Exception:
                 continue
             device_data[did][mname].append((ts, val))
+
+        # Breakdown harian dibangun dari device_data yang SUDAH lolos filter discard_timestamps
+        # di atas -- BUKAN query SQL terpisah -- supaya angka chart harian selalu konsisten
+        # dengan angka resmi bulanan (anomali yang sudah difilter bulanan tidak boleh
+        # muncul lagi di breakdown harian).
+        daily_raw = defaultdict(lambda: defaultdict(lambda: {'rx': [], 'tx': []}))
+        for did, metrics in device_data.items():
+            for ts, val in metrics.get('wan_in', []):
+                daily_raw[did][ts.strftime('%Y-%m-%d')]['rx'].append(val)
+            for ts, val in metrics.get('wan_out', []):
+                daily_raw[did][ts.strftime('%Y-%m-%d')]['tx'].append(val)
+
+        daily_by_device = defaultdict(list)
+        for did, days in daily_raw.items():
+            for day in sorted(days.keys()):
+                rx_list = days[day]['rx']
+                tx_list = days[day]['tx']
+                daily_by_device[did].append({
+                    'date': day,
+                    'rx_avg_mbps': round((sum(rx_list) / len(rx_list) if rx_list else 0.0) / 1e6, 2),
+                    'tx_avg_mbps': round((sum(tx_list) / len(tx_list) if tx_list else 0.0) / 1e6, 2),
+                    'rx_peak_mbps': round((max(rx_list) if rx_list else 0.0) / 1e6, 2),
+                    'tx_peak_mbps': round((max(tx_list) if tx_list else 0.0) / 1e6, 2),
+                })
+
             
         # Query health metrics (cpu, memory, temperature) and alerts for the routers
         with self.conn() as c:
