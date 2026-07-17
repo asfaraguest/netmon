@@ -1031,6 +1031,21 @@ class Database:
                     'tx_peak_mbps': round((max(tx_list) if tx_list else 0.0) / 1e6, 2),
                 })
 
+        # Titik acuan waktu BERSAMA (bukan per-router) buat window "24 jam terakhir" /
+        # "7 hari terakhir" di chart_data -- kalau tiap router pakai max_ts miliknya sendiri,
+        # router yang datanya berhenti lebih awal (misal SNMP bermasalah) akan punya window
+        # yang tidak selaras dengan router lain, dan saat dijumlah ke backbone_raw_buckets
+        # (dikunci berdasarkan string timestamp), sebagian besar titik cuma keisi salah satu
+        # router -- bikin grafik "total backbone" naik-turun palsu yang sebenarnya cuma
+        # mencerminkan window mana yang kebetulan tumpang tindih, bukan perubahan traffic asli.
+        overall_max_ts = datetime.min
+        for _did, _metrics in device_data.items():
+            _rx = _metrics.get('wan_in', [])
+            _tx = _metrics.get('wan_out', [])
+            if _rx:
+                overall_max_ts = max(overall_max_ts, _rx[-1][0])
+            if _tx:
+                overall_max_ts = max(overall_max_ts, _tx[-1][0])
             
         # Query health metrics (cpu, memory, temperature) and alerts for the routers
         with self.conn() as c:
@@ -1138,7 +1153,7 @@ class Database:
                 
             chart_data = {"1month": [], "7days": [], "24hours": []}
             if not no_data:
-                max_ts = max((rx_points[-1][0] if rx_points else datetime.min), (tx_points[-1][0] if tx_points else datetime.min))
+                max_ts = overall_max_ts
                 
                 def bucket_data(points, start_ts, bucket_func):
                     buckets = defaultdict(float)
