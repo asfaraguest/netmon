@@ -3,6 +3,7 @@
    Premium Apple / macOS Typography with distinct primary accents.
    ============================================================ */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700&display=swap');
 
 :root {
   --bg-base:       #111113; /* Deep dark space */
@@ -3226,6 +3227,744 @@ body.theme-forest .custom-confirm-dialog,
 body.theme-forest .custom-loading-dialog {
   border: 1px solid #d4cbb8 !important;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* ============================================================
+   8. ADMINLTE — AdminLTE 4 × Politeknik Negeri Jember (Polije)
+   Color Identity: Bondi Blue #028DAA, SIP (Smart, Innovative, Professional)
+   Font: Source Sans 3 (AdminLTE 4 default), fallback Inter
+   ============================================================ */
+
+/* ---------- Dark Mode (default) ---------- */
+body.theme-adminlte {
+  --bg-base:       #1a1d21;
+  --bg-card:       #212529;
+  --bg-card-solid: #212529;
+  --bg-card2:      #2b3035;
+  --bg-panel:      #212529;
+  --bg-hover:      rgba(2, 141, 170, 0.08);
+  --border:        #343a40;
+  --border-lt:     #2b3035;
+
+  /* Polije Bondi Blue Accent */
+  --accent:        #028DAA;
+  --accent-dim:    rgba(2, 141, 170, 0.15);
+  --green:         #00bc8c;
+  --green-dim:     rgba(0, 188, 140, 0.15);
+  --yellow:        #f39c12;
+  --yellow-dim:    rgba(243, 156, 18, 0.15);
+  --red:           #e74c3c;
+  --red-dim:       rgba(231, 76, 60, 0.15);
+  --purple:        #6f42c1;
+  --orange:        #fd7e14;
+
+  --text-primary:   #e9ecef;
+  --text-secondary: #adb5bd;
+  --text-muted:     #6c757d;
+
+  --radius:     6px;
+  --radius-sm:  4px;
+  --radius-lg:  10px;
+
+  font-family: 'Source Sans 3', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+}
+
+/* Typography override for AdminLTE */
+body.theme-adminlte *,
+body.theme-adminlte h1,
+body.theme-adminlte h2,
+body.theme-adminlte h3,
+body.theme-adminlte h4,
+body.theme-adminlte h5,
+body.theme-adminlte h6,
+body.theme-adminlte .sidebar-logo,
+body.theme-adminlte .fw-700,
+body.theme-adminlte .fw-800,
+body.theme-adminlte .fw-900 {
+  font-family: 'Source Sans 3', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  letter-spacing: 0 !important;
+}
+
+/* ---- Sidebar (AdminLTE 4 dark sidebar style) ---- */
+body.theme-adminlte .sidebar {
+  background: linear-gradient(180deg, #1a1d21 0%, #121416 100%) !important;
+  border-right: 1px solid #2b3035 !important;
+}
+body.theme-adminlte .sidebar-logo {
+  border-bottom: 1px solid #2b3035 !important;
+  padding: 14px 16px !important;
+}
+body.theme-adminlte .sidebar-logo .bi {
+  color: #028DAA !important;
+  font-size: 22px !important;
+}
+body.theme-adminlte .logo-text {
+  color: #e9ecef !important;
+  font-weight: 700 !important;
+  font-size: 16px !important;
+}
+body.theme-adminlte .sidebar .live-badge {
+  background: rgba(0, 188, 140, 0.15) !important;
+  color: #00bc8c !important;
+  border-radius: 4px !important;
+  font-size: 9px !important;
+}
+body.theme-adminlte .sidebar .pulse {
+  background: #00bc8c !important;
+}
+
+/* Nav items — AdminLTE 4 pill style */
+body.theme-adminlte .sidebar .nav-item {
+  color: #adb5bd !important;
+  border-radius: 4px !important;
+  margin: 1px 8px !important;
+  padding: 9px 12px !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  transition: all 0.15s ease !important;
+  border-left: 3px solid transparent !important;
+}
+body.theme-adminlte .sidebar .nav-item span {
+  color: #adb5bd !important;
+}
+body.theme-adminlte .sidebar .nav-item i {
+  color: #6c757d !important;
+  font-size: 15px !important;
+  width: 22px !important;
+  text-align: center !important;
+}
+body.theme-adminlte .sidebar .nav-item:hover {
+  background: rgba(2, 141, 170, 0.08) !important;
+  color: #e9ecef !important;
+  border-left-color: rgba(2, 141, 170, 0.4) !important;
+}
+body.theme-adminlte .sidebar .nav-item:hover span,
+body.theme-adminlte .sidebar .nav-item:hover i {
+  color: #e9ecef !important;
+}
+body.theme-adminlte .nav-item.active {
+  background: rgba(2, 141, 170, 0.12) !important;
+  border-left: 3px solid #028DAA !important;
+  color: #ffffff !important;
+}
+body.theme-adminlte .nav-item.active span {
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+body.theme-adminlte .nav-item.active i {
+  color: #028DAA !important;
+}
+
+/* Sidebar clock */
+body.theme-adminlte .sidebar-clock {
+  background: rgba(2, 141, 170, 0.06) !important;
+  border: 1px solid #2b3035 !important;
+  border-radius: 6px !important;
+  margin: 10px 10px 14px 10px !important;
+}
+body.theme-adminlte .clock-time {
+  color: #e9ecef !important;
+  font-weight: 700 !important;
+  font-family: 'Source Sans 3', monospace !important;
+}
+body.theme-adminlte .clock-date {
+  color: #6c757d !important;
+  font-weight: 500 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 10px !important;
+}
+
+/* Sidebar status & footer */
+body.theme-adminlte .sidebar-status {
+  border-top: 1px solid #2b3035 !important;
+}
+body.theme-adminlte .sidebar .slabel {
+  color: #6c757d !important;
+}
+body.theme-adminlte .sidebar .sval {
+  color: #e9ecef !important;
+}
+body.theme-adminlte .sidebar .sidebar-conn {
+  color: #adb5bd !important;
+}
+body.theme-adminlte .sidebar #theme-toggle-btn {
+  border: 1px solid #343a40 !important;
+  color: #adb5bd !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  transition: all 0.15s ease !important;
+}
+body.theme-adminlte .sidebar #theme-toggle-btn:hover {
+  background: rgba(2, 141, 170, 0.1) !important;
+  border-color: #028DAA !important;
+  color: #028DAA !important;
+}
+
+/* ---- Cards & Panels (AdminLTE 4 card style) ---- */
+body.theme-adminlte .nm-panel {
+  background: #212529 !important;
+  border: 1px solid #343a40 !important;
+  border-radius: 6px !important;
+  box-shadow: 0 0 1px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+  overflow: hidden;
+}
+body.theme-adminlte .nm-panel .panel-header {
+  background: rgba(2, 141, 170, 0.06) !important;
+  border-bottom: 1px solid #343a40 !important;
+  font-weight: 600 !important;
+  font-size: 14px !important;
+  padding: 12px 16px !important;
+}
+body.theme-adminlte .nm-card {
+  background: #2b3035 !important;
+  border: 1px solid #343a40 !important;
+  border-radius: 6px !important;
+}
+
+/* ---- Buttons (AdminLTE 4 flat style) ---- */
+body.theme-adminlte .btn-nm {
+  background: #343a40 !important;
+  color: #e9ecef !important;
+  border: 1px solid #495057 !important;
+  border-radius: 4px !important;
+  font-weight: 500 !important;
+  font-size: 13px !important;
+  transition: all 0.15s ease !important;
+}
+body.theme-adminlte .btn-nm:hover {
+  background: #495057 !important;
+  color: #ffffff !important;
+  border-color: #6c757d !important;
+}
+body.theme-adminlte .btn-success {
+  background: #00bc8c !important;
+  border: 1px solid #00bc8c !important;
+  color: #ffffff !important;
+  border-radius: 4px !important;
+}
+body.theme-adminlte .btn-success:hover {
+  background: #00a379 !important;
+  border-color: #00a379 !important;
+}
+body.theme-adminlte .btn-danger {
+  background: #e74c3c !important;
+  border: 1px solid #e74c3c !important;
+  color: #ffffff !important;
+  border-radius: 4px !important;
+}
+body.theme-adminlte .btn-danger:hover {
+  background: #d63031 !important;
+  border-color: #d63031 !important;
+}
+body.theme-adminlte .btn-primary {
+  background: #028DAA !important;
+  border: 1px solid #028DAA !important;
+  color: #ffffff !important;
+  border-radius: 4px !important;
+}
+body.theme-adminlte .btn-primary:hover {
+  background: #027b95 !important;
+  border-color: #027b95 !important;
+}
+body.theme-adminlte .btn-confirm-cancel {
+  background: #343a40 !important;
+  color: #e9ecef !important;
+  border: 1px solid #495057 !important;
+  border-radius: 4px !important;
+}
+body.theme-adminlte .btn-confirm-cancel:hover {
+  background: #495057 !important;
+}
+
+/* ---- Inputs & Selects (AdminLTE 4 form control) ---- */
+body.theme-adminlte .nm-input,
+body.theme-adminlte .nm-select {
+  background: #1a1d21 !important;
+  border: 1px solid #343a40 !important;
+  border-radius: 4px !important;
+  color: #e9ecef !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+body.theme-adminlte .nm-input:focus,
+body.theme-adminlte .nm-select:focus {
+  border-color: #028DAA !important;
+  box-shadow: 0 0 0 3px rgba(2, 141, 170, 0.2) !important;
+}
+
+/* ---- Tables (AdminLTE 4 striped) ---- */
+body.theme-adminlte .nm-table th {
+  background: rgba(2, 141, 170, 0.08) !important;
+  color: #adb5bd !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.04em !important;
+  padding: 10px 12px !important;
+  border-bottom: 2px solid #343a40 !important;
+}
+body.theme-adminlte .nm-table td {
+  border-bottom: 1px solid #2b3035 !important;
+  padding: 10px 12px !important;
+  font-size: 13px !important;
+  vertical-align: middle !important;
+}
+body.theme-adminlte .nm-table tbody tr:hover {
+  background: rgba(2, 141, 170, 0.04) !important;
+}
+
+/* ---- Progress bars ---- */
+body.theme-adminlte .nm-progress {
+  background: #1a1d21 !important;
+  border-radius: 3px !important;
+  height: 6px !important;
+}
+body.theme-adminlte .nm-progress-bar {
+  background: linear-gradient(90deg, #028DAA, #03b5d9) !important;
+  border-radius: 3px !important;
+}
+
+/* ---- Modals (AdminLTE 4 style) ---- */
+body.theme-adminlte .modal-content,
+body.theme-adminlte .nm-modal {
+  background: #212529 !important;
+  border: 1px solid #343a40 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4) !important;
+}
+body.theme-adminlte .modal-header {
+  border-bottom: 1px solid #343a40 !important;
+  padding: 12px 16px !important;
+}
+body.theme-adminlte .modal-footer {
+  border-top: 1px solid #343a40 !important;
+  padding: 12px 16px !important;
+}
+
+/* ---- Confirm & Loading Dialogs ---- */
+body.theme-adminlte .custom-confirm-dialog,
+body.theme-adminlte .custom-loading-dialog {
+  background: #212529 !important;
+  border: 1px solid #343a40 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4) !important;
+}
+body.theme-adminlte .custom-confirm-icon {
+  color: #f39c12 !important;
+}
+
+/* ---- Toast notifications ---- */
+body.theme-adminlte .nm-toast {
+  background: #2b3035 !important;
+  border: 1px solid #343a40 !important;
+  border-radius: 6px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3) !important;
+  border-left: 4px solid #028DAA !important;
+}
+
+/* ---- KPI Cards ---- */
+body.theme-adminlte .kpi-card {
+  background: #212529 !important;
+  border: 1px solid #343a40 !important;
+  border-radius: 6px !important;
+  box-shadow: 0 0 1px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+}
+body.theme-adminlte .kpi-card:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+}
+body.theme-adminlte .kpi-card .kpi-icon {
+  background: rgba(2, 141, 170, 0.12) !important;
+  color: #028DAA !important;
+  border-radius: 6px !important;
+}
+
+/* ---- Zone Cards ---- */
+body.theme-adminlte .zone-card {
+  border: 1px solid #343a40 !important;
+  border-radius: 6px !important;
+  background: #212529 !important;
+}
+body.theme-adminlte .zone-card:hover {
+  border-color: #028DAA !important;
+  box-shadow: 0 4px 12px rgba(2, 141, 170, 0.1) !important;
+}
+
+/* ---- Incident list items ---- */
+body.theme-adminlte .incident-list-item {
+  border: 1px solid #343a40 !important;
+  border-radius: 4px !important;
+  background: #2b3035 !important;
+}
+body.theme-adminlte .incident-list-item:hover {
+  border-color: #028DAA !important;
+  background: rgba(2, 141, 170, 0.04) !important;
+}
+
+/* ---- Mobile Topbar ---- */
+body.theme-adminlte .mobile-topbar {
+  background: #1a1d21 !important;
+  border-bottom: 1px solid #343a40 !important;
+}
+
+/* ---- Alert Banner ---- */
+body.theme-adminlte .alert-banner {
+  background: rgba(231, 76, 60, 0.1) !important;
+  border-bottom: 1px solid rgba(231, 76, 60, 0.2) !important;
+}
+
+/* ---- Page Headers ---- */
+body.theme-adminlte .page-header {
+  background: transparent !important;
+}
+
+/* ---- Scrollbar (AdminLTE dark style) ---- */
+body.theme-adminlte ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+body.theme-adminlte ::-webkit-scrollbar-track {
+  background: #1a1d21;
+}
+body.theme-adminlte ::-webkit-scrollbar-thumb {
+  background: #343a40;
+  border-radius: 3px;
+}
+body.theme-adminlte ::-webkit-scrollbar-thumb:hover {
+  background: #495057;
+}
+
+/* ---- Polije accent stripe on sidebar top ---- */
+body.theme-adminlte .sidebar::before {
+  content: '';
+  display: block;
+  height: 3px;
+  background: linear-gradient(90deg, #028DAA 0%, #00bc8c 50%, #f39c12 75%, #e74c3c 100%);
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+}
+
+/* ==================================================
+   AdminLTE Polije — LIGHT MODE OVERRIDES
+   ================================================== */
+body.theme-adminlte.light-theme {
+  --bg-base:       #f4f6f9;
+  --bg-card:       #ffffff;
+  --bg-card-solid: #ffffff;
+  --bg-card2:      #f8f9fa;
+  --bg-panel:      #ffffff;
+  --bg-hover:      rgba(2, 141, 170, 0.04);
+  --border:        #dee2e6;
+  --border-lt:     #e9ecef;
+
+  --accent:        #028DAA;
+  --accent-dim:    rgba(2, 141, 170, 0.1);
+  --green:         #198754;
+  --green-dim:     rgba(25, 135, 84, 0.1);
+  --yellow:        #e67e22;
+  --yellow-dim:    rgba(230, 126, 34, 0.12);
+  --red:           #dc3545;
+  --red-dim:       rgba(220, 53, 69, 0.1);
+  --purple:        #6f42c1;
+  --orange:        #fd7e14;
+
+  --text-primary:   #212529;
+  --text-secondary: #495057;
+  --text-muted:     #6c757d;
+
+  color: #212529 !important;
+}
+
+/* Light: text color overrides */
+body.theme-adminlte.light-theme .text-muted,
+body.theme-adminlte.light-theme .text-secondary,
+body.theme-adminlte.light-theme .about-lbl,
+body.theme-adminlte.light-theme .kpi-lbl,
+body.theme-adminlte.light-theme .kpi-sub,
+body.theme-adminlte.light-theme .page-sub,
+body.theme-adminlte.light-theme .nm-label,
+body.theme-adminlte.light-theme .about-val {
+  color: #495057 !important;
+}
+body.theme-adminlte.light-theme .logo-text,
+body.theme-adminlte.light-theme h1,
+body.theme-adminlte.light-theme h2,
+body.theme-adminlte.light-theme h3,
+body.theme-adminlte.light-theme h4,
+body.theme-adminlte.light-theme th,
+body.theme-adminlte.light-theme td,
+body.theme-adminlte.light-theme .nav-item span {
+  color: #212529 !important;
+}
+
+/* Light: close button */
+body.theme-adminlte.light-theme .btn-close-white {
+  filter: none !important;
+}
+
+/* Light: Sidebar — AdminLTE 4 light sidebar */
+body.theme-adminlte.light-theme .sidebar {
+  background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%) !important;
+  border-right: 1px solid #dee2e6 !important;
+}
+body.theme-adminlte.light-theme .sidebar::before {
+  background: linear-gradient(90deg, #028DAA 0%, #198754 50%, #e67e22 75%, #dc3545 100%);
+}
+body.theme-adminlte.light-theme .sidebar-logo {
+  border-bottom: 1px solid #e9ecef !important;
+}
+body.theme-adminlte.light-theme .sidebar-logo .bi {
+  color: #028DAA !important;
+}
+body.theme-adminlte.light-theme .sidebar .logo-text {
+  color: #212529 !important;
+}
+body.theme-adminlte.light-theme .sidebar .live-badge {
+  background: rgba(25, 135, 84, 0.1) !important;
+  color: #198754 !important;
+}
+body.theme-adminlte.light-theme .sidebar .pulse {
+  background: #198754 !important;
+}
+
+/* Light: Nav items */
+body.theme-adminlte.light-theme .sidebar .nav-item {
+  color: #495057 !important;
+  border-left: 3px solid transparent !important;
+}
+body.theme-adminlte.light-theme .sidebar .nav-item span {
+  color: #495057 !important;
+}
+body.theme-adminlte.light-theme .sidebar .nav-item i {
+  color: #6c757d !important;
+}
+body.theme-adminlte.light-theme .sidebar .nav-item:hover {
+  background: rgba(2, 141, 170, 0.06) !important;
+  color: #212529 !important;
+  border-left-color: rgba(2, 141, 170, 0.3) !important;
+}
+body.theme-adminlte.light-theme .sidebar .nav-item:hover span,
+body.theme-adminlte.light-theme .sidebar .nav-item:hover i {
+  color: #212529 !important;
+}
+body.theme-adminlte.light-theme .nav-item.active {
+  background: rgba(2, 141, 170, 0.08) !important;
+  border-left: 3px solid #028DAA !important;
+  color: #028DAA !important;
+}
+body.theme-adminlte.light-theme .nav-item.active span {
+  color: #028DAA !important;
+  font-weight: 600 !important;
+}
+body.theme-adminlte.light-theme .nav-item.active i {
+  color: #028DAA !important;
+}
+
+/* Light: Sidebar clock */
+body.theme-adminlte.light-theme .sidebar-clock {
+  background: rgba(2, 141, 170, 0.04) !important;
+  border: 1px solid #dee2e6 !important;
+}
+body.theme-adminlte.light-theme .clock-time {
+  color: #212529 !important;
+}
+body.theme-adminlte.light-theme .clock-date {
+  color: #6c757d !important;
+}
+
+/* Light: Sidebar status */
+body.theme-adminlte.light-theme .sidebar-status {
+  border-top: 1px solid #e9ecef !important;
+}
+body.theme-adminlte.light-theme .sidebar .slabel {
+  color: #6c757d !important;
+}
+body.theme-adminlte.light-theme .sidebar .sval {
+  color: #212529 !important;
+}
+body.theme-adminlte.light-theme .sidebar .sidebar-conn {
+  color: #6c757d !important;
+}
+body.theme-adminlte.light-theme .sidebar #theme-toggle-btn {
+  border: 1px solid #dee2e6 !important;
+  color: #495057 !important;
+  background: #ffffff !important;
+}
+body.theme-adminlte.light-theme .sidebar #theme-toggle-btn:hover {
+  background: rgba(2, 141, 170, 0.06) !important;
+  border-color: #028DAA !important;
+  color: #028DAA !important;
+}
+
+/* Light: Panels & Cards */
+body.theme-adminlte.light-theme .nm-panel {
+  background: #ffffff !important;
+  border: 1px solid #dee2e6 !important;
+  box-shadow: 0 0 1px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+}
+body.theme-adminlte.light-theme .nm-panel .panel-header {
+  background: rgba(2, 141, 170, 0.03) !important;
+  border-bottom: 1px solid #e9ecef !important;
+  color: #212529 !important;
+}
+body.theme-adminlte.light-theme .nm-card {
+  background: #f8f9fa !important;
+  border: 1px solid #dee2e6 !important;
+}
+
+/* Light: Buttons */
+body.theme-adminlte.light-theme .btn-nm {
+  background: #ffffff !important;
+  color: #495057 !important;
+  border: 1px solid #dee2e6 !important;
+}
+body.theme-adminlte.light-theme .btn-nm:hover {
+  background: #f8f9fa !important;
+  color: #212529 !important;
+  border-color: #adb5bd !important;
+}
+body.theme-adminlte.light-theme .btn-success {
+  background: #198754 !important;
+  border-color: #198754 !important;
+}
+body.theme-adminlte.light-theme .btn-danger {
+  background: #dc3545 !important;
+  border-color: #dc3545 !important;
+}
+body.theme-adminlte.light-theme .btn-primary {
+  background: #028DAA !important;
+  border-color: #028DAA !important;
+}
+body.theme-adminlte.light-theme .btn-confirm-cancel {
+  background: #f8f9fa !important;
+  color: #495057 !important;
+  border: 1px solid #dee2e6 !important;
+}
+
+/* Light: Inputs */
+body.theme-adminlte.light-theme .nm-input,
+body.theme-adminlte.light-theme .nm-select {
+  background: #ffffff !important;
+  border: 1px solid #ced4da !important;
+  color: #212529 !important;
+}
+body.theme-adminlte.light-theme .nm-input:focus,
+body.theme-adminlte.light-theme .nm-select:focus {
+  border-color: #028DAA !important;
+  box-shadow: 0 0 0 3px rgba(2, 141, 170, 0.15) !important;
+}
+
+/* Light: Tables */
+body.theme-adminlte.light-theme .nm-table th {
+  background: rgba(2, 141, 170, 0.04) !important;
+  color: #495057 !important;
+  border-bottom: 2px solid #dee2e6 !important;
+}
+body.theme-adminlte.light-theme .nm-table td {
+  border-bottom: 1px solid #e9ecef !important;
+  color: #212529 !important;
+}
+body.theme-adminlte.light-theme .nm-table tbody tr:hover {
+  background: rgba(2, 141, 170, 0.03) !important;
+}
+
+/* Light: Progress bars */
+body.theme-adminlte.light-theme .nm-progress {
+  background: #e9ecef !important;
+}
+
+/* Light: Modals */
+body.theme-adminlte.light-theme .modal-content,
+body.theme-adminlte.light-theme .nm-modal {
+  background: #ffffff !important;
+  border: 1px solid #dee2e6 !important;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12) !important;
+}
+body.theme-adminlte.light-theme .modal-header {
+  border-bottom: 1px solid #e9ecef !important;
+}
+body.theme-adminlte.light-theme .modal-footer {
+  border-top: 1px solid #e9ecef !important;
+}
+body.theme-adminlte.light-theme .modal-backdrop.show {
+  opacity: 0.25 !important;
+  background-color: #000000 !important;
+}
+body.theme-adminlte.light-theme #det-desc {
+  background: rgba(0, 0, 0, 0.02) !important;
+}
+
+/* Light: Confirm & Loading */
+body.theme-adminlte.light-theme .custom-confirm-dialog,
+body.theme-adminlte.light-theme .custom-loading-dialog {
+  background: #ffffff !important;
+  border: 1px solid #dee2e6 !important;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12) !important;
+}
+body.theme-adminlte.light-theme .custom-confirm-title {
+  color: #212529 !important;
+}
+body.theme-adminlte.light-theme .custom-confirm-msg {
+  color: #495057 !important;
+}
+body.theme-adminlte.light-theme .custom-loading-message {
+  color: #212529 !important;
+}
+
+/* Light: Toast */
+body.theme-adminlte.light-theme .nm-toast {
+  background: #ffffff !important;
+  border: 1px solid #dee2e6 !important;
+  border-left: 4px solid #028DAA !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Light: KPI Cards */
+body.theme-adminlte.light-theme .kpi-card {
+  background: #ffffff !important;
+  border: 1px solid #dee2e6 !important;
+  box-shadow: 0 0 1px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* Light: Zone Cards */
+body.theme-adminlte.light-theme .zone-card {
+  background: #ffffff !important;
+  border: 1px solid #dee2e6 !important;
+}
+body.theme-adminlte.light-theme .zone-card:hover {
+  border-color: #028DAA !important;
+  box-shadow: 0 4px 12px rgba(2, 141, 170, 0.08) !important;
+}
+
+/* Light: Incident list items */
+body.theme-adminlte.light-theme .incident-list-item {
+  border: 1px solid #dee2e6 !important;
+  background: #f8f9fa !important;
+}
+body.theme-adminlte.light-theme .incident-list-item:hover {
+  border-color: #028DAA !important;
+  background: rgba(2, 141, 170, 0.03) !important;
+}
+
+/* Light: Mobile topbar */
+body.theme-adminlte.light-theme .mobile-topbar {
+  background: #ffffff !important;
+  border-bottom: 1px solid #dee2e6 !important;
+}
+
+/* Light: Scrollbar */
+body.theme-adminlte.light-theme ::-webkit-scrollbar-track {
+  background: #f4f6f9;
+}
+body.theme-adminlte.light-theme ::-webkit-scrollbar-thumb {
+  background: #ced4da;
+}
+body.theme-adminlte.light-theme ::-webkit-scrollbar-thumb:hover {
+  background: #adb5bd;
 }
 
 /* ============================================================ GLOBAL LOADING OVERLAY */

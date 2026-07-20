@@ -36,6 +36,29 @@ Real-time network monitoring with SNMP auto-discovery, interactive floor plan al
 
 ---
 
+## 🏆 Development Milestones & Achievements (Riwayat Capaian)
+
+Here is the progress timeline of the NetMon platform, highlighting the latest enhancements in performance and telemetry accuracy:
+
+* **Phase 1 – 9: Core Platform Foundation**
+  - Established multi-threaded SNMP v1/v2c polling engine and real-time dashboard powered by WebSockets.
+  - Integrated dynamic interactive Floor Plan, Zone Management, and UniFi Controller API device synchronization.
+  - Added Alert & Access Log audit trails, double-check status verification (Ping + SNMP), and per-device alert muting.
+
+* **Phase 10: Telemetry Accuracy & Forensics**
+  - **Real Record Bucketing**: Replaced generic averages with point-to-point raw traffic sampling for backbone and router uplinks.
+  - **BlackBox Forensics Engine**: Heuristic downtime analysis to identify root causes (e.g. CPU exhaustion, thermal limits, fiber cut, reboot).
+  - **Context-Aware Counter Rollovers**: Handled 32-bit and 64-bit SNMP counter rollovers dynamically, preventing traffic chart spikes.
+
+* **Phase 11: SQLite Database Optimization & Performance Tuning**
+  - **SQLite Connection Tuning**: Enabled WAL (Write-Ahead Logging) journal mode, `synchronous = NORMAL`, and `mmap_size = 256MB` for simultaneous, non-blocking reads/writes.
+  - **Split Data Retention**: Separated detailed interface chart data (default 7 days) from aggregated report metrics (min 31 days) to keep database size under control.
+  - **Weekly Background Vacuum**: Scheduled automatic SQLite physical database compression (`VACUUM`) every Sunday at 03:00.
+  - **Covering Index**: Implemented `idx_metrics_name_time` covering index to ensure heavy traffic historical queries run in under 2 seconds.
+  - **Automated Regression Testing**: Created the `test_report_accuracy.py` suite to validate bandwidth report algorithms, outlier filtering, and rollover calculations.
+
+---
+
 ## 📦 Requirements
 
 - Python **3.9+**
@@ -222,25 +245,30 @@ sudo journalctl -u netmon -n 100
 
 ```
 netmon/
-├── app.py            ← Flask app + SocketIO + API routes
-├── database.py       ← SQLite database manager
-├── snmp_worker.py    ← SNMP polling + network discovery
-├── unifi_client.py   ← UniFi controller API client
-├── requirements.txt  ← Python dependencies
-├── install.sh        ← Installation script
-├── start.sh          ← Start script (created by installer)
-├── netmon.db         ← SQLite database (auto-created)
+├── app.py                  ← Flask app + SocketIO + API routes
+├── database.py             ← SQLite database manager (tuned connection, WAL mode)
+├── snmp_worker.py          ← SNMP polling + discovery + BlackBox Forensics
+├── unifi_client.py         ← UniFi controller API client
+├── test_report_accuracy.py ← Regression testing suite for bandwidth reports
+├── verify_backbone.py      ← Verification script for backbone aggregation queries
+├── verify_fase11.py        ← Verification script for SQLite connections & WAL mode
+├── verify_fase5.py         ← Verification script for timezone and scheduling
+├── requirements.txt        ← Python dependencies
+├── install.sh              ← System installation script
+├── update.sh               ← In-place automatic update script
+├── manage_proxy.sh         ← Nginx reverse proxy configuration helper
+├── netmon.db               ← SQLite database (auto-created, persistent)
 ├── templates/
-│   ├── base.html     ← Sidebar layout
-│   ├── dashboard.html← Main dashboard
-│   ├── floorplan.html← Interactive floor plan
-│   ├── devices.html  ← Device management
-│   ├── logs.html     ← Alert + access logs
-│   └── settings.html ← Configuration
+│   ├── base.html           ← Sidebar layout
+│   ├── dashboard.html      ← Main dashboard with backbone charts
+│   ├── floorplan.html      ← Interactive floor plan alerting map
+│   ├── devices.html        ← Device management and manual overrides
+│   ├── logs.html           ← Alert and access audit logs
+│   └── settings.html       ← Application configuration (retention settings)
 └── static/
-    ├── css/style.css ← Dark theme CSS
-    ├── js/main.js    ← Shared JS + Socket.IO
-    └── img/          ← Floor plan uploads
+    ├── css/style.css       ← Glassmorphism dark theme CSS
+    ├── js/main.js          ← Real-time dynamic JS frontend orchestration
+    └── img/                ← Floor plan uploads
 ```
 
 ---
