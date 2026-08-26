@@ -960,7 +960,7 @@ class Database:
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                     }
                     payload = {
-                        "model": "llama-3.3-70b-versatile",
+                        "model": "openai/gpt-oss-120b",
                         "response_format": {"type": "json_object"},
                         "messages": [
                             {
