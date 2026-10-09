@@ -4090,3 +4090,108 @@ body.theme-win7 .incident-list-item:hover {
   right: 16px;
   bottom: 16px;
 }
+
+/* ============================================================ 
+   GRAFANA-STYLE OBSERVABILITY STYLES 
+   ============================================================ */
+.kpi-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.kpi-sparkline-canvas {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100% !important;
+  height: 38px !important;
+  pointer-events: none;
+  opacity: 0.55;
+  transition: opacity 0.2s ease;
+}
+
+.kpi-card:hover .kpi-sparkline-canvas {
+  opacity: 0.95;
+}
+
+/* State Timeline */
+.state-timeline-wrapper {
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm, 8px);
+}
+
+.state-timeline-bar {
+  display: flex;
+  width: 100%;
+  height: 22px;
+  background: var(--bg-card);
+  border-radius: 6px;
+  overflow: hidden;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--border);
+}
+
+.state-block {
+  flex: 1;
+  height: 100%;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.state-block:hover {
+  transform: scaleY(1.25);
+  filter: brightness(1.25);
+  z-index: 2;
+}
+
+.st-up {
+  background-color: #34c759 !important;
+}
+
+.st-warn {
+  background-color: #ff9500 !important;
+}
+
+.st-down {
+  background-color: #ff3b30 !important;
+}
+
+.st-none {
+  background-color: rgba(120, 120, 128, 0.25) !important;
+}
+
+.tl-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.latency-metric-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.latency-metric-badge.good {
+  color: #34c759;
+}
+
+.latency-metric-badge.warn {
+  color: #ff9500;
+}
+
+.latency-metric-badge.bad {
+  color: #ff3b30;
+}
+

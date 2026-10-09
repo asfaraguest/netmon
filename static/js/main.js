@@ -235,6 +235,7 @@ let detailPollInterval = null;
 let activeDetailDeviceId = null;
 let activeDetailDeviceType = null;
 let trafficChartInstance = null;
+let latencyChartInstance = null;
 let interfaceTrafficData = {};
 let chartLabels = [];
 let chartRxData = [];
@@ -256,6 +257,7 @@ function openDeviceDetail(id) {
   }
 
   activeDetailDeviceId = id;
+  renderStateTimeline(id);
   interfaceTrafficData = {};
   chartLabels = [];
   chartRxData = [];
@@ -350,6 +352,11 @@ function closeDetailModal() {
   if (detailPollInterval) {
     clearInterval(detailPollInterval);
     detailPollInterval = null;
+  }
+
+  if (latencyChartInstance) {
+    latencyChartInstance.destroy();
+    latencyChartInstance = null;
   }
 
   activeDetailDeviceId = null;
@@ -454,6 +461,19 @@ function fetchRealtimeStats() {
       updateResourceProgress('det-cpu-bar', 'det-cpu-val', res.cpu_usage, '%');
       updateResourceProgress('det-mem-bar', 'det-mem-val', res.memory_usage, '%');
       updateResourceProgress('det-temp-bar', 'det-temp-val', res.temperature, '°C');
+
+      if (res.latency_ms !== null && res.latency_ms !== undefined) {
+        const latVal = document.getElementById('det-lat-val');
+        if (latVal) latVal.textContent = `${res.latency_ms} ms`;
+      }
+      if (res.packet_loss !== null && res.packet_loss !== undefined) {
+        const lossVal = document.getElementById('det-loss-val');
+        if (lossVal) lossVal.textContent = `${res.packet_loss}%`;
+        const lossEl = document.getElementById('det-loss-badge');
+        if (lossEl) {
+          lossEl.className = `badge ms-1 text-xs ${res.packet_loss > 0 ? 'bg-danger text-white' : ''}`;
+        }
+      }
 
       const isClientDev = res.client_count !== null && res.client_count !== undefined;
       const rtHeader = document.querySelector('#detailModal h6.m-0');
@@ -1094,3 +1114,116 @@ function fmtDowntimeTime(ts) {
     return ts;
   }
 }
+
+// ============================================================
+// State Timeline & Ping Latency (Grafana-style observability)
+// ============================================================
+
+window.renderStateTimeline = function(deviceId) {
+  const container = document.getElementById('det-state-timeline');
+  if (!container) return;
+  container.innerHTML = '<div class="text-muted text-xs p-1">Loading timeline…</div>';
+  
+  fetch(`/api/devices/${deviceId}/timeline?hours=24`)
+    .then(r => r.json())
+    .then(data => {
+      container.innerHTML = '';
+      if (!Array.isArray(data) || data.length === 0) {
+        container.innerHTML = '<div class="text-muted text-xs p-1">No timeline data</div>';
+        return;
+      }
+      data.forEach(item => {
+        const block = document.createElement('div');
+        block.className = `state-block st-${item.status || 'up'}`;
+        block.title = item.tooltip || `${item.time}: ${item.status}`;
+        container.appendChild(block);
+      });
+    })
+    .catch(err => {
+      console.error("Error rendering timeline:", err);
+      container.innerHTML = '<div class="text-muted text-xs p-1">Timeline unavailable</div>';
+    });
+};
+
+window.loadLatencyChart = function() {
+  if (!activeDetailDeviceId) return;
+  const canvas = document.getElementById('latencyChart');
+  if (!canvas) return;
+
+  fetch(`/api/devices/${activeDetailDeviceId}/latency?hours=24`)
+    .then(r => r.json())
+    .then(points => {
+      if (latencyChartInstance) {
+        latencyChartInstance.destroy();
+        latencyChartInstance = null;
+      }
+      
+      const isLight = document.body.classList.contains('light-theme');
+      const tickColor = isLight ? '#6e6e73' : '#8b949e';
+      const gridColor = isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.05)';
+      
+      let labels = [];
+      let data = [];
+      if (Array.isArray(points) && points.length > 0) {
+        labels = points.map(p => {
+          const d = new Date(p.ts);
+          return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        });
+        data = points.map(p => p.latency_ms);
+        
+        const sum = data.reduce((a, b) => a + b, 0);
+        const avg = (sum / data.length).toFixed(1);
+        const avgEl = document.getElementById('det-lat-avg-badge');
+        if (avgEl) avgEl.textContent = `Avg: ${avg} ms`;
+      } else {
+        labels = ['Sekarang'];
+        data = [0];
+      }
+
+      const ctx = canvas.getContext('2d');
+      latencyChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Latency (ms)',
+            data: data,
+            borderColor: '#ff9500',
+            backgroundColor: 'rgba(255, 149, 0, 0.12)',
+            fill: true,
+            tension: 0.35,
+            borderWidth: 2,
+            pointRadius: data.length > 50 ? 0 : 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(c) { return `${c.parsed.y} ms`; }
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { color: tickColor, font: { size: 10 } }
+            },
+            y: {
+              grid: { color: gridColor },
+              ticks: {
+                color: tickColor,
+                font: { size: 10 },
+                callback: function(v) { return `${v} ms`; }
+              },
+              beginAtZero: true
+            }
+          }
+        }
+      });
+    })
+    .catch(err => console.error("Error loading latency chart:", err));
+};

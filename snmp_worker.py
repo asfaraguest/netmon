@@ -98,6 +98,7 @@ class SNMPWorker:
         self._if_prev = {}
         self.db_write_lock = threading.RLock()
         self._ping_history = {}
+        self._latest_ping = {}
         self._snmp_failing = set()
         self._pending_analysis = {}
 
@@ -225,19 +226,19 @@ class SNMPWorker:
     # ─── poll a single device ────────────────────────────────────────
 
     def _ping(self, ip):
-        import time
+        import time, subprocess, platform, re
         start_time = time.time()
         is_alive = False
+        latency_ms = None
+        packet_loss = 0.0
         
-        # 1. Try standard OS Ping first (quickest check if host responds to ICMP)
-        import subprocess
-        import platform
+        # 1. Try standard OS Ping (sending 2 packets for latency & packet loss)
         is_win = platform.system().lower() == 'windows'
         param = '-n' if is_win else '-c'
         timeout_param = '-w' if is_win else '-W'
-        timeout_val = '2000' if is_win else '2'
+        timeout_val = '1000' if is_win else '1'
         
-        cmd = ['ping', param, '1', timeout_param, timeout_val, ip]
+        cmd = ['ping', param, '2', timeout_param, timeout_val, ip]
         try:
             startupinfo = None
             if is_win:
@@ -249,10 +250,46 @@ class SNMPWorker:
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.PIPE, 
                 startupinfo=startupinfo, 
-                timeout=3.0
+                timeout=3.0,
+                text=True
             )
+            out = (res.stdout or '') + (res.stderr or '')
             if res.returncode == 0:
                 is_alive = True
+                # Parse latency
+                # Linux: rtt min/avg/max/mdev = 0.354/0.512/0.670/0.158 ms
+                # Or: time=0.45 ms
+                m_lat = re.search(r'(?:rtt|round-trip)[^=]*=\s*[\d\.]+/([\d\.]+)/', out)
+                if m_lat:
+                    try:
+                        latency_ms = round(float(m_lat.group(1)), 1)
+                    except Exception:
+                        pass
+                else:
+                    m_time = re.findall(r'time[=<]([\d\.]+)\s*ms', out)
+                    if m_time:
+                        try:
+                            times = [float(x) for x in m_time]
+                            latency_ms = round(sum(times) / len(times), 1)
+                        except Exception:
+                            pass
+                
+                # Parse packet loss
+                m_loss = re.search(r'(\d+)%\s*packet loss', out)
+                if m_loss:
+                    try:
+                        packet_loss = float(m_loss.group(1))
+                    except Exception:
+                        pass
+            else:
+                m_loss = re.search(r'(\d+)%\s*packet loss', out)
+                if m_loss:
+                    try:
+                        packet_loss = float(m_loss.group(1))
+                    except Exception:
+                        packet_loss = 100.0
+                else:
+                    packet_loss = 100.0
         except Exception:
             pass
 
@@ -264,20 +301,31 @@ class SNMPWorker:
                 try:
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     s.settimeout(0.2)  # Fast 200ms timeout
+                    t0 = time.time()
                     result = s.connect_ex((ip, port))
                     s.close()
                     if result == 0 or result in (111, 10061):
                         is_alive = True
+                        latency_ms = round((time.time() - t0) * 1000.0, 1)
+                        packet_loss = 0.0
                         break
                 except Exception:
                     pass
 
         elapsed = (time.time() - start_time) * 1000.0  # in ms
+        if latency_ms is None and is_alive:
+            latency_ms = round(elapsed / 2.0, 1)
+
+        if not is_alive:
+            latency_ms = None
+            packet_loss = 100.0
+
         if ip not in self._ping_history:
             self._ping_history[ip] = []
-        self._ping_history[ip].append((is_alive, elapsed))
+        self._ping_history[ip].append((is_alive, latency_ms or elapsed))
         self._ping_history[ip] = self._ping_history[ip][-10:]
         
+        self._latest_ping[ip] = {'latency_ms': latency_ms, 'packet_loss': packet_loss}
         return is_alive
 
     def _get_resource_metrics(self, ip, community, port, version, vendor_lower, descr_lower, sys_obj_id=None):
@@ -615,6 +663,14 @@ class SNMPWorker:
             # Dynamic resource usage extraction
             metrics = self._get_resource_metrics(ip, community, port, version, vendor_lower, descr_lower, result.get('1.3.6.1.2.1.1.2.0', ''))
             upd.update(metrics)
+
+            # Telemetry: Measure ICMP Ping Latency & Packet Loss
+            self._ping(ip)
+            p_stat = self._latest_ping.get(ip, {})
+            if p_stat.get('latency_ms') is not None:
+                upd['latency_ms'] = p_stat['latency_ms']
+            if p_stat.get('packet_loss') is not None:
+                upd['packet_loss'] = p_stat['packet_loss']
             
             with self.db_write_lock:
                 # Save metrics to DB timeseries
@@ -624,6 +680,10 @@ class SNMPWorker:
                     self.db.save_metric(did, 'memory_usage', metrics['memory_usage'])
                 if metrics['temperature'] is not None:
                     self.db.save_metric(did, 'temperature', metrics['temperature'])
+                if upd.get('latency_ms') is not None:
+                    self.db.save_metric(did, 'ping_latency', upd['latency_ms'])
+                if upd.get('packet_loss') is not None:
+                    self.db.save_metric(did, 'packet_loss', upd['packet_loss'])
 
                 # Poll WAN traffic throughput if device type is router
                 if device.get('type') == 'router':
@@ -648,6 +708,13 @@ class SNMPWorker:
                 self.db.update_device(did, upd)
                 if upd.get('uptime'):
                     self.db.save_metric(did, 'uptime', upd['uptime'])
+
+                try:
+                    full_dev = self.db.get_device(did)
+                    if full_dev:
+                        self.socketio.emit('device_updated', full_dev)
+                except Exception:
+                    pass
 
         elif snmp_en:
             # ── SNMP enabled but SNMP FAILED: check ping, mark SNMP as broken ──
@@ -689,8 +756,16 @@ class SNMPWorker:
 
             if is_alive:
                 # Device reachable via ping but SNMP is not responding (or revived above). Keep existing metrics.
+                p_stat = self._latest_ping.get(ip, {})
                 with self.db_write_lock:
                     upd = {'status': 'up', 'last_polled': now}
+                    if p_stat.get('latency_ms') is not None:
+                        upd['latency_ms'] = p_stat['latency_ms']
+                        self.db.save_metric(did, 'ping_latency', p_stat['latency_ms'])
+                    if p_stat.get('packet_loss') is not None:
+                        upd['packet_loss'] = p_stat['packet_loss']
+                        self.db.save_metric(did, 'packet_loss', p_stat['packet_loss'])
+
                     if old_st == 'down':
                         upd['last_seen'] = now
                         self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE (ping only)")
@@ -707,13 +782,27 @@ class SNMPWorker:
                             self._snmp_failing.remove(ip)
                     print(f"[SNMP] FAILED for {ip} — device alive via ping but SNMP not responding")
                     self.db.update_device(did, upd)
+                    try:
+                        full_dev = self.db.get_device(did)
+                        if full_dev:
+                            self.socketio.emit('device_updated', full_dev)
+                    except Exception:
+                        pass
             else:
                 # Genuinely offline -> lempar notifikasi perangkat offline ke dashboard
                 with self.db_write_lock:
                     self._snmp_failing.discard(ip)
                     self._pending_analysis.pop(ip, None)
                     self.db.update_device(did, {'status':'down','last_polled':now,
-                                                 'cpu_usage': None, 'memory_usage': None, 'temperature': None})
+                                                 'cpu_usage': None, 'memory_usage': None, 'temperature': None,
+                                                 'latency_ms': None, 'packet_loss': 100.0})
+                    self.db.save_metric(did, 'packet_loss', 100.0)
+                    try:
+                        full_dev = self.db.get_device(did)
+                        if full_dev:
+                            self.socketio.emit('device_updated', full_dev)
+                    except Exception:
+                        pass
                     if old_st != 'down':
                         s = self.db.get_settings()
                         if s.get('alert_on_down','true') == 'true':
@@ -749,7 +838,15 @@ class SNMPWorker:
                     
             with self.db_write_lock:
                 if is_alive:
+                    p_stat = self._latest_ping.get(ip, {})
                     upd = {'status': 'up', 'last_polled': now}
+                    if p_stat.get('latency_ms') is not None:
+                        upd['latency_ms'] = p_stat['latency_ms']
+                        self.db.save_metric(did, 'ping_latency', p_stat['latency_ms'])
+                    if p_stat.get('packet_loss') is not None:
+                        upd['packet_loss'] = p_stat['packet_loss']
+                        self.db.save_metric(did, 'packet_loss', p_stat['packet_loss'])
+
                     if old_st == 'down':
                         upd['last_seen'] = now
                         self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE")
@@ -757,9 +854,23 @@ class SNMPWorker:
                     elif old_st == 'unknown':
                         upd['last_seen'] = now
                     self.db.update_device(did, upd)
+                    try:
+                        full_dev = self.db.get_device(did)
+                        if full_dev:
+                            self.socketio.emit('device_updated', full_dev)
+                    except Exception:
+                        pass
                 else:
                     self._pending_analysis.pop(ip, None)
-                    self.db.update_device(did, {'status':'down','last_polled':now})
+                    self.db.update_device(did, {'status':'down','last_polled':now,
+                                                 'latency_ms': None, 'packet_loss': 100.0})
+                    self.db.save_metric(did, 'packet_loss', 100.0)
+                    try:
+                        full_dev = self.db.get_device(did)
+                        if full_dev:
+                            self.socketio.emit('device_updated', full_dev)
+                    except Exception:
+                        pass
                     if old_st != 'down':
                         s = self.db.get_settings()
                         if s.get('alert_on_down','true') == 'true':

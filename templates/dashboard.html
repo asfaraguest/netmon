@@ -97,6 +97,18 @@
     </div>
     <div class="kpi-val" id="kpi-online">—</div>
     <div class="kpi-sub" id="kpi-online-sub">—</div>
+    <canvas class="kpi-sparkline-canvas" id="spark-online" height="38"></canvas>
+  </div>
+
+  <!-- Avg Ping Latency -->
+  <div class="kpi-card">
+    <div class="d-flex align-items-center justify-content-between">
+      <span class="kpi-lbl">Avg Ping Latency</span>
+      <span class="kpi-icon-box tone-blue"><i class="bi bi-lightning-charge-fill"></i></span>
+    </div>
+    <div class="kpi-val" id="kpi-latency">—</div>
+    <div class="kpi-sub" id="kpi-latency-sub">Respons Jaringan</div>
+    <canvas class="kpi-sparkline-canvas" id="spark-latency" height="38"></canvas>
   </div>
 
   <!-- Warning -->
@@ -323,9 +335,58 @@ function refreshAll() {
     
     // Initial chart fetch
     fetchThroughputChartData();
+    fetchDashboardSparklines();
     
     document.getElementById('last-refresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
   }).catch(err => console.error("Error refreshing dashboard:", err));
+}
+
+let sparklineCharts = {};
+function renderSparkline(canvasId, dataPoints, color) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !Array.isArray(dataPoints) || dataPoints.length === 0) return;
+  if (sparklineCharts[canvasId]) {
+    sparklineCharts[canvasId].destroy();
+  }
+  const ctx = canvas.getContext('2d');
+  sparklineCharts[canvasId] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: dataPoints.map((_, i) => i),
+      datasets: [{
+        data: dataPoints,
+        borderColor: color,
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        backgroundColor: color.replace(')', ', 0.12)').replace('rgb', 'rgba'),
+        tension: 0.35
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: {
+        x: { display: false },
+        y: { display: false }
+      }
+    }
+  });
+}
+
+function fetchDashboardSparklines() {
+  fetch('/api/dashboard/sparklines')
+    .then(r => r.json())
+    .then(data => {
+      if (data.online_rate) {
+        renderSparkline('spark-online', data.online_rate, 'rgb(52, 199, 89)');
+      }
+      if (data.latency) {
+        renderSparkline('spark-latency', data.latency, 'rgb(0, 122, 255)');
+      }
+    })
+    .catch(err => console.error("Error fetching sparklines:", err));
 }
 
 function refreshDevicesAndTopTalkers() {
@@ -354,6 +415,14 @@ function updateKPIs(s) {
   setEl('kpi-online', `${onlineRate}%`);
   setEl('kpi-online-sub', `${s.up ?? 0} / ${s.total ?? 0}`);
   
+  if (s.avg_latency !== null && s.avg_latency !== undefined) {
+    setEl('kpi-latency', `${s.avg_latency} ms`);
+    setEl('kpi-latency-sub', s.avg_latency < 25 ? 'Respon sangat baik' : (s.avg_latency < 80 ? 'Respon normal' : 'Respon lambat'));
+  } else {
+    setEl('kpi-latency', '—');
+    setEl('kpi-latency-sub', 'Belum ada data ICMP');
+  }
+
   setEl('kpi-warning', s.warning ?? '0');
   setEl('kpi-warning-sub', s.warning > 0 ? 'Tindakan diperlukan' : 'Status normal');
   

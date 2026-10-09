@@ -450,6 +450,8 @@ def get_device_realtime_stats(device_id):
                         'cpu_usage': details.get('cpu_usage'),
                         'memory_usage': details.get('memory_usage'),
                         'temperature': details.get('temperature'),
+                        'latency_ms': device.get('latency_ms'),
+                        'packet_loss': device.get('packet_loss', 0.0),
                         'client_count': details.get('client_count'),
                         'interfaces': details.get('interfaces', []),
                         'clients': connected_clients
@@ -469,6 +471,8 @@ def get_device_realtime_stats(device_id):
                 'cpu_usage': stats.get('cpu_usage') if stats.get('cpu_usage') is not None else device.get('cpu_usage'),
                 'memory_usage': stats.get('memory_usage') if stats.get('memory_usage') is not None else device.get('memory_usage'),
                 'temperature': stats.get('temperature') if stats.get('temperature') is not None else device.get('temperature'),
+                'latency_ms': device.get('latency_ms'),
+                'packet_loss': device.get('packet_loss', 0.0),
                 'interfaces': stats.get('interfaces', [])
             })
         except Exception as e:
@@ -483,10 +487,106 @@ def get_device_realtime_stats(device_id):
         'cpu_usage': device.get('cpu_usage'),
         'memory_usage': device.get('memory_usage'),
         'temperature': device.get('temperature'),
+        'latency_ms': device.get('latency_ms'),
+        'packet_loss': device.get('packet_loss', 0.0),
         'client_count': device.get('client_count'),
         'interfaces': [],
         'clients': []
     })
+
+@app.route('/api/devices/<int:device_id>/latency', methods=['GET'])
+def get_device_latency(device_id):
+    try:
+        hours = max(1, min(168, int(request.args.get('hours', 24))))
+    except Exception:
+        hours = 24
+    points = db.get_device_latency_history(device_id, hours=hours)
+    return jsonify(points)
+
+@app.route('/api/devices/<int:device_id>/timeline', methods=['GET'])
+def get_device_timeline(device_id):
+    try:
+        hours = max(1, min(168, int(request.args.get('hours', 24))))
+    except Exception:
+        hours = 24
+    timeline = db.get_device_status_timeline(device_id, hours=hours)
+    return jsonify(timeline)
+
+@app.route('/api/dashboard/sparklines', methods=['GET'])
+def get_dashboard_sparklines():
+    return jsonify(db.get_dashboard_sparklines())
+
+@app.route('/metrics', methods=['GET'])
+def prometheus_metrics():
+    """Prometheus / OpenMetrics exporter endpoint for NetMon."""
+    devices = db.get_all_devices()
+    zones = {z['id']: z['name'] for z in db.get_all_zones()}
+    lines = []
+    
+    # 1. Device status
+    lines.append('# HELP netmon_device_up Device availability (1 = up, 0 = down)')
+    lines.append('# TYPE netmon_device_up gauge')
+    for d in devices:
+        val = 1 if d.get('status') == 'up' else 0
+        zname = zones.get(d.get('zone_id'), 'Default')
+        lines.append(f'netmon_device_up{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}",type="{d.get("type","unknown")}",zone="{zname}"}} {val}')
+
+    # 2. Ping Latency
+    lines.append('# HELP netmon_ping_latency_ms Device round-trip ping latency in milliseconds')
+    lines.append('# TYPE netmon_ping_latency_ms gauge')
+    for d in devices:
+        lat = d.get('latency_ms')
+        if lat is not None:
+            lines.append(f'netmon_ping_latency_ms{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {lat}')
+
+    # 3. Packet Loss
+    lines.append('# HELP netmon_packet_loss_percent ICMP packet loss percentage')
+    lines.append('# TYPE netmon_packet_loss_percent gauge')
+    for d in devices:
+        loss = d.get('packet_loss')
+        if loss is not None:
+            lines.append(f'netmon_packet_loss_percent{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {loss}')
+
+    # 4. CPU Usage
+    lines.append('# HELP netmon_cpu_usage_percent CPU utilization percentage')
+    lines.append('# TYPE netmon_cpu_usage_percent gauge')
+    for d in devices:
+        cpu = d.get('cpu_usage')
+        if cpu is not None:
+            lines.append(f'netmon_cpu_usage_percent{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {cpu}')
+
+    # 5. Memory Usage
+    lines.append('# HELP netmon_memory_usage_percent Memory utilization percentage')
+    lines.append('# TYPE netmon_memory_usage_percent gauge')
+    for d in devices:
+        mem = d.get('memory_usage')
+        if mem is not None:
+            lines.append(f'netmon_memory_usage_percent{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {mem}')
+
+    # 6. Temperature
+    lines.append('# HELP netmon_temperature_celsius Device temperature in Celsius')
+    lines.append('# TYPE netmon_temperature_celsius gauge')
+    for d in devices:
+        temp = d.get('temperature')
+        if temp is not None:
+            lines.append(f'netmon_temperature_celsius{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {temp}')
+
+    # 7. Traffic WAN
+    lines.append('# HELP netmon_traffic_in_bps Inbound WAN traffic in bits per second')
+    lines.append('# TYPE netmon_traffic_in_bps gauge')
+    lines.append('# HELP netmon_traffic_out_bps Outbound WAN traffic in bits per second')
+    lines.append('# TYPE netmon_traffic_out_bps gauge')
+    for d in devices:
+        wan_in = d.get('wan_in')
+        wan_out = d.get('wan_out')
+        if wan_in is not None:
+            lines.append(f'netmon_traffic_in_bps{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {wan_in}')
+        if wan_out is not None:
+            lines.append(f'netmon_traffic_out_bps{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {wan_out}')
+
+    response_text = '\n'.join(lines) + '\n'
+    from flask import Response
+    return Response(response_text, mimetype='text/plain; version=0.0.4; charset=utf-8')
 
 @app.route('/api/devices/<int:device_id>/downtime_forensics', methods=['GET'])
 def get_device_downtime_forensics(device_id):

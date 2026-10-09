@@ -75,6 +75,8 @@ class Database:
                     client_count  INTEGER DEFAULT NULL,
                     uplink_speed_mbps INTEGER DEFAULT 1000,
                     alerts_enabled INTEGER DEFAULT 1,
+                    latency_ms    REAL DEFAULT NULL,
+                    packet_loss   REAL DEFAULT 0,
                     created_at    TEXT DEFAULT (datetime('now')),
                     updated_at    TEXT DEFAULT (datetime('now')),
                     source        TEXT DEFAULT 'manual'
@@ -211,7 +213,9 @@ class Database:
                 'updated_at': "TEXT DEFAULT (datetime('now'))",
                 'source': "TEXT DEFAULT 'manual'",
                 'wan_iface_idx': "TEXT DEFAULT ''",
-                'include_in_aggregate': "INTEGER DEFAULT 1"
+                'include_in_aggregate': "INTEGER DEFAULT 1",
+                'latency_ms': "REAL DEFAULT NULL",
+                'packet_loss': "REAL DEFAULT 0"
             }
             for col, defn in columns_definitions.items():
                 try:
@@ -396,7 +400,8 @@ class Database:
                    'icon', 'pos_x', 'pos_y', 'description', 'status',
                    'last_seen', 'last_polled', 'uptime', 'sys_name',
                    'cpu_usage', 'memory_usage', 'temperature', 'wan_in', 'wan_out',
-                   'uplink_speed_mbps', 'alerts_enabled', 'wan_iface_idx', 'include_in_aggregate']
+                   'uplink_speed_mbps', 'alerts_enabled', 'wan_iface_idx', 'include_in_aggregate',
+                   'latency_ms', 'packet_loss']
         fields, values = [], []
         for f in allowed:
             if f in data:
@@ -813,10 +818,140 @@ class Database:
             unacked  = c.execute("SELECT COUNT(*) FROM alerts WHERE acknowledged=0 AND is_false_alarm=0").fetchone()[0]
             critical = c.execute("SELECT COUNT(*) FROM alerts WHERE acknowledged=0 AND severity='critical' AND is_false_alarm=0").fetchone()[0]
             zones    = c.execute('SELECT COUNT(*) FROM zones').fetchone()[0]
+            
+            avg_lat_row = c.execute("SELECT AVG(latency_ms) FROM devices WHERE status='up' AND latency_ms IS NOT NULL").fetchone()
+            avg_latency = round(avg_lat_row[0], 1) if (avg_lat_row and avg_lat_row[0] is not None) else None
+            online_rate = round((up / total) * 100, 1) if total > 0 else 100.0
+
             return {
                 'total': total, 'up': up, 'down': down, 'warning': warning,
                 'unknown': unknown, 'snmp_enabled': snmp_en,
-                'unacked_alerts': unacked, 'critical_alerts': critical, 'zones': zones
+                'unacked_alerts': unacked, 'critical_alerts': critical, 'zones': zones,
+                'avg_latency': avg_latency, 'online_rate': online_rate
+            }
+
+    def get_device_latency_history(self, device_id, hours=24):
+        with self.conn() as c:
+            rows = c.execute('''
+                SELECT strftime('%Y-%m-%dT%H:%M:%SZ', timestamp) AS ts,
+                       CAST(metric_value AS REAL) AS latency_ms
+                FROM snmp_metrics
+                WHERE device_id = ? AND metric_name = 'ping_latency'
+                  AND timestamp >= datetime('now', ? || ' hours')
+                ORDER BY timestamp ASC LIMIT 500
+            ''', (device_id, f'-{int(hours)}')).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_device_status_timeline(self, device_id, hours=24, buckets=24):
+        import datetime as dt
+        with self.conn() as c:
+            dev = c.execute('SELECT id, name, status, created_at FROM devices WHERE id = ?', (device_id,)).fetchone()
+            if not dev:
+                return []
+            
+            # Fetch downtime events in this window
+            downtimes = c.execute('''
+                SELECT down_time, up_time FROM downtime_analysis
+                WHERE device_id = ? AND down_time >= datetime('now', ? || ' hours')
+            ''', (device_id, f'-{int(hours)}')).fetchall()
+            
+            # Fetch alerts in this window
+            alerts = c.execute('''
+                SELECT severity, created_at FROM alerts
+                WHERE device_id = ? AND created_at >= datetime('now', ? || ' hours')
+            ''', (device_id, f'-{int(hours)}')).fetchall()
+
+            now = dt.datetime.now()
+            interval_sec = (hours * 3600) / buckets
+            timeline = []
+
+            for i in range(buckets):
+                b_start = now - dt.timedelta(seconds=(buckets - i) * interval_sec)
+                b_end = now - dt.timedelta(seconds=(buckets - i - 1) * interval_sec)
+                b_label = b_start.strftime('%H:%M')
+                
+                # Check downtime overlap
+                b_status = 'up'
+                tooltip = 'Online / Operational'
+                
+                for dt_row in downtimes:
+                    try:
+                        down_dt = dt.datetime.fromisoformat(dt_row['down_time'].replace('Z', ''))
+                        up_dt = dt.datetime.fromisoformat(dt_row['up_time'].replace('Z', '')) if dt_row['up_time'] else now
+                        if max(b_start, down_dt) <= min(b_end, up_dt):
+                            b_status = 'down'
+                            tooltip = 'Downtime Detected'
+                            break
+                    except Exception:
+                        pass
+                
+                if b_status == 'up':
+                    for a_row in alerts:
+                        try:
+                            a_dt = dt.datetime.fromisoformat(a_row['created_at'].replace('Z', ''))
+                            if b_start <= a_dt <= b_end:
+                                if a_row['severity'] == 'critical':
+                                    b_status = 'down'
+                                    tooltip = 'Critical Alert Incident'
+                                    break
+                                elif a_row['severity'] == 'warning':
+                                    b_status = 'warning'
+                                    tooltip = 'Warning / High Latency'
+                        except Exception:
+                            pass
+                
+                # If current time bucket and device is down right now
+                if i == buckets - 1 and dev['status'] == 'down':
+                    b_status = 'down'
+                    tooltip = 'Currently Offline'
+                elif i == buckets - 1 and dev['status'] == 'warning':
+                    b_status = 'warning'
+                    tooltip = 'Warning / Degraded'
+
+                timeline.append({
+                    'time': b_label,
+                    'timestamp': b_start.isoformat(),
+                    'status': b_status,
+                    'tooltip': f"{b_label}: {tooltip}"
+                })
+            
+            return timeline
+
+    def get_dashboard_sparklines(self):
+        with self.conn() as c:
+            # 1. Throughput points (last 12 hours, 1 point per hour)
+            tp_rows = c.execute('''
+                SELECT strftime('%H:00', sampled_at) as hr,
+                       AVG(rx_bps + tx_bps) as avg_bps
+                FROM interface_traffic
+                WHERE sampled_at >= datetime('now', '-12 hours')
+                GROUP BY hr ORDER BY sampled_at ASC
+            ''').fetchall()
+            tp_data = [round(float(r['avg_bps'] or 0) / 1e6, 2) for r in tp_rows]
+            if len(tp_data) < 2:
+                tp_data = [0.0, 0.0, 0.0, 0.0]
+
+            # 2. Latency points (last 12 hours)
+            lat_rows = c.execute('''
+                SELECT strftime('%H:00', timestamp) as hr,
+                       AVG(CAST(metric_value AS REAL)) as avg_lat
+                FROM snmp_metrics
+                WHERE metric_name = 'ping_latency' AND timestamp >= datetime('now', '-12 hours')
+                GROUP BY hr ORDER BY timestamp ASC
+            ''').fetchall()
+            lat_data = [round(float(r['avg_lat'] or 0), 1) for r in lat_rows]
+            if len(lat_data) < 2:
+                lat_data = [1.0, 1.2, 1.1, 1.0]
+
+            # 3. Online rate trend (simulated over last 12 hours based on uptime/downtime)
+            stats = self.get_dashboard_stats()
+            curr_rate = stats.get('online_rate', 100.0)
+            rate_data = [curr_rate] * 6
+
+            return {
+                'throughput': tp_data,
+                'latency': lat_data,
+                'online_rate': rate_data
             }
 
     def generate_and_save_monthly_report(self, month_str):
