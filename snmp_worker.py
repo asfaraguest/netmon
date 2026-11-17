@@ -102,6 +102,8 @@ class SNMPWorker:
         self._latest_ping = {}
         self._snmp_failing = set()
         self._pending_analysis = {}
+        self._metric_history = {}
+        self._last_anomaly_alert = {}
 
     def get_scan_status(self): return dict(self._status)
     def stop_scan(self):       self._stop.set()
@@ -127,6 +129,140 @@ class SNMPWorker:
         else:
             limit = cap_bps
         return min(limit, cap_bps)
+
+    def _analyze_metric_anomalies(self, device, metrics, traffic_data=None):
+        """Menganalisa lonjakan traffic mendadak dan kenaikan drastis resource usage (CPU/RAM).
+        Melakukan korelasi:
+          1. Traffic spike + CPU/RAM spike -> Potensi DDoS, Packet Flood, Broadcast Storm, Loop Routing (Critical)
+          2. Traffic spike saja -> Lonjakan bandwidth / data transfer besar (Warning)
+          3. CPU/RAM spike saja -> Beban komputasi tinggi / proses hang / kripto loop (Warning)
+        Dilengkapi cooldown per perangkat untuk mencegah alert flapping.
+        """
+        try:
+            settings = self.db.get_settings()
+        except Exception:
+            return
+
+        if settings.get('anomaly_alert_enabled', 'true').lower() != 'true':
+            return
+
+        did = device['id']
+        ip = device.get('ip', '')
+        name = device.get('name', ip)
+
+        try:
+            traffic_mult = float(settings.get('traffic_spike_multiplier', 2.5))
+            min_mbps = float(settings.get('traffic_spike_min_mbps', 20.0))
+            cpu_thresh = float(settings.get('cpu_spike_threshold', 85.0))
+            cpu_jump_thresh = float(settings.get('cpu_jump_threshold', 40.0))
+            mem_thresh = float(settings.get('memory_spike_threshold', 90.0))
+        except (ValueError, TypeError):
+            traffic_mult, min_mbps, cpu_thresh, cpu_jump_thresh, mem_thresh = 2.5, 20.0, 85.0, 40.0, 90.0
+
+        now_ts = time.time()
+        cpu = metrics.get('cpu_usage') if metrics else None
+        mem = metrics.get('memory_usage') if metrics else None
+
+        cur_wan_in = traffic_data.get('wan_in', 0.0) if traffic_data else 0.0
+        cur_wan_out = traffic_data.get('wan_out', 0.0) if traffic_data else 0.0
+        cur_traffic_bps = max(cur_wan_in, cur_wan_out)
+        cur_traffic_mbps = cur_traffic_bps / 1e6
+
+        if did not in self._metric_history:
+            self._metric_history[did] = []
+
+        history = self._metric_history[did]
+
+        # Anomaly Detection Flags
+        traffic_spike = False
+        spike_ratio = 1.0
+        baseline_mbps = 0.0
+        cpu_critical = False
+        cpu_jumped = False
+        prev_cpu = None
+        mem_critical = False
+
+        if len(history) >= 2:
+            # 1. Traffic Spike Analysis
+            prev_traffics = [h['traffic_bps'] for h in history if h.get('traffic_bps') is not None]
+            if prev_traffics:
+                avg_prev = sum(prev_traffics) / len(prev_traffics)
+                baseline_mbps = avg_prev / 1e6
+                if cur_traffic_mbps >= min_mbps and avg_prev > 0:
+                    spike_ratio = cur_traffic_bps / avg_prev
+                    if spike_ratio >= traffic_mult:
+                        traffic_spike = True
+
+            # 2. CPU Spike Analysis
+            prev_cpus = [h['cpu'] for h in history if h.get('cpu') is not None]
+            if prev_cpus:
+                prev_cpu = prev_cpus[-1]
+            if cpu is not None:
+                if cpu >= cpu_thresh:
+                    cpu_critical = True
+                if prev_cpu is not None and (cpu - prev_cpu) >= cpu_jump_thresh:
+                    cpu_jumped = True
+
+            # 3. Memory Spike Analysis
+            if mem is not None and mem >= mem_thresh:
+                mem_critical = True
+
+        # Append current sample to rolling history (keep latest 8 samples)
+        history.append({
+            'ts': now_ts,
+            'cpu': cpu,
+            'mem': mem,
+            'traffic_bps': cur_traffic_bps
+        })
+        if len(history) > 8:
+            history.pop(0)
+
+        # Evaluate correlation & construct alert if anomaly detected
+        severity = None
+        alert_msg = None
+
+        if traffic_spike and (cpu_critical or cpu_jumped):
+            severity = 'critical'
+            alert_msg = (
+                f"ANOMALI KRITIS: Lonjakan Traffic drastis ({cur_traffic_mbps:.1f} Mbps, {spike_ratio:.1f}x baseline) "
+                f"bersamaan dengan lonjakan CPU ({cpu:.1f}%) pada {name} ({ip}). Indikasi DDoS / Flood / Routing Loop!"
+            )
+        elif traffic_spike:
+            severity = 'warning'
+            alert_msg = (
+                f"ANOMALI TRAFFIC: Lonjakan throughput mendadak ({cur_traffic_mbps:.1f} Mbps, {spike_ratio:.1f}x baseline) "
+                f"pada {name} ({ip}) [CPU: {cpu if cpu is not None else '-'}%]."
+            )
+        elif cpu_critical or cpu_jumped:
+            severity = 'warning'
+            jump_str = f"naik mendadak dari {prev_cpu:.1f}% ke {cpu:.1f}%" if (cpu_jumped and prev_cpu is not None) else f"mencapai {cpu:.1f}%"
+            alert_msg = (
+                f"ANOMALI RESOURCE: Beban CPU {jump_str} pada {name} ({ip}) tanpa lonjakan traffic signifikan."
+            )
+        elif mem_critical:
+            severity = 'warning'
+            alert_msg = (
+                f"ANOMALI RESOURCE: Penggunaan RAM kritis ({mem:.1f}%) pada {name} ({ip}). Risiko OOM Crash!"
+            )
+
+        if not severity or not alert_msg:
+            return
+
+        # Cooldown check: prevent duplicate alert within 300s (5m) unless escalating to critical
+        last_alert = self._last_anomaly_alert.get(did, {})
+        last_ts = last_alert.get('ts', 0)
+        last_sev = last_alert.get('severity', '')
+        if (now_ts - last_ts < 300) and not (severity == 'critical' and last_sev != 'critical'):
+            return
+
+        self._last_anomaly_alert[did] = {
+            'ts': now_ts,
+            'severity': severity,
+            'msg': alert_msg
+        }
+
+        print(f"[Anomaly Engine] Triggering {severity.upper()} anomaly alert for {name} ({ip})")
+        self._alert(device, severity, alert_msg)
 
     # ─── low-level helpers ───────────────────────────────────────────
 
@@ -687,12 +823,16 @@ class SNMPWorker:
                     self.db.save_metric(did, 'packet_loss', upd['packet_loss'])
 
                 # Poll WAN traffic throughput if device type is router
+                traffic_data = None
                 if device.get('type') == 'router':
                     traffic_data = self._poll_router_traffic(device, ip, community, port, version)
                     if traffic_data:
                         upd.update(traffic_data)
                         self.db.save_metric(did, 'wan_in', traffic_data['wan_in'])
                         self.db.save_metric(did, 'wan_out', traffic_data['wan_out'])
+
+                # Run live anomaly detection for traffic surges and sudden resource spikes
+                self._analyze_metric_anomalies(device, metrics, traffic_data)
 
                 if old_st == 'down':
                     upd['last_seen'] = now

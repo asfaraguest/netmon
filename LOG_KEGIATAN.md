@@ -53,3 +53,10 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
    - Pengecualian total (`--exclude='netmon.db*' --exclude='*.db*'`) agar file database di `/opt/netmon` tidak pernah tertimpa.
    - Auto-repair service: Jika `/etc/systemd/system/netmon.service` hilang atau belum dibuat, `update.sh` otomatis membuat dan mengaktifkannya kembali.
    - Penataan permissions ketat (`chmod 664` dan kepemilikan `netmon:netmon` pada database) agar service tidak crash saat menulis data.
+7. **Optimasi Analisa Anomali Traffic & Lonjakan Resource (`snmp_worker.py`, `ai_detector.py`, `templates/settings.html`):**
+   - Mengembangkan engine deteksi anomali real-time di `snmp_worker.py` dengan rolling window per perangkat untuk memantau lonjakan traffic dan utilisasi resource mendadak.
+   - Algoritma korelasi multivariat: Mendeteksi korelasi simultan antara lonjakan throughput (traffic spike > 2.5x baseline) dan kenaikan drastis CPU (> 85% atau lonjakan mendadak > +40%) untuk deteksi dini serangan DDoS, broadcast storm, atau loop routing aktif.
+   - Deteksi anomali resource mandiri: Peringatan dini lonjakan beban CPU atau pemakaian RAM kritis (> 90% berisiko OOM crash) meskipun perangkat belum mati.
+   - Mekanisme cooldown pintar (5 menit per perangkat) untuk mencegah banjir alarm berulang saat anomali masih berlangsung.
+   - Notifikasi instan via Telegram Bot dengan badge khusus (`⚡ ANOMALI TRAFFIC & RESOURCE SPIKE`) lengkap dengan diagnosa korelasi traffic & CPU.
+   - Penambahan pengaturan ambang batas lonjakan (kelipatan baseline, min Mbps, ambang CPU, ambang RAM) pada antarmuka Web Settings.

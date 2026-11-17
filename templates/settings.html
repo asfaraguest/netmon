@@ -90,7 +90,7 @@
 
   <!-- ============ ALERTING ============ -->
   <div class="nm-panel">
-    <div class="panel-header"><span><i class="bi bi-bell-fill me-2 text-accent"></i>Alerting</span></div>
+    <div class="panel-header"><span><i class="bi bi-bell-fill me-2 text-accent"></i>Alerting &amp; Anomaly Detection</span></div>
     <div class="panel-body">
       <div class="row g-3">
         <div class="col-12">
@@ -106,6 +106,33 @@
             <label class="nm-toggle"><input type="checkbox" id="s-alert-up" checked><span class="nm-slider"></span></label>
             <span>Create alert when device comes back online</span>
           </div>
+        </div>
+        <div class="col-12 border-top pt-2">
+          <label class="nm-label">Deteksi Anomali Lonjakan Traffic &amp; Resource</label>
+          <div class="nm-toggle-wrap">
+            <label class="nm-toggle"><input type="checkbox" id="s-anom-alert" checked><span class="nm-slider"></span></label>
+            <span>Kirim alert otomatis saat terjadi lonjakan traffic mendadak atau kenaikan CPU/RAM ekstrem</span>
+          </div>
+        </div>
+        <div class="col-md-6 col-12">
+          <label class="nm-label">Ambang Lonjakan Traffic (&times; Baseline)</label>
+          <input type="number" class="nm-input" id="s-spike-mult" min="1.5" max="10.0" step="0.1" value="2.5">
+          <small class="text-muted">Kenaikan traffic dibanding rata-rata sebelumnya untuk dianggap anomali (default 2.5x).</small>
+        </div>
+        <div class="col-md-6 col-12">
+          <label class="nm-label">Batas Minimum Traffic (Mbps)</label>
+          <input type="number" class="nm-input" id="s-spike-min" min="1.0" max="1000.0" step="1.0" value="20.0">
+          <small class="text-muted">Batas minimum throughput agar lonjakan kecil tidak memicu false alarm (default 20 Mbps).</small>
+        </div>
+        <div class="col-md-6 col-12">
+          <label class="nm-label">Ambang Lonjakan Kritis CPU (%)</label>
+          <input type="number" class="nm-input" id="s-cpu-thresh" min="50" max="100" value="85">
+          <small class="text-muted">Batas utilisasi CPU untuk memicu peringatan resource spike (default 85%).</small>
+        </div>
+        <div class="col-md-6 col-12">
+          <label class="nm-label">Ambang Lonjakan Kritis RAM (%)</label>
+          <input type="number" class="nm-input" id="s-mem-thresh" min="50" max="100" value="90">
+          <small class="text-muted">Batas pemakaian RAM untuk deteksi risiko kehabisan memori / OOM (default 90%).</small>
         </div>
       </div>
     </div>
@@ -358,6 +385,11 @@ function loadSettings() {
     setVal('s-anom-cap',   s.anomaly_cap_gbps || 5.0);
     setChk('s-alert-down', s.alert_on_down !== 'false');
     setChk('s-alert-up',   s.alert_on_up   !== 'false');
+    setChk('s-anom-alert', s.anomaly_alert_enabled !== 'false');
+    setVal('s-spike-mult', s.traffic_spike_multiplier || 2.5);
+    setVal('s-spike-min',  s.traffic_spike_min_mbps || 20.0);
+    setVal('s-cpu-thresh', s.cpu_spike_threshold || 85);
+    setVal('s-mem-thresh', s.memory_spike_threshold || 90);
     setVal('s-groq-key',   s.groq_api_key || '');
     setChk('s-tg-enabled', s.telegram_enabled === 'true');
     setVal('s-tg-token',   s.telegram_bot_token || '');
@@ -425,6 +457,11 @@ function saveAll() {
     anomaly_cap_gbps: getVal('s-anom-cap'),
     alert_on_down:        document.getElementById('s-alert-down').checked ? 'true' : 'false',
     alert_on_up:          document.getElementById('s-alert-up').checked   ? 'true' : 'false',
+    anomaly_alert_enabled: document.getElementById('s-anom-alert').checked ? 'true' : 'false',
+    traffic_spike_multiplier: getVal('s-spike-mult'),
+    traffic_spike_min_mbps:   getVal('s-spike-min'),
+    cpu_spike_threshold:      getVal('s-cpu-thresh'),
+    memory_spike_threshold:   getVal('s-mem-thresh'),
     telegram_enabled:     document.getElementById('s-tg-enabled').checked ? 'true' : 'false',
     telegram_chat_ids:    getVal('s-tg-chats'),
     telegram_notify_down: document.getElementById('s-tg-down').checked ? 'true' : 'false',

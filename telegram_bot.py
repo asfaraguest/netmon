@@ -567,10 +567,15 @@ class TelegramBot:
         ai_analysis = alert_data.get('ai_analysis')
         now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
+        is_anomaly = any(w in message.lower() for w in ['anomali', 'lonjakan', 'spike', 'ddos', 'flood'])
+
         # Determine icon and header
         if is_recovery:
             icon = "🟢"
             title = "PERANGKAT KEMBALI ONLINE (RECOVERY)"
+        elif is_anomaly:
+            icon = "⚡"
+            title = "ANOMALI TRAFFIC & RESOURCE SPIKE" if severity == 'critical' else "PERINGATAN ANOMALI JARINGAN"
         elif severity == 'critical':
             icon = "🚨"
             title = "PERANGKAT OFFLINE (CRITICAL)"

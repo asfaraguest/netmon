@@ -116,8 +116,18 @@ def _analyze(db, socketio, alert_id):
         # 1. Run advanced local heuristic rules
         alert_msg_lower = alert['message'].lower()
         is_offline_alert = "offline" in alert_msg_lower or "unreachable" in alert_msg_lower or "down" in alert_msg_lower
+        is_anomaly_alert = "anomali" in alert_msg_lower or "lonjakan" in alert_msg_lower or "spike" in alert_msg_lower
 
-        if is_offline_alert:
+        if is_anomaly_alert:
+            is_false = 0
+            if "ddos" in alert_msg_lower or "flood" in alert_msg_lower or "kritis" in alert_msg_lower:
+                explanation = "Valid Anomaly: Terdeteksi korelasi lonjakan traffic dan beban CPU tinggi secara simultan. Waspadai serangan DDoS, packet storm, atau loop routing."
+            elif "traffic" in alert_msg_lower:
+                explanation = "Valid Anomaly: Lonjakan throughput signifikan melebihi ambang batas baseline normal."
+            elif "cpu" in alert_msg_lower or "ram" in alert_msg_lower or "resource" in alert_msg_lower:
+                explanation = "Valid Anomaly: Kenaikan konsumsi resource komputasi (CPU/RAM) perangkat mendadak."
+
+        elif is_offline_alert:
             # Rule A: Device is responsive via ping right now
             if currently_pingable:
                 is_false = 1
@@ -153,26 +163,36 @@ def _analyze(db, socketio, alert_id):
                                      (device['zone_id'], device['id'])).fetchall()
                     other_devs = [dict(r) for r in rows]
                     
-                prompt = (
-                    f"Analisa apakah alert jaringan berikut merupakan peringatan palsu (false warning/alarm).\n"
-                    f"Detail Perangkat:\n"
-                    f"- Nama: {device.get('name')}\n"
-                    f"- Tipe: {device.get('type')}\n"
-                    f"- IP: {device.get('ip')}\n"
-                    f"- SNMP Aktif: {'Ya' if device.get('snmp_enabled') else 'Tidak'}\n"
-                    f"- Status Terakhir: {device.get('status')}\n"
-                    f"- Uptime: {device.get('uptime')}\n"
-                    f"Detail Alert:\n"
-                    f"- Pesan: {alert['message']}\n"
-                    f"Telemetri Detektor Tambahan:\n"
-                    f"- Perangkat Merespon Ping Saat Ini: {'Ya' if currently_pingable else 'Tidak'}\n"
-                    f"- Jumlah Alert Lain dalam 15 Detik Terakhir: {concurrent_alerts} (Indikasi WSL/soket overload jika > 0)\n"
-                    f"- Jumlah Alert Perangkat Ini dalam 15 Menit Terakhir: {alert_history_count} (Indikasi flapping jika >= 2)\n"
-                    f"Konteks Sekitar (Zona yang Sama):\n"
-                    f"{json.dumps(other_devs, indent=2)}\n\n"
-                    f"Tentukan apakah alert ini adalah False Warning. Kembalikan respon JSON dalam format persis seperti ini: "
-                    f'{{"is_false_alarm": 0 atau 1, "explanation": "Penjelasan singkat maks 2 kalimat dalam bahasa Indonesia"}}'
-                )
+                if is_anomaly_alert:
+                    prompt = (
+                        f"Analisa anomali performa jaringan dan lonjakan resource berikut:\n"
+                        f"Perangkat: {device.get('name')} ({device.get('ip')}) | Tipe: {device.get('type')}\n"
+                        f"Pesan Alert: {alert['message']}\n\n"
+                        f"Berikan analisa teknis apakah ini pola serangan DDoS/Flood, looping paket, transfer data masif, atau kebocoran memori. "
+                        f"Kembalikan respon JSON: "
+                        f'{{"is_false_alarm": 0, "explanation": "Diagnosa teknis maks 2 kalimat dalam bahasa Indonesia"}}'
+                    )
+                else:
+                    prompt = (
+                        f"Analisa apakah alert jaringan berikut merupakan peringatan palsu (false warning/alarm).\n"
+                        f"Detail Perangkat:\n"
+                        f"- Nama: {device.get('name')}\n"
+                        f"- Tipe: {device.get('type')}\n"
+                        f"- IP: {device.get('ip')}\n"
+                        f"- SNMP Aktif: {'Ya' if device.get('snmp_enabled') else 'Tidak'}\n"
+                        f"- Status Terakhir: {device.get('status')}\n"
+                        f"- Uptime: {device.get('uptime')}\n"
+                        f"Detail Alert:\n"
+                        f"- Pesan: {alert['message']}\n"
+                        f"Telemetri Detektor Tambahan:\n"
+                        f"- Perangkat Merespon Ping Saat Ini: {'Ya' if currently_pingable else 'Tidak'}\n"
+                        f"- Jumlah Alert Lain dalam 15 Detik Terakhir: {concurrent_alerts} (Indikasi WSL/soket overload jika > 0)\n"
+                        f"- Jumlah Alert Perangkat Ini dalam 15 Menit Terakhir: {alert_history_count} (Indikasi flapping jika >= 2)\n"
+                        f"Konteks Sekitar (Zona yang Sama):\n"
+                        f"{json.dumps(other_devs, indent=2)}\n\n"
+                        f"Tentukan apakah alert ini adalah False Warning. Kembalikan respon JSON dalam format persis seperti ini: "
+                        f'{{"is_false_alarm": 0 atau 1, "explanation": "Penjelasan singkat maks 2 kalimat dalam bahasa Indonesia"}}'
+                    )
                 
                 url = "https://api.groq.com/openai/v1/chat/completions"
                 headers = {

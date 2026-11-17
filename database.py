@@ -272,6 +272,12 @@ class Database:
                 'telegram_notify_up': 'true',
                 'telegram_daily_digest_enabled': 'true',
                 'telegram_daily_digest_time': '08:00',
+                'anomaly_alert_enabled': 'true',
+                'traffic_spike_multiplier': '2.5',
+                'traffic_spike_min_mbps': '20.0',
+                'cpu_spike_threshold': '85.0',
+                'cpu_jump_threshold': '40.0',
+                'memory_spike_threshold': '90.0',
             }
             for k, v in defaults.items():
                 c.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (k, v))
