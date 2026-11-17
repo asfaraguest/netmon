@@ -71,6 +71,7 @@ class Database:
                     cpu_usage     REAL DEFAULT NULL,
                     memory_usage  REAL DEFAULT NULL,
                     temperature   REAL DEFAULT NULL,
+                    wan_in        REAL DEFAULT NULL,
                     wan_out       REAL DEFAULT NULL,
                     client_count  INTEGER DEFAULT NULL,
                     uplink_speed_mbps INTEGER DEFAULT 1000,
@@ -556,6 +557,11 @@ class Database:
             ''').fetchall()
             return [dict(r) for r in rows]
 
+    def get_zone(self, zone_id):
+        with self.conn() as c:
+            row = c.execute('SELECT * FROM zones WHERE id = ?', (zone_id,)).fetchone()
+            return dict(row) if row else None
+
     def add_zone(self, data):
         with self.conn() as c:
             cur = c.execute(
@@ -623,7 +629,7 @@ class Database:
 
     def get_unack_count(self):
         with self.conn() as c:
-            return c.execute('SELECT COUNT(*) FROM alerts WHERE acknowledged=0').fetchone()[0]
+            return c.execute('SELECT COUNT(*) FROM alerts WHERE acknowledged=0 AND is_false_alarm=0').fetchone()[0]
 
     def get_active_alerts(self, limit=10):
         with self.conn() as c:
@@ -1120,7 +1126,7 @@ class Database:
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                     }
                     payload = {
-                        "model": "openai/gpt-oss-120b",
+                        "model": "llama-3.3-70b-versatile",
                         "response_format": {"type": "json_object"},
                         "messages": [
                             {

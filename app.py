@@ -525,6 +525,9 @@ def prometheus_metrics():
     devices = db.get_all_devices()
     zones = {z['id']: z['name'] for z in db.get_all_zones()}
     lines = []
+
+    def _pe(v):
+        return str(v if v is not None else '').replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
     
     # 1. Device status
     lines.append('# HELP netmon_device_up Device availability (1 = up, 0 = down)')
@@ -532,7 +535,7 @@ def prometheus_metrics():
     for d in devices:
         val = 1 if d.get('status') == 'up' else 0
         zname = zones.get(d.get('zone_id'), 'Default')
-        lines.append(f'netmon_device_up{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}",type="{d.get("type","unknown")}",zone="{zname}"}} {val}')
+        lines.append(f'netmon_device_up{{id="{d["id"]}",name="{_pe(d["name"])}",ip="{_pe(d["ip"])}",type="{_pe(d.get("type","unknown"))}",zone="{_pe(zname)}"}} {val}')
 
     # 2. Ping Latency
     lines.append('# HELP netmon_ping_latency_ms Device round-trip ping latency in milliseconds')
@@ -540,7 +543,7 @@ def prometheus_metrics():
     for d in devices:
         lat = d.get('latency_ms')
         if lat is not None:
-            lines.append(f'netmon_ping_latency_ms{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {lat}')
+            lines.append(f'netmon_ping_latency_ms{{id="{d["id"]}",name="{_pe(d["name"])}",ip="{_pe(d["ip"])}"}} {lat}')
 
     # 3. Packet Loss
     lines.append('# HELP netmon_packet_loss_percent ICMP packet loss percentage')
@@ -548,7 +551,7 @@ def prometheus_metrics():
     for d in devices:
         loss = d.get('packet_loss')
         if loss is not None:
-            lines.append(f'netmon_packet_loss_percent{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {loss}')
+            lines.append(f'netmon_packet_loss_percent{{id="{d["id"]}",name="{_pe(d["name"])}",ip="{_pe(d["ip"])}"}} {loss}')
 
     # 4. CPU Usage
     lines.append('# HELP netmon_cpu_usage_percent CPU utilization percentage')
@@ -556,7 +559,7 @@ def prometheus_metrics():
     for d in devices:
         cpu = d.get('cpu_usage')
         if cpu is not None:
-            lines.append(f'netmon_cpu_usage_percent{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {cpu}')
+            lines.append(f'netmon_cpu_usage_percent{{id="{d["id"]}",name="{_pe(d["name"])}",ip="{_pe(d["ip"])}"}} {cpu}')
 
     # 5. Memory Usage
     lines.append('# HELP netmon_memory_usage_percent Memory utilization percentage')
@@ -564,7 +567,7 @@ def prometheus_metrics():
     for d in devices:
         mem = d.get('memory_usage')
         if mem is not None:
-            lines.append(f'netmon_memory_usage_percent{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {mem}')
+            lines.append(f'netmon_memory_usage_percent{{id="{d["id"]}",name="{_pe(d["name"])}",ip="{_pe(d["ip"])}"}} {mem}')
 
     # 6. Temperature
     lines.append('# HELP netmon_temperature_celsius Device temperature in Celsius')
@@ -572,7 +575,7 @@ def prometheus_metrics():
     for d in devices:
         temp = d.get('temperature')
         if temp is not None:
-            lines.append(f'netmon_temperature_celsius{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {temp}')
+            lines.append(f'netmon_temperature_celsius{{id="{d["id"]}",name="{_pe(d["name"])}",ip="{_pe(d["ip"])}"}} {temp}')
 
     # 7. Traffic WAN
     lines.append('# HELP netmon_traffic_in_bps Inbound WAN traffic in bits per second')
@@ -583,9 +586,9 @@ def prometheus_metrics():
         wan_in = d.get('wan_in')
         wan_out = d.get('wan_out')
         if wan_in is not None:
-            lines.append(f'netmon_traffic_in_bps{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {wan_in}')
+            lines.append(f'netmon_traffic_in_bps{{id="{d["id"]}",name="{_pe(d["name"])}",ip="{_pe(d["ip"])}"}} {wan_in}')
         if wan_out is not None:
-            lines.append(f'netmon_traffic_out_bps{{id="{d["id"]}",name="{d["name"]}",ip="{d["ip"]}"}} {wan_out}')
+            lines.append(f'netmon_traffic_out_bps{{id="{d["id"]}",name="{_pe(d["name"])}",ip="{_pe(d["ip"])}"}} {wan_out}')
 
     response_text = '\n'.join(lines) + '\n'
     from flask import Response
@@ -599,20 +602,11 @@ def get_device_downtime_forensics(device_id):
         
     history = db.get_downtime_analysis(device_id, limit=5)
     
-    # Check if the device is ONLINE but SNMP is unreachable (snmp_enabled but cpu_usage is None)
+    # Check if the device is ONLINE but SNMP is unreachable (tracked live in snmp_worker._snmp_failing)
     is_snmp_unreachable = False
     if device.get('status') == 'up' and device.get('snmp_enabled') == 1:
-        # Check if we have received any SNMP metrics in the last 3 minutes.
-        # If the device is UP but no metrics are flowing, SNMP is failing.
-        with db.conn() as c:
-            recent_metric = c.execute('''
-                SELECT 1 FROM snmp_metrics 
-                WHERE device_id = ? AND metric_name = 'cpu_usage' 
-                AND timestamp >= datetime('now', '-3 minutes')
-                LIMIT 1
-            ''', (device_id,)).fetchone()
-            if not recent_metric:
-                is_snmp_unreachable = True
+        if device.get('ip') in snmp_worker._snmp_failing:
+            is_snmp_unreachable = True
                            
     if is_snmp_unreachable:
         latest = {
@@ -774,7 +768,7 @@ def get_device_downtime_forensics(device_id):
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
             payload = {
-                "model": "openai/gpt-oss-120b",
+                "model": "llama-3.3-70b-versatile",
                 "response_format": {"type": "json_object"},
                 "messages": [
                     {
@@ -909,7 +903,9 @@ def upload_floorplan():
     ext = f.filename.rsplit('.', 1)[-1].lower()
     if ext not in ('png', 'jpg', 'jpeg', 'gif', 'svg'):
         return jsonify({'error': 'Invalid file type'}), 400
-    path = os.path.join('static', 'img', f'floorplan.{ext}')
+    target_dir = os.path.join(app.root_path, 'static', 'img')
+    os.makedirs(target_dir, exist_ok=True)
+    path = os.path.join(target_dir, f'floorplan.{ext}')
     f.save(path)
     return jsonify({'status': 'success', 'url': f'/static/img/floorplan.{ext}'})
 
@@ -1132,7 +1128,7 @@ def test_groq():
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         payload = {
-            "model": "openai/gpt-oss-120b",
+            "model": "llama-3.3-70b-versatile",
             "messages": [
                 {"role": "user", "content": "Say 'OK' and nothing else."}
             ],

@@ -106,6 +106,7 @@ class SNMPWorker:
         self._pending_analysis = {}
         self._metric_history = {}
         self._last_anomaly_alert = {}
+        self._speed_detected = {}
 
     def get_scan_status(self): return dict(self._status)
     def stop_scan(self):       self._stop.set()
@@ -1569,20 +1570,18 @@ class SNMPWorker:
         if not traffic:
             return None
 
-        # 3. Auto-detect physical interface uplink speed
+        # 3. Auto-detect physical interface uplink speed (cached, reusing existing walk)
         try:
-            # Pindai seluruh nama, status, dan kecepatan interface aktif
-            if_names = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.2', port, version)
-            if_statuses = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.8', port, version)
-            if_high_speeds = self._walk(ip, community, '1.3.6.1.2.1.31.1.1.1.15', port, version) # ifHighSpeed (Mbps)
-            if_low_speeds = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.5', port, version)     # ifSpeed (bps)
-            
-            max_detected_speed = 0
-            
-            if if_names and if_statuses:
-                for oid, name in if_names.items():
+            should_detect_speed = (did not in self._speed_detected) or (time.time() - self._speed_detected.get(did, 0) > 3600) or (not device.get('uplink_speed_mbps'))
+            if should_detect_speed and if_desc and if_st:
+                self._speed_detected[did] = time.time()
+                if_high_speeds = self._walk(ip, community, '1.3.6.1.2.1.31.1.1.1.15', port, version) # ifHighSpeed (Mbps)
+                if_low_speeds = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.5', port, version)     # ifSpeed (bps)
+                
+                max_detected_speed = 0
+                for oid, name in if_desc.items():
                     idx = oid.split('.')[-1]
-                    status = str(if_statuses.get(f"1.3.6.1.2.1.2.2.1.8.{idx}", ""))
+                    status = str(if_st.get(f"1.3.6.1.2.1.2.2.1.8.{idx}", ""))
                     if status == '1': # Hanya interface aktif (OperStatus UP)
                         name_lower = str(name).lower()
                         
@@ -1591,8 +1590,8 @@ class SNMPWorker:
                             continue
                             
                         # Dapatkan kecepatan link
-                        h_speed = if_high_speeds.get(f"1.3.6.1.2.1.31.1.1.1.15.{idx}")
-                        l_speed = if_low_speeds.get(f"1.3.6.1.2.1.2.2.1.5.{idx}")
+                        h_speed = if_high_speeds.get(f"1.3.6.1.2.1.31.1.1.1.15.{idx}") if if_high_speeds else None
+                        l_speed = if_low_speeds.get(f"1.3.6.1.2.1.2.2.1.5.{idx}") if if_low_speeds else None
                         
                         speed_mbps = 0
                         if h_speed is not None:
@@ -1604,25 +1603,23 @@ class SNMPWorker:
                             
                         if speed_mbps > max_detected_speed:
                             max_detected_speed = speed_mbps
-            
-            if max_detected_speed > 0:
-                # Bulatkan ke standar kecepatan fisik umum (100M, 1G, 2.5G, 5G, 10G, 25G, 40G, 100G)
-                standard_speeds = [100, 1000, 2500, 5000, 10000, 25000, 40000, 100000]
-                closest_speed = min(standard_speeds, key=lambda x: abs(x - max_detected_speed))
                 
-                # Toleransi pembulatan 20%
-                if abs(closest_speed - max_detected_speed) / closest_speed <= 0.2:
-                    final_speed = closest_speed
-                else:
-                    final_speed = max_detected_speed
+                if max_detected_speed > 0:
+                    standard_speeds = [100, 1000, 2500, 5000, 10000, 25000, 40000, 100000]
+                    closest_speed = min(standard_speeds, key=lambda x: abs(x - max_detected_speed))
+                    
+                    if abs(closest_speed - max_detected_speed) / closest_speed <= 0.2:
+                        final_speed = closest_speed
+                    else:
+                        final_speed = max_detected_speed
 
-                with self.db_write_lock:
-                    cur_dev = self.db.get_device(did)
-                    if cur_dev and cur_dev.get('uplink_speed_mbps') != final_speed:
-                        self.db.update_device(did, {'uplink_speed_mbps': final_speed})
-                        print(f"[Speed Auto-Detect] Updated {cur_dev.get('name', ip)} uplink capacity to {final_speed} Mbps (raw max: {max_detected_speed} Mbps)")
+                    with self.db_write_lock:
+                        cur_dev = self.db.get_device(did)
+                        if cur_dev and (not cur_dev.get('uplink_speed_mbps') or cur_dev.get('uplink_speed_mbps') == 1000):
+                            self.db.update_device(did, {'uplink_speed_mbps': final_speed})
+                            print(f"[Speed Auto-Detect] Updated {cur_dev.get('name', ip)} uplink capacity to {final_speed} Mbps")
         except Exception as se:
-            print(f"[Speed Auto-Detect] Error scanning active physical interface speeds: {se}")
+            print(f"[Speed Auto-Detect] Error scanning interface speeds: {se}")
             
         try:
             in_octets = None
@@ -2042,16 +2039,18 @@ class SNMPWorker:
             did = device['id']
             ip = device['ip']
             
-            # 1. Parse times
+            # 1. Parse times with robust normalization for SQLite dates
             try:
-                down_t = datetime.fromisoformat(down_time_str)
-                up_t = datetime.fromisoformat(up_time_str)
+                down_clean = str(down_time_str).replace(' ', 'T').replace('Z', '')
+                up_clean = str(up_time_str).replace(' ', 'T').replace('Z', '')
+                down_t = datetime.fromisoformat(down_clean)
+                up_t = datetime.fromisoformat(up_clean)
                 duration_sec = int((up_t - down_t).total_seconds())
             except Exception:
                 duration_sec = 0
             
             if duration_sec <= 0:
-                return
+                duration_sec = 30 # Default minimum duration if event was transient or parsing fell back
             
             # 2. Analyze Ping Pattern from history
             ping_history = self._ping_history.get(ip, [])

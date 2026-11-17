@@ -69,3 +69,20 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
      - Mengatasi masalah alert berulang pada perangkat tertentu (seperti `172.17.17.21`) yang dipicu oleh paket SNMP drop minor sementara koneksi ICMP ping normal.
      - Menerapkan counter kegagalan berurutan (`_consecutive_snmp_fails` dan `_consecutive_ping_fails`). Alert warning "SNMP unreachable" hanya akan dipicu jika kegagalan SNMP terjadi minimal 2 siklus berturut-turut (`fail_count >= 2`), mencegah false alarm akibat paket drop sporadis.
      - Reset instan counter ketika perangkat merespons SNMP dengan sukses.
+
+9. **Audit Komprehensif Seluruh Bug & Remediasi Multi-Komponen (15 Bug Fixed):**
+   - **BUG-01 (Groq Model):** Mengganti model `openai/gpt-oss-120b` (invalid 400 error) ke model resmi `llama-3.3-70b-versatile` pada seluruh endpoint AI (`ai_detector.py`, `app.py`, `database.py`).
+   - **BUG-02 (Race Condition):** Mengeliminasi *race condition* dispatch notifikasi Telegram melalui evaluasi heuristik sinkron cepat (`evaluate_heuristics`) sebelum pesan dikirimkan.
+   - **BUG-03 (Broken SNMP Ping):** Memperbaiki konstruktor dan coroutine `_snmp_ping` pada `ai_detector.py` menggunakan wrapper `puresnmp` PyWrapper dan kredensial V1/V2C yang valid.
+   - **BUG-04 (False Alarm Misclassification):** Mengoreksi logika klasifikasi false alarm agar insiden pemadaman massal (switch mati / mati lampu) tidak disalahartikan sebagai kendala WSL di lingkungan Linux produksi.
+   - **BUG-05 (Floorplan Upload):** Menambahkan auto-create direktori `static/img` pada `upload_floorplan` untuk mencegah error HTTP 500 saat upload denah.
+   - **BUG-06 (Telegram Callback):** Menangani callback query inline button `cmd:down` pada `telegram_bot.py`.
+   - **BUG-07 (Database Method):** Mengimplementasikan method `Database.get_zone(zone_id)` yang sebelumnya hilang agar label zona pada alert Telegram tidak kosong.
+   - **BUG-08 (SNMP Walk Overhead):** Mengeliminasi 4x SNMP walk redundan tiap 30 detik pada router traffic polling dengan caching 1 jam serta proteksi setting manual `uplink_speed_mbps`.
+   - **BUG-09 (Date Parsing):** Melakukan normalisasi string tanggal SQLite (`replace(' ', 'T')`) pada `analyze_downtime_event` agar kompatibel dengan Python 3.9/3.10.
+   - **BUG-10 (Downtime Forensics Modal):** Memperbaiki deteksi "SNMP Unreachable" pada modal web menggunakan `snmp_worker._snmp_failing` alih-alih ketergantungan semu pada metrik CPU.
+   - **BUG-11 (Telegram Down Column):** Mengoreksi pemanggilan nama kolom `type` pada perintah Telegram `/down`.
+   - **BUG-12 (Unack Count Discrepancy):** Menyelaraskan filter `is_false_alarm=0` pada `Database.get_unack_count()`.
+   - **BUG-13 (Prometheus Escaping):** Melakukan sanitasi dan escaping karakter kutip ganda pada Prometheus exporter `/metrics`.
+   - **BUG-14 (Telegram Devices Key):** Menyaring key internal `_total` pada output perintah Telegram `/devices`.
+   - **BUG-15 (Schema Consistency):** Menambahkan kolom `wan_in` pada skema awal tabel `devices`.

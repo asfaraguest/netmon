@@ -329,6 +329,12 @@ class TelegramBot:
             else:
                 self.answer_callback_query(cq_id, text="⚠️ Perangkat tidak ditemukan atau worker belum siap.")
 
+        elif data.startswith("cmd:"):
+            action = data.split(":", 1)[1]
+            if action == "down":
+                self.answer_callback_query(cq_id)
+                self._cmd_down(chat_id)
+
     def _run_poll_and_notify(self, chat_id, device):
         """Poll device and reply with updated status."""
         try:
@@ -462,7 +468,7 @@ class TelegramBot:
             for d in down_devs:
                 name = d.get('name') or d.get('ip')
                 ip = d.get('ip')
-                dtype = d.get('device_type') or 'Unknown'
+                dtype = d.get('type') or 'Unknown'
                 last_seen = d.get('last_seen') or 'Belum pernah'
                 text += (
                     f"• <b>{name}</b> ({ip})\n"
@@ -481,8 +487,12 @@ class TelegramBot:
 
             text = "🖥 <b>Ringkasan Perangkat Terdaftar:</b>\n\n"
             text += "<b>Berdasarkan Tipe:</b>\n"
+            total_devs = counts.get('_total', len(devices))
             for t, cnt in counts.items():
+                if t.startswith('_'):
+                    continue
                 text += f"• {t.capitalize()}: <b>{cnt}</b>\n"
+            text += f"• <b>Total:</b> <b>{total_devs}</b> perangkat\n"
 
             text += "\n<b>Berdasarkan Zona:</b>\n"
             for z in zones:
