@@ -101,6 +101,8 @@ class SNMPWorker:
         self._ping_history = {}
         self._latest_ping = {}
         self._snmp_failing = set()
+        self._consecutive_snmp_fails = {}
+        self._consecutive_ping_fails = {}
         self._pending_analysis = {}
         self._metric_history = {}
         self._last_anomaly_alert = {}
@@ -291,11 +293,13 @@ class SNMPWorker:
                 if res:
                     return res
         except (SnmpTimeout, asyncio.TimeoutError) as e:
-            print(f"[SNMP multiget timeout] {ip}: {e}")
-            return None
+            # Device may not support multiple varbinds in 1 PDU or dropped the multiget packet.
+            # Fall through to individual gets below!
+            pass
         except Exception as e:
-            print(f"[SNMP multiget error] {ip}: {e}")
-        # Fallback to individual gets if multiget fails
+            pass
+
+        # Fallback to individual gets if multiget fails or times out
         for oid in oids:
             try:
                 val = await c.get(oid)
@@ -313,23 +317,25 @@ class SNMPWorker:
                 if str_val.lower() in ('nosuchobject', 'nosuchinstance', 'endofmibview', 'none'):
                     continue
                 res[oid] = str_val
-            except (SnmpTimeout, asyncio.TimeoutError) as e:
-                print(f"[SNMP individual get timeout] {ip} (OID {oid}): {e}")
-                break
-            except Exception as e:
-                print(f"[SNMP individual get error] {ip} (OID {oid}): {e}")
+            except (SnmpTimeout, asyncio.TimeoutError):
+                continue
+            except Exception:
+                continue
         return res if res else None
 
     def _get(self, ip, community, oids, port=161, version='2c', timeout=2):
         if not SNMP_OK: return None
-        for attempt in range(1):
+        for attempt in range(2):
             try:
                 coro = self._async_get(ip, community, oids, port, version, timeout)
                 res = asyncio.run(coro)
                 if res:
                     return res
+                if attempt == 0:
+                    time.sleep(0.5)
             except Exception as e:
-                print(f"[SNMP _get error] {ip} (attempt {attempt + 1}): {e}")
+                if attempt == 0:
+                    time.sleep(0.5)
         return None
 
     async def _async_walk(self, ip, community, base_oid, port, version, timeout):
@@ -373,7 +379,7 @@ class SNMPWorker:
         is_win = platform.system().lower() == 'windows'
         param = '-n' if is_win else '-c'
         timeout_param = '-w' if is_win else '-W'
-        timeout_val = '1000' if is_win else '1'
+        timeout_val = '1500' if is_win else '2'
         
         cmd = ['ping', param, '2', timeout_param, timeout_val, ip]
         try:
@@ -387,7 +393,7 @@ class SNMPWorker:
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.PIPE, 
                 startupinfo=startupinfo, 
-                timeout=3.0,
+                timeout=5.0,
                 text=True
             )
             out = (res.stdout or '') + (res.stderr or '')
@@ -846,6 +852,8 @@ class SNMPWorker:
                     upd['last_seen'] = now
 
                 self._snmp_failing.discard(ip)
+                self._consecutive_snmp_fails[ip] = 0
+                self._consecutive_ping_fails[ip] = 0
                 self.db.update_device(did, upd)
                 if upd.get('uptime'):
                     self.db.save_metric(did, 'uptime', upd['uptime'])
@@ -877,6 +885,9 @@ class SNMPWorker:
                         upd['last_seen'] = now
                         self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE")
                         self.analyze_downtime_event(device, device.get('last_seen') or now, now, upd.get('uptime'))
+                    self._snmp_failing.discard(ip)
+                    self._consecutive_snmp_fails[ip] = 0
+                    self._consecutive_ping_fails[ip] = 0
                     self.db.update_device(did, upd)
                     is_alive = True
                 else:
@@ -897,6 +908,7 @@ class SNMPWorker:
 
             if is_alive:
                 # Device reachable via ping but SNMP is not responding (or revived above). Keep existing metrics.
+                self._consecutive_ping_fails[ip] = 0
                 p_stat = self._latest_ping.get(ip, {})
                 with self.db_write_lock:
                     upd = {'status': 'up', 'last_polled': now}
@@ -915,13 +927,16 @@ class SNMPWorker:
                         upd['last_seen'] = now
                     # Only alert if SNMP was the one that actually failed (we didn't revive SNMP in verify block)
                     if not result:
-                        if ip not in self._snmp_failing:
-                            self._alert(device, 'warning', f"SNMP unreachable on {device.get('name',ip)} ({ip}) — check community/config")
-                            self._snmp_failing.add(ip)
+                        fail_count = self._consecutive_snmp_fails.get(ip, 0) + 1
+                        self._consecutive_snmp_fails[ip] = fail_count
+                        if fail_count >= 2:
+                            if ip not in self._snmp_failing:
+                                self._alert(device, 'warning', f"SNMP unreachable on {device.get('name',ip)} ({ip}) — check community/config")
+                                self._snmp_failing.add(ip)
                     else:
-                        if ip in self._snmp_failing:
-                            self._snmp_failing.remove(ip)
-                    print(f"[SNMP] FAILED for {ip} — device alive via ping but SNMP not responding")
+                        self._consecutive_snmp_fails[ip] = 0
+                        self._snmp_failing.discard(ip)
+                    print(f"[SNMP] FAILED for {ip} (consecutive: {self._consecutive_snmp_fails.get(ip, 0)}) — device alive via ping but SNMP not responding")
                     self.db.update_device(did, upd)
                     try:
                         full_dev = self.db.get_device(did)
@@ -931,6 +946,8 @@ class SNMPWorker:
                         pass
             else:
                 # Genuinely offline -> lempar notifikasi perangkat offline ke dashboard
+                fail_count = self._consecutive_ping_fails.get(ip, 0) + 1
+                self._consecutive_ping_fails[ip] = fail_count
                 with self.db_write_lock:
                     self._snmp_failing.discard(ip)
                     self._pending_analysis.pop(ip, None)
@@ -979,6 +996,7 @@ class SNMPWorker:
                     
             with self.db_write_lock:
                 if is_alive:
+                    self._consecutive_ping_fails[ip] = 0
                     p_stat = self._latest_ping.get(ip, {})
                     upd = {'status': 'up', 'last_polled': now}
                     if p_stat.get('latency_ms') is not None:
@@ -1002,6 +1020,8 @@ class SNMPWorker:
                     except Exception:
                         pass
                 else:
+                    fail_count = self._consecutive_ping_fails.get(ip, 0) + 1
+                    self._consecutive_ping_fails[ip] = fail_count
                     self._pending_analysis.pop(ip, None)
                     self.db.update_device(did, {'status':'down','last_polled':now,
                                                  'latency_ms': None, 'packet_loss': 100.0})

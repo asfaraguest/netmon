@@ -60,3 +60,12 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
    - Mekanisme cooldown pintar (5 menit per perangkat) untuk mencegah banjir alarm berulang saat anomali masih berlangsung.
    - Notifikasi instan via Telegram Bot dengan badge khusus (`⚡ ANOMALI TRAFFIC & RESOURCE SPIKE`) lengkap dengan diagnosa korelasi traffic & CPU.
    - Penambahan pengaturan ambang batas lonjakan (kelipatan baseline, min Mbps, ambang CPU, ambang RAM) pada antarmuka Web Settings.
+
+8. **Perbaikan Bug Polling SNMP & Stabilisasi Anti-Flapping Alert (`snmp_worker.py`):**
+   - Menghilangkan bug `return None` pada penanganan exception `SnmpTimeout` saat multiget: Kini sistem otomatis melakukan fallback graceful ke individual OID get (`c.get(oid)`) satu per satu tanpa langsung membatalkan query polling. Pada individual get, kegagalan 1 OID tidak memutus OID lainnya (`continue`).
+   - Peningkatan toleransi retry SNMP (`_get`): Mengubah pola polling dari single-attempt (`range(1)`) menjadi 2-attempt dengan jeda istirahat 0.5s antar percobaan.
+   - Penyesuaian ambang ICMP Ping pada Linux: Menaikkan parameter timeout ping `-W` dari 1s ke 2s dan timeout eksekusi subprocess ke 5.0s untuk mengakomodasi lonjakan beban jaringan/backup di dini hari tanpa false positive down.
+   - Mekanisme Consecutive Failure Threshold & Anti-Flapping:
+     - Mengatasi masalah alert berulang pada perangkat tertentu (seperti `172.17.17.21`) yang dipicu oleh paket SNMP drop minor sementara koneksi ICMP ping normal.
+     - Menerapkan counter kegagalan berurutan (`_consecutive_snmp_fails` dan `_consecutive_ping_fails`). Alert warning "SNMP unreachable" hanya akan dipicu jika kegagalan SNMP terjadi minimal 2 siklus berturut-turut (`fail_count >= 2`), mencegah false alarm akibat paket drop sporadis.
+     - Reset instan counter ketika perangkat merespons SNMP dengan sukses.
