@@ -682,8 +682,9 @@ function renderBackboneReportChart(points, isRawData = false) {
     ];
   }
   
-  const isDark = document.body.classList.contains('dark-mode') || document.documentElement.getAttribute('data-theme') === 'dark';
-  const tickColor = '#8e8e93';
+  const isLight = document.body.classList.contains('light-theme');
+  const isDark = !isLight;
+  const tickColor = isLight ? '#6e6e73' : '#8e8e93';
   const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
   
   const ctx = canvas.getContext('2d');
@@ -815,8 +816,9 @@ function renderIndividualRouterChart(canvasId, points, isRawData = false) {
     ];
   }
   
-  const isDark = document.body.classList.contains('dark-mode') || document.documentElement.getAttribute('data-theme') === 'dark';
-  const tickColor = '#8e8e93';
+  const isLight = document.body.classList.contains('light-theme');
+  const isDark = !isLight;
+  const tickColor = isLight ? '#6e6e73' : '#8e8e93';
   const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
   
   const ctx = canvas.getContext('2d');

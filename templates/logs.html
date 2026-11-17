@@ -240,6 +240,8 @@ function filterAccessTable() {
 
 // Real-time
 window.onNewAlert = (a) => { allAlerts.unshift(a); renderAlerts(allAlerts); document.getElementById('badge-unack').textContent = allAlerts.filter(x=>!x.acknowledged).length; };
+window.onAlertAcked = () => { loadAlerts(false); };
+window.onAllAlertsAcked = () => { loadAlerts(true); };
 
 // Export
 function exportLogs() {

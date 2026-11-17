@@ -245,6 +245,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const modalEl = document.getElementById('detailModal');
   if (modalEl) {
     detailModal = new bootstrap.Modal(modalEl);
+    modalEl.addEventListener('hidden.bs.modal', () => {
+      closeDetailModal();
+    });
   }
 });
 
@@ -257,12 +260,41 @@ function openDeviceDetail(id) {
   }
 
   activeDetailDeviceId = id;
+  const targetId = id; // Guard against race conditions
   renderStateTimeline(id);
   interfaceTrafficData = {};
   chartLabels = [];
   chartRxData = [];
   chartTxData = [];
   
+  // UI-BUG-10: Reset interface and clients containers to standard default immediately
+  const rtHeader = document.querySelector('#detailModal h6.m-0');
+  if (rtHeader) {
+    rtHeader.innerHTML = '<i class="bi bi-activity me-2 text-accent"></i>Real-time Traffic';
+  }
+  const legIn = document.getElementById('det-traffic-in');
+  const legOut = document.getElementById('det-traffic-out');
+  const legInWrapper = legIn ? legIn.closest('div') : null;
+  const legOutWrapper = legOut ? legOut.closest('div') : null;
+  if (legInWrapper) {
+    const labelSpan = legInWrapper.querySelector('.text-xs');
+    if (labelSpan && labelSpan.firstChild) labelSpan.firstChild.textContent = 'Inbound: ';
+  }
+  if (legIn) legIn.textContent = '0 bps';
+  if (legOut) legOut.textContent = '0 bps';
+  if (legOutWrapper) legOutWrapper.style.display = 'block';
+
+  const selectWrapper = document.getElementById('det-iface-select-wrapper');
+  if (selectWrapper) selectWrapper.style.removeProperty('display');
+  const interfacesCard = document.getElementById('det-interfaces-card');
+  if (interfacesCard) {
+    interfacesCard.style.removeProperty('display');
+    const cardTitle = interfacesCard.querySelector('h6');
+    if (cardTitle) {
+      cardTitle.innerHTML = '<i class="bi bi-ethernet me-2 text-accent"></i>Interface Status';
+    }
+  }
+
   const select = document.getElementById('det-iface-select');
   if (select) select.innerHTML = '<option value="">Loading ports…</option>';
   
@@ -284,15 +316,25 @@ function openDeviceDetail(id) {
   const tbody = document.getElementById('det-interfaces-tbody');
   if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4"><i class="bi bi-arrow-repeat spin me-1"></i>Loading interface data…</td></tr>';
   
-  // Try to find the device locally first
-  let dev = null;
-  if (typeof allDevices !== 'undefined' && Array.isArray(allDevices)) {
-    dev = allDevices.find(x => x.id === id);
-  }
-  
+  // UI-BUG-02: Safely destroy existing charts before opening
   if (trafficChartInstance) {
     trafficChartInstance.destroy();
     trafficChartInstance = null;
+  }
+  const chartCanvas = document.getElementById('trafficChart');
+  if (chartCanvas) {
+    const existingTraffic = Chart.getChart(chartCanvas);
+    if (existingTraffic) existingTraffic.destroy();
+  }
+
+  if (latencyChartInstance) {
+    latencyChartInstance.destroy();
+    latencyChartInstance = null;
+  }
+  const latCanvas = document.getElementById('latencyChart');
+  if (latCanvas) {
+    const existingLat = Chart.getChart(latCanvas);
+    if (existingLat) existingLat.destroy();
   }
 
   const startPolling = () => {
@@ -301,8 +343,13 @@ function openDeviceDetail(id) {
     fetchRealtimeStats();
     if (detailPollInterval) clearInterval(detailPollInterval);
     detailPollInterval = setInterval(fetchRealtimeStats, 3000);
-
   };
+
+  // Try to find the device locally first
+  let dev = null;
+  if (typeof allDevices !== 'undefined' && Array.isArray(allDevices)) {
+    dev = allDevices.find(x => x.id === id);
+  }
 
   if (dev) {
     activeDetailDeviceType = dev.type;
@@ -313,6 +360,8 @@ function openDeviceDetail(id) {
     fetch(`/api/devices/${id}`)
       .then(r => r.json())
       .then(data => {
+        // UI-BUG-03: Guard against race conditions when switching devices
+        if (activeDetailDeviceId !== targetId) return;
         activeDetailDeviceType = data.type;
         populateBasicFields(data);
         startPolling();
@@ -354,9 +403,24 @@ function closeDetailModal() {
     detailPollInterval = null;
   }
 
+  if (trafficChartInstance) {
+    trafficChartInstance.destroy();
+    trafficChartInstance = null;
+  }
+  const chartCanvas = document.getElementById('trafficChart');
+  if (chartCanvas) {
+    const existingTraffic = Chart.getChart(chartCanvas);
+    if (existingTraffic) existingTraffic.destroy();
+  }
+
   if (latencyChartInstance) {
     latencyChartInstance.destroy();
     latencyChartInstance = null;
+  }
+  const latCanvas = document.getElementById('latencyChart');
+  if (latCanvas) {
+    const existingLat = Chart.getChart(latCanvas);
+    if (existingLat) existingLat.destroy();
   }
 
   activeDetailDeviceId = null;
@@ -365,6 +429,13 @@ function closeDetailModal() {
 function initChart() {
   const chartCanvas = document.getElementById('trafficChart');
   if (!chartCanvas) return;
+  
+  if (trafficChartInstance) {
+    trafficChartInstance.destroy();
+    trafficChartInstance = null;
+  }
+  const existingChart = Chart.getChart(chartCanvas);
+  if (existingChart) existingChart.destroy();
   
   const ctx = chartCanvas.getContext('2d');
   const now = new Date();
@@ -443,11 +514,12 @@ function formatBandwidthSimple(bps) {
 
 function fetchRealtimeStats() {
   if (!activeDetailDeviceId) return;
+  const targetId = activeDetailDeviceId;
   
-  fetch(`/api/devices/${activeDetailDeviceId}/realtime_stats`)
+  fetch(`/api/devices/${targetId}/realtime_stats`)
     .then(r => r.json())
     .then(res => {
-      if (res.status !== 'success' || !activeDetailDeviceId) return;
+      if (res.status !== 'success' || activeDetailDeviceId !== targetId) return;
       
       const uptimeEl = document.getElementById('det-uptime');
       if (uptimeEl && res.uptime) uptimeEl.textContent = res.uptime;
@@ -852,19 +924,31 @@ document.addEventListener('DOMContentLoaded', () => {
     const tickColor = isLight ? '#6e6e73' : '#8b949e';
     const gridColor = isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.05)';
 
-    if (trafficChartInstance) {
-      if (trafficChartInstance.options && trafficChartInstance.options.scales) {
-        if (trafficChartInstance.options.scales.x && trafficChartInstance.options.scales.x.ticks) {
-          trafficChartInstance.options.scales.x.ticks.color = tickColor;
+    // Update all registered Chart.js instances across the entire page (UI-BUG-04)
+    if (typeof Chart !== 'undefined' && Chart.instances) {
+      Object.values(Chart.instances).forEach(chart => {
+        try {
+          if (chart && chart.options && chart.options.scales) {
+            if (chart.options.scales.x && chart.options.scales.x.ticks) {
+              chart.options.scales.x.ticks.color = tickColor;
+            }
+            if (chart.options.scales.y) {
+              if (chart.options.scales.y.ticks) chart.options.scales.y.ticks.color = tickColor;
+              if (chart.options.scales.y.grid) chart.options.scales.y.grid.color = gridColor;
+            }
+            if (chart.options.plugins && chart.options.plugins.tooltip) {
+              chart.options.plugins.tooltip.backgroundColor = isLight ? 'rgba(255, 255, 255, 0.95)' : 'rgba(20, 20, 20, 0.95)';
+              chart.options.plugins.tooltip.titleColor = isLight ? '#1d1d1f' : '#f5f5f7';
+              chart.options.plugins.tooltip.bodyColor = isLight ? '#4b5563' : '#8b949e';
+              chart.options.plugins.tooltip.borderColor = isLight ? '#e4e4e7' : '#30363d';
+            }
+            chart.update('none');
+          }
+        } catch (e) {
+          // ignore charts that cannot be dynamically updated
         }
-        if (trafficChartInstance.options.scales.y) {
-          if (trafficChartInstance.options.scales.y.ticks) trafficChartInstance.options.scales.y.ticks.color = tickColor;
-          if (trafficChartInstance.options.scales.y.grid) trafficChartInstance.options.scales.y.grid.color = gridColor;
-        }
-        trafficChartInstance.update();
-      }
+      });
     }
-
   }
 
   function updateThemeUI(isLight) {
@@ -904,7 +988,37 @@ document.addEventListener('DOMContentLoaded', () => {
     localStorage.setItem('theme', newLight ? 'light' : 'dark');
     updateThemeUI(newLight);
   });
+
+  // UI-BUG-07: Auto close mobile sidebar when navigating on mobile
+  document.querySelectorAll('.sidebar-nav .nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      if (window.innerWidth < 768) {
+        window.toggleMobileSidebar(true);
+      }
+    });
+  });
 });
+
+// UI-BUG-07: Centralized mobile sidebar toggle helper
+window.toggleMobileSidebar = function(forceClose = false) {
+  const sb = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  if (!sb || !overlay) return;
+  
+  if (forceClose) {
+    sb.classList.remove('show');
+    overlay.classList.remove('show');
+  } else {
+    const isShowing = sb.classList.contains('show');
+    if (isShowing) {
+      sb.classList.remove('show');
+      overlay.classList.remove('show');
+    } else {
+      sb.classList.add('show');
+      overlay.classList.add('show');
+    }
+  }
+};
 
 window.showConfirm = function(title, message, onConfirm) {
   const overlay = document.createElement('div');
@@ -1149,14 +1263,26 @@ window.loadLatencyChart = function() {
   if (!activeDetailDeviceId) return;
   const canvas = document.getElementById('latencyChart');
   if (!canvas) return;
+  const targetId = activeDetailDeviceId;
 
-  fetch(`/api/devices/${activeDetailDeviceId}/latency?hours=24`)
+  // Destroy previous instance immediately if existing
+  if (latencyChartInstance) {
+    latencyChartInstance.destroy();
+    latencyChartInstance = null;
+  }
+  const existingChart = Chart.getChart(canvas);
+  if (existingChart) existingChart.destroy();
+
+  fetch(`/api/devices/${targetId}/latency?hours=24`)
     .then(r => r.json())
     .then(points => {
+      if (activeDetailDeviceId !== targetId) return;
       if (latencyChartInstance) {
         latencyChartInstance.destroy();
         latencyChartInstance = null;
       }
+      const existingAfterFetch = Chart.getChart(canvas);
+      if (existingAfterFetch) existingAfterFetch.destroy();
       
       const isLight = document.body.classList.contains('light-theme');
       const tickColor = isLight ? '#6e6e73' : '#8b949e';

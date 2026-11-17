@@ -445,6 +445,32 @@ function runAnomalyCleanup() {
 }
 
 function saveAll() {
+  const pollVal = parseInt(getVal('s-poll'));
+  if (isNaN(pollVal) || pollVal < 10) {
+    showToast('Poll Interval minimal 10 detik', 'warning');
+    return;
+  }
+  const trafficPollVal = parseInt(getVal('s-traffic-poll'));
+  if (isNaN(trafficPollVal) || trafficPollVal < 5) {
+    showToast('Traffic Poll Interval minimal 5 detik', 'warning');
+    return;
+  }
+  const alertRet = parseInt(getVal('s-alert-ret'));
+  if (isNaN(alertRet) || alertRet < 1) {
+    showToast('Alert Retention minimal 1 hari', 'warning');
+    return;
+  }
+  const reportRet = parseInt(getVal('s-report-ret'));
+  if (isNaN(reportRet) || reportRet < 744) {
+    showToast('Report Retention minimal 744 jam (31 hari)', 'warning');
+    return;
+  }
+  const chartRet = parseInt(getVal('s-chart-ret'));
+  if (isNaN(chartRet) || chartRet < 1) {
+    showToast('Interface Chart Retention minimal 1 jam', 'warning');
+    return;
+  }
+
   const data = {
     poll_interval:        getVal('s-poll'),
     traffic_poll_interval: getVal('s-traffic-poll'),
