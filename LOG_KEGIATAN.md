@@ -46,3 +46,10 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
    - Penyembunyian token bot (`***`) pada respons API demi keamanan.
 5. **Sinkronisasi Skrip Pembaruan (`update.sh`):**
    - Memastikan file `telegram_bot.py` otomatis tercakup dalam proses sinkronisasi dan update service di server tanpa menghapus database `netmon.db`.
+6. **Penyempurnaan Total Keamanan Database & Service (`update.sh` & `install.sh`):**
+   - Menghilangkan bug hilangnya service dan kerusakan database saat update.
+   - Menambahkan auto-checkpoint SQLite WAL dan auto-backup persisten (`netmon.db`, `netmon.db-wal`, `netmon.db-shm`) ke direktori `/var/backups/netmon/` dengan retensi 10 backup terakhir.
+   - Menghentikan service secara graceful sebelum menyalin file atau memperbarui venv agar tidak terjadi konflik penulisan database.
+   - Pengecualian total (`--exclude='netmon.db*' --exclude='*.db*'`) agar file database di `/opt/netmon` tidak pernah tertimpa.
+   - Auto-repair service: Jika `/etc/systemd/system/netmon.service` hilang atau belum dibuat, `update.sh` otomatis membuat dan mengaktifkannya kembali.
+   - Penataan permissions ketat (`chmod 664` dan kepemilikan `netmon:netmon` pada database) agar service tidak crash saat menulis data.

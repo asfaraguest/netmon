@@ -308,7 +308,9 @@ print_summary() {
 # =============================================================
 main() {
   local backup_db=false
-  local db_backup_path="/tmp/db_netmon_backup.db"
+  local backup_dir="/var/backups/netmon"
+  mkdir -p "$backup_dir" 2>/dev/null || true
+  local db_backup_path="$backup_dir/install_backup_$(date +%Y%m%d_%H%M%S).db"
 
   banner
   check_root
@@ -318,7 +320,7 @@ main() {
     step "Existing NetMon installation detected!"
     info "Initiating automatic uninstallation before performing a fresh install..."
 
-    # 1. Backup database
+    # 1. Backup database (including WAL and SHM)
     if [[ -f "$INSTALL_DIR/netmon.db" ]]; then
       local reset_db_choice="N"
       if [[ -t 0 ]]; then
@@ -331,8 +333,11 @@ main() {
         info "Database akan direset (menggunakan database kosong baru)."
         backup_db=false
       else
-        info "Preserving database: backing up $INSTALL_DIR/netmon.db to $db_backup_path"
-        cp "$INSTALL_DIR/netmon.db" "$db_backup_path"
+        info "Preserving database: backing up $INSTALL_DIR/netmon.db* to $backup_dir"
+        cp -p "$INSTALL_DIR/netmon.db" "$db_backup_path"
+        [[ -f "$INSTALL_DIR/netmon.db-wal" ]] && cp -p "$INSTALL_DIR/netmon.db-wal" "${db_backup_path}-wal" 2>/dev/null || true
+        [[ -f "$INSTALL_DIR/netmon.db-shm" ]] && cp -p "$INSTALL_DIR/netmon.db-shm" "${db_backup_path}-shm" 2>/dev/null || true
+        cp -p "$INSTALL_DIR/netmon.db" "$backup_dir/netmon_latest.db" 2>/dev/null || true
         backup_db=true
       fi
     fi
@@ -385,9 +390,10 @@ main() {
   # Restore database if backed up or if a preserved database exists
   if [[ "$backup_db" == "true" && -f "$db_backup_path" ]]; then
     step "Restoring database"
-    cp "$db_backup_path" "$INSTALL_DIR/netmon.db"
-    rm -f "$db_backup_path"
-    success "Database restored to $INSTALL_DIR/netmon.db"
+    cp -p "$db_backup_path" "$INSTALL_DIR/netmon.db"
+    [[ -f "${db_backup_path}-wal" ]] && cp -p "${db_backup_path}-wal" "$INSTALL_DIR/netmon.db-wal" 2>/dev/null || true
+    [[ -f "${db_backup_path}-shm" ]] && cp -p "${db_backup_path}-shm" "$INSTALL_DIR/netmon.db-shm" 2>/dev/null || true
+    success "Database restored to $INSTALL_DIR/netmon.db (backup safely preserved at $db_backup_path)"
   elif [[ -f "/var/lib/netmon.db" ]]; then
     step "Preserved database found at /var/lib/netmon.db"
     local restore_preserved="Y"
