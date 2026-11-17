@@ -87,9 +87,10 @@ def parse_uptime_to_seconds(uptime_str):
         return 0
 
 class SNMPWorker:
-    def __init__(self, db, socketio):
+    def __init__(self, db, socketio, telegram_bot=None):
         self.db = db
         self.socketio = socketio
+        self.telegram_bot = telegram_bot
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._status = {'running':False,'progress':0,'total':0,'found':0,
@@ -1601,6 +1602,35 @@ class SNMPWorker:
             'created_at':datetime.now().isoformat()
         })
         self.socketio.emit('stats_update', self.db.get_dashboard_stats())
+
+        # Check alert from DB to inspect AI detector classification
+        is_false_alarm = 0
+        ai_analysis = None
+        try:
+            with self.db.conn() as c:
+                row = c.execute("SELECT is_false_alarm, ai_analysis FROM alerts WHERE id = ?", (aid,)).fetchone()
+                if row:
+                    is_false_alarm = row['is_false_alarm']
+                    ai_analysis = row['ai_analysis']
+        except Exception:
+            pass
+
+        # Send Telegram notification if alert is valid (not a false alarm)
+        if getattr(self, 'telegram_bot', None) and not is_false_alarm:
+            try:
+                is_recovery = (severity == 'info' and 'online' in message.lower())
+                alert_data = {
+                    'id': aid,
+                    'device_id': device['id'],
+                    'device_name': device.get('name', device.get('ip', '')),
+                    'device_ip': device.get('ip', ''),
+                    'severity': severity,
+                    'message': message,
+                    'ai_analysis': ai_analysis
+                }
+                self.telegram_bot.send_alert(alert_data, device=device, is_recovery=is_recovery)
+            except Exception as te:
+                print(f"[Telegram Alert] Failed to dispatch alert: {te}")
 
     # ─── network scan ────────────────────────────────────────────────
 

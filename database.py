@@ -265,6 +265,13 @@ class Database:
                 'interface_chart_retention_hours': '168',
                 'anomaly_cap_multiplier': '1.05',
                 'anomaly_cap_gbps': '5.0',
+                'telegram_enabled': 'false',
+                'telegram_bot_token': '',
+                'telegram_chat_ids': '',
+                'telegram_notify_down': 'true',
+                'telegram_notify_up': 'true',
+                'telegram_daily_digest_enabled': 'true',
+                'telegram_daily_digest_time': '08:00',
             }
             for k, v in defaults.items():
                 c.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (k, v))
@@ -611,6 +618,18 @@ class Database:
     def get_unack_count(self):
         with self.conn() as c:
             return c.execute('SELECT COUNT(*) FROM alerts WHERE acknowledged=0').fetchone()[0]
+
+    def get_active_alerts(self, limit=10):
+        with self.conn() as c:
+            rows = c.execute('''
+                SELECT id, device_id, device_name, device_ip, severity, message, details,
+                       acknowledged, ack_by, ack_at, is_false_alarm, ai_analysis, replica_count,
+                       strftime('%Y-%m-%d %H:%M:%S', created_at) AS created_at
+                FROM alerts
+                WHERE acknowledged = 0 AND is_false_alarm = 0
+                ORDER BY created_at DESC LIMIT ?
+            ''', (limit,)).fetchall()
+            return [dict(r) for r in rows]
 
     # ============================================================
     # ACCESS LOGS

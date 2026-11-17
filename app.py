@@ -14,13 +14,16 @@ from datetime import datetime
 from database import Database
 from snmp_worker import SNMPWorker
 from unifi_client import UniFiClient
+from telegram_bot import TelegramBot
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'netmon-secret-2024-change-me')
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False)
 
 db = Database()
-snmp_worker = SNMPWorker(db, socketio)
+telegram_bot = TelegramBot(db, socketio)
+snmp_worker = SNMPWorker(db, socketio, telegram_bot=telegram_bot)
+telegram_bot.snmp_worker = snmp_worker
 scheduler = BackgroundScheduler(daemon=True)
 
 @app.context_processor
@@ -1028,6 +1031,8 @@ def get_settings():
         s['unifi_pass'] = '***' if s['unifi_pass'] else ''
     if 'groq_api_key' in s:
         s['groq_api_key'] = '***' if s['groq_api_key'] else ''
+    if 'telegram_bot_token' in s:
+        s['telegram_bot_token'] = '***' if s['telegram_bot_token'] else ''
     return jsonify(s)
 
 @app.route('/api/settings', methods=['POST'])
@@ -1038,6 +1043,8 @@ def save_settings():
         data.pop('unifi_pass')
     if data.get('groq_api_key') == '***':
         data.pop('groq_api_key')
+    if data.get('telegram_bot_token') == '***':
+        data.pop('telegram_bot_token')
     db.save_settings(data)
     if 'poll_interval' in data:
         try:
@@ -1049,7 +1056,50 @@ def save_settings():
             scheduler.reschedule_job('traffic_poll', trigger='interval', seconds=max(5, int(data['traffic_poll_interval'])))
         except Exception:
             pass
+    if 'telegram_daily_digest_time' in data:
+        try:
+            d_time = (data.get('telegram_daily_digest_time') or '08:00').strip()
+            dh, dm = [int(x) for x in d_time.split(':')]
+            scheduler.reschedule_job('telegram_daily_digest', trigger='cron', hour=dh, minute=dm)
+        except Exception:
+            pass
+
+    # Reload Telegram bot configuration
+    try:
+        telegram_bot.reload_config()
+    except Exception as te:
+        print(f"[Telegram] Reload config failed: {te}")
+
     return jsonify({'status': 'success'})
+
+@app.route('/api/telegram/test', methods=['POST'])
+def test_telegram():
+    data = request.json or {}
+    token = data.get('telegram_bot_token')
+    chat_ids = data.get('telegram_chat_ids')
+    
+    if not token or token == '***':
+        settings = db.get_settings()
+        token = settings.get('telegram_bot_token', '')
+
+    if not token:
+        return jsonify({'status': 'error', 'message': 'Bot Token belum diisi'}), 400
+
+    result = telegram_bot.test_connection(token=token, chat_ids=chat_ids)
+    if result.get('status') == 'error':
+        return jsonify(result), 400
+    return jsonify(result)
+
+@app.route('/api/telegram/status', methods=['GET'])
+def get_telegram_status():
+    return jsonify({
+        'enabled': telegram_bot.enabled,
+        'running': telegram_bot.is_running,
+        'bot_username': telegram_bot.bot_info.get('username'),
+        'bot_name': telegram_bot.bot_info.get('first_name'),
+        'chat_count': len(telegram_bot.chat_ids),
+        'chat_ids': telegram_bot.chat_ids
+    })
 
 @app.route('/api/settings/cleanup-anomalies', methods=['POST'])
 def cleanup_traffic_anomalies():
@@ -1300,6 +1350,16 @@ def run_weekly_vacuum():
     except Exception as e:
         print(f"[Vacuum Cron] Failed: {e}")
 
+def run_telegram_daily_digest():
+    print("[Telegram Digest Cron] Running daily digest...")
+    try:
+        s = db.get_settings()
+        if s.get('telegram_enabled', 'false') == 'true' and s.get('telegram_daily_digest_enabled', 'true') == 'true':
+            telegram_bot.send_daily_digest()
+            print("[Telegram Digest Cron] Daily digest sent successfully!")
+    except Exception as e:
+        print(f"[Telegram Digest Cron] Failed: {e}")
+
 if __name__ == '__main__':
     settings = db.get_settings()
     poll_interval = max(10, int(settings.get('poll_interval', 30)))
@@ -1309,6 +1369,15 @@ if __name__ == '__main__':
     # Automatically generate monthly report at 23:50 on the last day of the month before oldest data prunes
     scheduler.add_job(run_monthly_report_cron, 'cron', day='last', hour=23, minute=50, id='monthly_report_cron')
     scheduler.add_job(run_weekly_vacuum, 'cron', day_of_week='sun', hour=3, minute=0, id='weekly_vacuum')
+    
+    # Telegram daily digest schedule
+    digest_time = (settings.get('telegram_daily_digest_time') or '08:00').strip()
+    try:
+        d_hour, d_min = [int(x) for x in digest_time.split(':')]
+    except Exception:
+        d_hour, d_min = 8, 0
+    scheduler.add_job(run_telegram_daily_digest, 'cron', hour=d_hour, minute=d_min, id='telegram_daily_digest')
+
     scheduler.start()
     port = int(os.environ.get('PORT', 5000))
     host = os.environ.get('HOST', '0.0.0.0')

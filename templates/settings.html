@@ -153,6 +153,68 @@
     </div>
   </div>
 
+  <!-- ============ TELEGRAM BOT ============ -->
+  <div class="nm-panel">
+    <div class="panel-header">
+      <span><i class="bi bi-telegram me-2 text-accent"></i>Telegram Bot Integration</span>
+      <button class="btn-nm btn-sm" onclick="testTelegram()"><i class="bi bi-send-fill me-1"></i>Test Connection</button>
+    </div>
+    <div class="panel-body">
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="nm-label">Aktifkan Telegram Bot</label>
+          <div class="nm-toggle-wrap">
+            <label class="nm-toggle"><input type="checkbox" id="s-tg-enabled"><span class="nm-slider"></span></label>
+            <span>Aktifkan notifikasi alert instan & bot interaktif</span>
+          </div>
+        </div>
+        <div class="col-12">
+          <label class="nm-label">Bot Token (dari @BotFather)</label>
+          <input type="password" class="nm-input" id="s-tg-token" placeholder="Contoh: 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ">
+          <small class="text-muted">Dapatkan token bot dari @BotFather di Telegram.</small>
+        </div>
+        <div class="col-12">
+          <label class="nm-label">Authorized Chat IDs / Group IDs</label>
+          <input type="text" class="nm-input" id="s-tg-chats" placeholder="Contoh: 123456789, -100987654321">
+          <small class="text-muted">ID pengguna atau grup tujuan (pisahkan dengan koma). Chat yang belum terdaftar tidak dapat mengirim perintah ke bot.</small>
+        </div>
+        <div class="col-md-6 col-12">
+          <label class="nm-label">Notifikasi Saat Perangkat DOWN</label>
+          <div class="nm-toggle-wrap">
+            <label class="nm-toggle"><input type="checkbox" id="s-tg-down" checked><span class="nm-slider"></span></label>
+            <span>Kirim alert instan saat perangkat Down</span>
+          </div>
+        </div>
+        <div class="col-md-6 col-12">
+          <label class="nm-label">Notifikasi Pemulihan (UP)</label>
+          <div class="nm-toggle-wrap">
+            <label class="nm-toggle"><input type="checkbox" id="s-tg-up" checked><span class="nm-slider"></span></label>
+            <span>Kirim notifikasi saat perangkat kembali online</span>
+          </div>
+        </div>
+        <div class="col-md-6 col-12">
+          <label class="nm-label">Daily Digest (Rekap Harian)</label>
+          <div class="nm-toggle-wrap">
+            <label class="nm-toggle"><input type="checkbox" id="s-tg-digest" checked><span class="nm-slider"></span></label>
+            <span>Kirim rekap harian status jaringan otomatis</span>
+          </div>
+        </div>
+        <div class="col-md-6 col-12">
+          <label class="nm-label">Waktu Daily Digest (HH:MM)</label>
+          <input type="time" class="nm-input" id="s-tg-digest-time" value="08:00">
+          <small class="text-muted">Jadwal pengiriman rekap harian (WIB).</small>
+        </div>
+        <div class="col-12">
+          <div class="p-2 border rounded" style="background: rgba(255,255,255,0.03); font-size: 0.82rem;">
+            <i class="bi bi-info-circle-fill text-info me-1"></i>
+            <b>Cara mendapatkan Chat ID:</b> Buka bot Anda di Telegram lalu kirim <code>/start</code> atau <code>/myid</code>. Bot akan membalas dengan Chat ID Anda, atau gunakan bot <code>@userinfobot</code>.
+          </div>
+        </div>
+      </div>
+      <div id="tg-test-result" class="mt-2"></div>
+    </div>
+  </div>
+
   <!-- ============ UNIFI ============ -->
   <div class="nm-panel">
     <div class="panel-header">
@@ -297,6 +359,13 @@ function loadSettings() {
     setChk('s-alert-down', s.alert_on_down !== 'false');
     setChk('s-alert-up',   s.alert_on_up   !== 'false');
     setVal('s-groq-key',   s.groq_api_key || '');
+    setChk('s-tg-enabled', s.telegram_enabled === 'true');
+    setVal('s-tg-token',   s.telegram_bot_token || '');
+    setVal('s-tg-chats',   s.telegram_chat_ids || '');
+    setChk('s-tg-down',    s.telegram_notify_down !== 'false');
+    setChk('s-tg-up',      s.telegram_notify_up !== 'false');
+    setChk('s-tg-digest',  s.telegram_daily_digest_enabled !== 'false');
+    setVal('s-tg-digest-time', s.telegram_daily_digest_time || '08:00');
     setVal('s-uf-host',    s.unifi_host || '');
     setVal('s-uf-port',    s.unifi_port || 8443);
     setVal('s-uf-site',    s.unifi_site || 'default');
@@ -356,6 +425,12 @@ function saveAll() {
     anomaly_cap_gbps: getVal('s-anom-cap'),
     alert_on_down:        document.getElementById('s-alert-down').checked ? 'true' : 'false',
     alert_on_up:          document.getElementById('s-alert-up').checked   ? 'true' : 'false',
+    telegram_enabled:     document.getElementById('s-tg-enabled').checked ? 'true' : 'false',
+    telegram_chat_ids:    getVal('s-tg-chats'),
+    telegram_notify_down: document.getElementById('s-tg-down').checked ? 'true' : 'false',
+    telegram_notify_up:   document.getElementById('s-tg-up').checked   ? 'true' : 'false',
+    telegram_daily_digest_enabled: document.getElementById('s-tg-digest').checked ? 'true' : 'false',
+    telegram_daily_digest_time:   getVal('s-tg-digest-time') || '08:00',
     unifi_host:           getVal('s-uf-host'),
     unifi_port:           getVal('s-uf-port'),
     unifi_site:           getVal('s-uf-site'),
@@ -369,12 +444,44 @@ function saveAll() {
   if (gkey && gkey !== '***') data.groq_api_key = gkey;
   else if (gkey === '') data.groq_api_key = '';
 
+  const tgToken = getVal('s-tg-token');
+  if (tgToken && tgToken !== '***') data.telegram_bot_token = tgToken;
+  else if (tgToken === '') data.telegram_bot_token = '';
+
   fetch('/api/settings', {
     method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
   }).then(r=>r.json()).then(() => {
     showToast('Settings saved', 'success');
     setTimeout(() => location.reload(), 800);
   }).catch(() => showToast('Error saving settings', 'danger'));
+}
+
+function testTelegram() {
+  const res = document.getElementById('tg-test-result');
+  res.innerHTML = '<div class="text-muted text-sm"><i class="bi bi-arrow-repeat spin me-1"></i>Menghubungi Telegram API…</div>';
+  const data = {
+    telegram_bot_token: getVal('s-tg-token'),
+    telegram_chat_ids:  getVal('s-tg-chats')
+  };
+  fetch('/api/telegram/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.status === 'success') {
+      res.innerHTML = `<div class="text-success text-sm"><i class="bi bi-check-circle-fill me-1"></i>${d.message}</div>`;
+      showToast('Koneksi Telegram berhasil!', 'success');
+    } else {
+      res.innerHTML = `<div class="text-danger text-sm"><i class="bi bi-x-circle-fill me-1"></i>${d.message}</div>`;
+      showToast(d.message || 'Koneksi Telegram gagal', 'danger');
+    }
+  })
+  .catch(() => {
+    res.innerHTML = '<div class="text-danger text-sm"><i class="bi bi-x-circle-fill me-1"></i>Gagal menghubungi server NetMon.</div>';
+    showToast('Koneksi gagal', 'danger');
+  });
 }
 
 function testUnifi() {

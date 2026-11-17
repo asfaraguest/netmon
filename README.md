@@ -132,6 +132,40 @@ python app.py
 - **Default Community**: SNMP community string (default `public`)
 - **UniFi Credentials**: Host, port, username, password, site
 - **Alert Rules**: Toggle alerts on device down/recovery
+- **Telegram Bot**: Bot Token, Whitelisted Chat IDs, Down/Up Alerts, Daily Digest schedule
+
+---
+
+## 🤖 Telegram Bot Integration
+
+NetMon dilengkapi modul bot Telegram interaktif 2-arah native (tanpa dependensi eksternal tambahan) yang mendukung pengiriman alert instan, eksekusi perintah monitoring, dan laporan rekap harian otomatis.
+
+### 1. Konfigurasi Bot
+1. Buat bot baru melalui [@BotFather](https://t.me/BotFather) di Telegram dengan perintah `/newbot` dan simpan token yang diberikan.
+2. Buka dashboard NetMon di browser, navigasi ke menu **Settings** > **Telegram Bot Integration**.
+3. Centang opsi **Aktifkan Telegram Bot**.
+4. Tempel **Bot Token** pada kolom yang tersedia.
+5. Untuk mendapatkan **Chat ID**, kirim `/start` atau `/myid` ke bot Anda di Telegram (atau gunakan `@userinfobot`), lalu masukkan Chat ID tersebut ke kolom **Authorized Chat IDs**.
+6. Klik tombol **Test Connection** untuk memverifikasi koneksi, lalu klik **Save All Settings**.
+
+### 2. Fitur & Tombol Interaktif
+- **Alert Instan Berfilter AI:** Saat perangkat DOWN atau kembali ONLINE, bot akan mengirimkan notifikasi real-time yang telah divalidasi oleh AI False Warning Detector.
+- **Inline Keyboard:** Setiap pesan alert dilengkapi tombol `[✅ Acknowledge]` dan `[🔄 Re-check]`. Mengklik tombol ini akan langsung memperbarui status di Telegram dan mensinkronkan data ke Web Dashboard NetMon via Socket.IO secara langsung.
+- **Daily Digest:** Ringkasan kesehatan jaringan otomatis setiap hari sesuai waktu yang dijadwalkan (default 08:00 WIB).
+
+### 3. Daftar Perintah Chat
+| Perintah | Deskripsi |
+| :--- | :--- |
+| `/status` / `/summary` | Ringkasan jumlah perangkat UP, DOWN, Warning, latensi rata-rata, dan alert terbuka |
+| `/alerts` | Menampilkan daftar insiden/alert aktif yang belum di-acknowledge |
+| `/down` | Daftar seluruh perangkat yang sedang offline (DOWN) |
+| `/devices` | Ringkasan sebaran perangkat berdasarkan tipe dan zona |
+| `/ack <id>` | Konfirmasi / acknowledge alert berdasarkan ID |
+| `/ack_all` | Acknowledge seluruh alert aktif sekaligus |
+| `/poll <ip/id>` | Memicu polling ulang seketika untuk perangkat tertentu |
+| `/digest` | Meminta pengiriman rekap harian (Daily Digest) saat ini |
+| `/myid` | Menampilkan Chat ID dan User ID Telegram Anda |
+| `/help` | Menampilkan panduan bantuan dan daftar perintah |
 
 ---
 

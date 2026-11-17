@@ -24,3 +24,25 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
    - Memastikan tidak ada pola `AVG(CASE... ELSE 0)` yang salah kaprah di seluruh *aggregate query* SQL.
    - Menggunakan _Covering Index_, _Memory Mapping_ (mmap), dan tipe jurnal WAL (_Write-Ahead Logging_) di SQLite untuk mencegah *Database Lock* pada *background thread*.
    - Melaksanakan uji coba fungsional via WSL melalui skrip simulasi metrik (`verify_backbone.py`) yang berujung **LULUS (Passed)** tanpa distorsi fungsionalitas utama aplikasi.
+
+
+## November 2026 - Integrasi Telegram Bot Interaktif 2-Arah & Alerting Cerdas
+**Deskripsi:** Mengimplementasikan integrasi Telegram Bot interaktif 2-arah native (menggunakan library `requests`), alerting cerdas berbasis filter AI False Alarm, tombol inline interaktif, daily digest terjadwal, dan panel konfigurasi settings.
+
+**Kegiatan:**
+1. **Modul Telegram Bot Native (`telegram_bot.py`):**
+   - Mengembangkan engine Telegram Bot dengan koneksi long polling asinkron di background thread tanpa dependensi eksternal tambahan.
+   - Sistem otorisasi whitelist berbasis Chat ID dan User ID untuk membatasi interaksi hanya kepada admin/grup yang berhak.
+   - Fitur perintah chat 2-arah: `/status`, `/alerts`, `/down`, `/devices`, `/ack`, `/ack_all`, `/poll`, `/digest`, `/myid`, dan `/help`.
+2. **Notifikasi Alert & Tombol Inline Interaktif:**
+   - Notifikasi real-time ke Telegram untuk insiden perangkat DOWN/CRITICAL dan pemulihan ONLINE (RECOVERY).
+   - Integrasi filter AI False Warning Detector: alert yang terindikasi false alarm (WSL socket collision, host flapping, atau pingable) otomatis di-filter agar tidak membisingkan notifikasi tim.
+   - Menambahkan tombol inline `[✅ Acknowledge]` dan `[🔄 Re-check]` langsung pada pesan alert Telegram dengan *live editing* status konfirmasi pesan dan sinkronisasi real-time ke Web Dashboard via Socket.IO.
+3. **Daily Digest Terjadwal:**
+   - Penjadwalan laporan rekap harian otomatis (default 08:00 WIB) via background scheduler yang merangkum kesehatan perangkat, uptime ratio, latensi, dan alert aktif.
+4. **Panel Pengaturan Web Settings (`settings.html` & `app.py`):**
+   - Menambahkan panel konfigurasi Telegram di Web Settings (Token, Chat ID, filter Down/Up, Daily Digest Time, dan toggle aktifasi).
+   - Menyediakan tombol *Test Connection* untuk verifikasi token bot dan validasi pengiriman pesan langsung dari web.
+   - Penyembunyian token bot (`***`) pada respons API demi keamanan.
+5. **Sinkronisasi Skrip Pembaruan (`update.sh`):**
+   - Memastikan file `telegram_bot.py` otomatis tercakup dalam proses sinkronisasi dan update service di server tanpa menghapus database `netmon.db`.
