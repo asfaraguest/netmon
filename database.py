@@ -264,8 +264,8 @@ class Database:
                 'traffic_retention_hours': '720',
                 'report_metrics_retention_hours': '1440',
                 'interface_chart_retention_hours': '168',
-                'anomaly_cap_multiplier': '1.05',
-                'anomaly_cap_gbps': '5.0',
+                'anomaly_cap_multiplier': '1.25',
+                'anomaly_cap_gbps': '10.0',
                 'telegram_enabled': 'false',
                 'telegram_bot_token': '',
                 'telegram_chat_ids': '',
@@ -274,14 +274,27 @@ class Database:
                 'telegram_daily_digest_enabled': 'true',
                 'telegram_daily_digest_time': '08:00',
                 'anomaly_alert_enabled': 'true',
-                'traffic_spike_multiplier': '2.5',
-                'traffic_spike_min_mbps': '20.0',
-                'cpu_spike_threshold': '85.0',
-                'cpu_jump_threshold': '40.0',
-                'memory_spike_threshold': '90.0',
+                'traffic_spike_multiplier': '4.0',
+                'traffic_spike_min_mbps': '80.0',
+                'cpu_spike_threshold': '92.0',
+                'cpu_jump_threshold': '65.0',
+                'memory_spike_threshold': '95.0',
             }
             for k, v in defaults.items():
                 c.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (k, v))
+
+            # Migrate old overly aggressive default settings to conservative non-spam defaults
+            old_aggressive_defaults = {
+                'anomaly_cap_multiplier': ('1.05', '1.25'),
+                'anomaly_cap_gbps': ('5.0', '10.0'),
+                'traffic_spike_multiplier': ('2.5', '4.0'),
+                'traffic_spike_min_mbps': ('20.0', '80.0'),
+                'cpu_spike_threshold': ('85.0', '92.0'),
+                'cpu_jump_threshold': ('40.0', '65.0'),
+                'memory_spike_threshold': ('90.0', '95.0'),
+            }
+            for key, (old_val, new_val) in old_aggressive_defaults.items():
+                c.execute('UPDATE settings SET value=? WHERE key=? AND value=?', (new_val, key, old_val))
 
             c.execute('INSERT OR IGNORE INTO zones (id, name, color, description) VALUES (1, "Default Zone", "#00d4ff", "Default network zone")')
             c.execute('INSERT OR IGNORE INTO floorplans (id) VALUES (1)')
@@ -299,8 +312,8 @@ class Database:
             with self.conn() as c:
                 mult_row = c.execute("SELECT value FROM settings WHERE key='anomaly_cap_multiplier'").fetchone()
                 cap_row = c.execute("SELECT value FROM settings WHERE key='anomaly_cap_gbps'").fetchone()
-                mult = float(mult_row[0]) if mult_row else 1.05
-                cap_bps = float(cap_row[0]) * 1000000000.0 if cap_row else 5000000000.0
+                mult = float(mult_row[0]) if mult_row else 1.25
+                cap_bps = float(cap_row[0]) * 1000000000.0 if cap_row else 10000000000.0
 
                 cur = c.execute('''
                     UPDATE snmp_metrics

@@ -115,17 +115,17 @@ class SNMPWorker:
     def _anomaly_limit_bps(self, effective_speed_bps):
         """Batas atas (bps) untuk mendeteksi spike/anomali traffic.
         Diambil dari settings:
-          - anomaly_cap_multiplier : toleransi terhadap kapasitas link (default 1.05)
-          - anomaly_cap_gbps      : plafon mutlak dalam Gbps (default 5.0)
+          - anomaly_cap_multiplier : toleransi terhadap kapasitas link (default 1.25)
+          - anomaly_cap_gbps      : plafon mutlak dalam Gbps (default 10.0)
         """
         try:
-            mult = float(self.db.get_settings().get('anomaly_cap_multiplier', 1.05))
+            mult = float(self.db.get_settings().get('anomaly_cap_multiplier', 1.25))
         except (ValueError, TypeError):
-            mult = 1.05
+            mult = 1.25
         try:
-            cap_gbps = float(self.db.get_settings().get('anomaly_cap_gbps', 5.0))
+            cap_gbps = float(self.db.get_settings().get('anomaly_cap_gbps', 10.0))
         except (ValueError, TypeError):
-            cap_gbps = 5.0
+            cap_gbps = 10.0
         cap_bps = cap_gbps * 1e9
         if effective_speed_bps and effective_speed_bps > 0:
             limit = effective_speed_bps * mult
@@ -154,13 +154,13 @@ class SNMPWorker:
         name = device.get('name', ip)
 
         try:
-            traffic_mult = float(settings.get('traffic_spike_multiplier', 2.5))
-            min_mbps = float(settings.get('traffic_spike_min_mbps', 20.0))
-            cpu_thresh = float(settings.get('cpu_spike_threshold', 85.0))
-            cpu_jump_thresh = float(settings.get('cpu_jump_threshold', 40.0))
-            mem_thresh = float(settings.get('memory_spike_threshold', 90.0))
+            traffic_mult = float(settings.get('traffic_spike_multiplier', 4.0))
+            min_mbps = float(settings.get('traffic_spike_min_mbps', 80.0))
+            cpu_thresh = float(settings.get('cpu_spike_threshold', 92.0))
+            cpu_jump_thresh = float(settings.get('cpu_jump_threshold', 65.0))
+            mem_thresh = float(settings.get('memory_spike_threshold', 95.0))
         except (ValueError, TypeError):
-            traffic_mult, min_mbps, cpu_thresh, cpu_jump_thresh, mem_thresh = 2.5, 20.0, 85.0, 40.0, 90.0
+            traffic_mult, min_mbps, cpu_thresh, cpu_jump_thresh, mem_thresh = 4.0, 80.0, 92.0, 65.0, 95.0
 
         now_ts = time.time()
         cpu = metrics.get('cpu_usage') if metrics else None
@@ -185,7 +185,12 @@ class SNMPWorker:
         prev_cpu = None
         mem_critical = False
 
-        if len(history) >= 2:
+        uplink_mbps = float(device.get('uplink_speed_mbps') or 1000)
+        uplink_bps = uplink_mbps * 1e6
+        utilization_pct = (cur_traffic_bps / uplink_bps * 100) if uplink_bps > 0 else 0.0
+
+        # Require at least 4 previous samples (approx 1-2 minutes) to establish reliable baseline
+        if len(history) >= 4:
             # 1. Traffic Spike Analysis
             prev_traffics = [h['traffic_bps'] for h in history if h.get('traffic_bps') is not None]
             if prev_traffics:
@@ -193,21 +198,26 @@ class SNMPWorker:
                 baseline_mbps = avg_prev / 1e6
                 if cur_traffic_mbps >= min_mbps and avg_prev > 0:
                     spike_ratio = cur_traffic_bps / avg_prev
-                    if spike_ratio >= traffic_mult:
+                    # Must exceed multiplier AND have significant link utilization (>=60%) or high absolute rate (>=300 Mbps)
+                    if spike_ratio >= traffic_mult and (utilization_pct >= 60.0 or cur_traffic_mbps >= 300.0):
                         traffic_spike = True
 
-            # 2. CPU Spike Analysis
+            # 2. CPU Spike Analysis (require sustained critical CPU or extreme jump into heavy load >= 85%)
             prev_cpus = [h['cpu'] for h in history if h.get('cpu') is not None]
             if prev_cpus:
                 prev_cpu = prev_cpus[-1]
             if cpu is not None:
-                if cpu >= cpu_thresh:
+                # Sustained critical load across consecutive polls
+                if cpu >= cpu_thresh and prev_cpu is not None and prev_cpu >= (cpu_thresh - 10.0):
                     cpu_critical = True
-                if prev_cpu is not None and (cpu - prev_cpu) >= cpu_jump_thresh:
+                # Extreme jump that lands in heavy load territory
+                if prev_cpu is not None and (cpu - prev_cpu) >= cpu_jump_thresh and cpu >= 85.0:
                     cpu_jumped = True
 
-            # 3. Memory Spike Analysis
-            if mem is not None and mem >= mem_thresh:
+            # 3. Memory Spike Analysis (require sustained near-exhaustion)
+            prev_mems = [h['mem'] for h in history if h.get('mem') is not None]
+            prev_mem = prev_mems[-1] if prev_mems else None
+            if mem is not None and mem >= mem_thresh and prev_mem is not None and prev_mem >= mem_thresh:
                 mem_critical = True
 
         # Append current sample to rolling history (keep latest 8 samples)
@@ -230,17 +240,16 @@ class SNMPWorker:
                 f"ANOMALI KRITIS: Lonjakan Traffic drastis ({cur_traffic_mbps:.1f} Mbps, {spike_ratio:.1f}x baseline) "
                 f"bersamaan dengan lonjakan CPU ({cpu:.1f}%) pada {name} ({ip}). Indikasi DDoS / Flood / Routing Loop!"
             )
-        elif traffic_spike:
+        elif traffic_spike and utilization_pct >= 85.0:
             severity = 'warning'
             alert_msg = (
-                f"ANOMALI TRAFFIC: Lonjakan throughput mendadak ({cur_traffic_mbps:.1f} Mbps, {spike_ratio:.1f}x baseline) "
-                f"pada {name} ({ip}) [CPU: {cpu if cpu is not None else '-'}%]."
+                f"ANOMALI TRAFFIC: Lonjakan throughput mendekati saturasi link ({cur_traffic_mbps:.1f} Mbps, "
+                f"{utilization_pct:.1f}% link) pada {name} ({ip}) [CPU: {cpu if cpu is not None else '-'}%]."
             )
-        elif cpu_critical or cpu_jumped:
+        elif cpu_critical:
             severity = 'warning'
-            jump_str = f"naik mendadak dari {prev_cpu:.1f}% ke {cpu:.1f}%" if (cpu_jumped and prev_cpu is not None) else f"mencapai {cpu:.1f}%"
             alert_msg = (
-                f"ANOMALI RESOURCE: Beban CPU {jump_str} pada {name} ({ip}) tanpa lonjakan traffic signifikan."
+                f"ANOMALI RESOURCE: Beban CPU tinggi berkelanjutan ({cpu:.1f}%) pada {name} ({ip})."
             )
         elif mem_critical:
             severity = 'warning'
@@ -251,11 +260,11 @@ class SNMPWorker:
         if not severity or not alert_msg:
             return
 
-        # Cooldown check: prevent duplicate alert within 300s (5m) unless escalating to critical
+        # Cooldown check: prevent duplicate alert within 600s (10m) unless escalating to critical
         last_alert = self._last_anomaly_alert.get(did, {})
         last_ts = last_alert.get('ts', 0)
         last_sev = last_alert.get('severity', '')
-        if (now_ts - last_ts < 300) and not (severity == 'critical' and last_sev != 'critical'):
+        if (now_ts - last_ts < 600) and not (severity == 'critical' and last_sev != 'critical'):
             return
 
         self._last_anomaly_alert[did] = {
@@ -1508,11 +1517,15 @@ class SNMPWorker:
                 rx_bps = (d_rx * 8) / dt
                 tx_bps = (d_tx * 8) / dt
                 
-                if rx_bps > limit_bps or tx_bps > limit_bps:
+                if rx_bps > limit_bps:
                     cap_mbps = (speed_bps / 1e6) if speed_bps > 0 else 100000.0
-                    print(f"[Traffic] Spike terdeteksi pada device_id={did} interface={name} (rx_bps={rx_bps:.1f}, tx_bps={tx_bps:.1f} melebihi kapasitas link {cap_mbps:.1f} Mbps)")
-                    rx_bps = 0.0
-                    tx_bps = 0.0
+                    print(f"[Traffic] Spike terdeteksi pada device_id={did} interface={name} (rx_bps={rx_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps)")
+                    rx_bps = 0.0 if rx_bps > (limit_bps * 2.0) else (speed_bps if speed_bps > 0 else limit_bps)
+
+                if tx_bps > limit_bps:
+                    cap_mbps = (speed_bps / 1e6) if speed_bps > 0 else 100000.0
+                    print(f"[Traffic] Spike terdeteksi pada device_id={did} interface={name} (tx_bps={tx_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps)")
+                    tx_bps = 0.0 if tx_bps > (limit_bps * 2.0) else (speed_bps if speed_bps > 0 else limit_bps)
                 
                 with self.db_write_lock:
                     self.db.save_interface_traffic(did, str(name), int(idx), rx_bps, tx_bps)
@@ -1785,9 +1798,11 @@ class SNMPWorker:
                     if wan_in_bps > limit_bps or wan_out_bps > limit_bps:
                         cap_mbps = (effective_speed / 1e6) if effective_speed > 0 else 100000.0
                         print(f"[Traffic] Spike terdeteksi pada device_id={did} WAN interface={target_idx} (wan_in={wan_in_bps:.1f}, wan_out={wan_out_bps:.1f} melebihi kapasitas link {cap_mbps:.1f} Mbps)")
-                        # Skip recording this anomalous poll to avoid ruining the graph (return None instead of 0)
-                        return None
-                    
+                        if wan_in_bps > (limit_bps * 2.0) or wan_out_bps > (limit_bps * 2.0):
+                            return None
+                        wan_in_bps = min(wan_in_bps, effective_speed)
+                        wan_out_bps = min(wan_out_bps, effective_speed)
+
                     return {"wan_in": wan_in_bps, "wan_out": wan_out_bps}
         except Exception:
             pass

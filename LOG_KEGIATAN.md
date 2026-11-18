@@ -121,3 +121,20 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
     - **Sub-Command `/traffic select` (atau `/traffic pilih` / `/traffic list`):** Menampilkan menu pemilih interaktif berbasis inline keyboard berisi tombol daftar router yang terdaftar, memudahkan pemilihan router hanya dengan sekali sentuh/klik di Telegram.
     - **Pencarian Cerdas Router Spesifik (`/traffic <nama/ip/id>`):** Meningkatkan fleksibilitas pemanggilan traffic perangkat melalui pencocokan cerdas ID numerik, IP address, maupun nama perangkat (substring & case-insensitive, misal: `/traffic core`).
     - **Navigasi Bolak-Balik Real-Time:** Menambahkan tombol `🔀 Pilih Router Lain` dan `🌐 Semua Router (All)` di setiap tampilan rincian router, serta integrasi callback query `cmd:traffic_picker` untuk transisi antar tampilan tanpa perlu mengetik ulang command.
+
+14. **Evaluasi & Rekalibrasi Ambang Batas Anomali Detection & Traffic Spike (Non-Agresif):**
+    - **Akar Masalah (Root Cause):** Pada pembaruan sebelumnya, deteksi anomali disetel dengan ambang batas yang terlalu agresif (multiplier 2.5x, batas minimum 20 Mbps, CPU threshold 85% / lompatan 40%, baseline hanya 2 sampel, dan toleransi link cap 1.05x). Akibatnya, router mengalami banjir false alarm saat aktivitas rutin harian (seperti backup dini hari 30-50 Mbps atau lonjakan CPU sesaat saat proses SNMP walk polling), serta grafik traffic mengalami penurunan tajam (dips/zeroed out) akibat traffic bursty melebihi 105% kapasitas link.
+    - **Rekalibrasi Parameter Ambang Batas (Konservatif & Stabil):**
+      - `traffic_spike_multiplier`: Ditingkatkan dari `2.5x` menjadi `4.0x` (lonjakan minimal 400% dari baseline historis).
+      - `traffic_spike_min_mbps`: Ditingkatkan dari `20.0 Mbps` menjadi `80.0 Mbps` (mencegah false alarm pada aktivitas normal harian seperti download atau backup berkecepatan puluhan Mbps).
+      - `cpu_spike_threshold`: Ditingkatkan dari `85%` menjadi `92%` dan disyaratkan bertahan pada 2 siklus polling berurutan (sustained high load), atau lompatan ekstrem &ge; 65% dengan beban akhir &ge; 85% untuk membedakan beban komputasi nyata dari fluktuasi sesaat SNMP walk.
+      - `memory_spike_threshold`: Ditingkatkan dari `90%` menjadi `95%` dengan verifikasi kondisi sustained pada minimal 2 polling berurutan.
+      - **Baseline Rolling Window:** Ditingkatkan dari 2 sampel menjadi minimal 4 sampel (~1-2 menit stabilisasi) sebelum perbandingan anomali dihitung.
+      - **Kriteria Alerting Ketat:** Lonjakan traffic tunggal hanya memicu notifikasi jika utilisasi interface mencapai &ge; 85% (kondisi saturasi nyata). Cooldown alert diperpanjang dari 5 menit menjadi 10 menit (600 detik) untuk mengeliminasi alert fatigue.
+    - **Perlindungan Grafik & Link Cap (Anti-Dip):**
+      - `anomaly_cap_multiplier` dinaikkan dari `1.05` (5%) menjadi `1.25` (25% burst headroom), dan `anomaly_cap_gbps` menjadi `10.0 Gbps`.
+      - Pada `collect_interface_traffic` dan `_poll_router_traffic`, data traffic yang sedikit melampaui kapasitas fisik link kini di-cap ke batas maksimum interface alih-alih di-nolkan (`0.0`) atau di-drop (`return None`). Hanya anomali ekstrem (&gt; 2x limit, indikasi counter rollover glitch) yang di-nolkan demi menjaga kelancaran kurva grafik dashboard.
+    - **Auto-Migration Database & UI Settings:**
+      - Menambahkan migrasi otomatis pada `database.py` saat startup untuk memperbarui setting default database lama tanpa menimpa setting kustom pengguna.
+      - Menyelaraskan seluruh form input, nilai fallback Javascript, dan teks petunjuk di `templates/settings.html`.
+      - Memperbarui instruksi prompt AI detector (`ai_detector.py`) agar model LLM Groq dapat secara akurat mengidentifikasi `is_false_alarm` (0 atau 1) saat analisis insiden anomali.

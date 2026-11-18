@@ -164,9 +164,9 @@ def _refine_with_groq(db, socketio, alert, device, alert_id, initial_is_false, i
                 f"Analisa anomali performa jaringan dan lonjakan resource berikut:\n"
                 f"Perangkat: {device.get('name')} ({device.get('ip')}) | Tipe: {device.get('type')}\n"
                 f"Pesan Alert: {alert['message']}\n\n"
-                f"Berikan analisa teknis apakah ini pola serangan DDoS/Flood, looping paket, transfer data masif, atau kebocoran memori. "
+                f"Berikan analisa teknis apakah ini pola serangan DDoS/Flood, looping paket, transfer data wajar/backup, atau lonjakan sesaat. "
                 f"Kembalikan respon JSON: "
-                f'{{"is_false_alarm": 0, "explanation": "Diagnosa teknis maks 2 kalimat dalam bahasa Indonesia"}}'
+                f'{{"is_false_alarm": 0 atau 1, "explanation": "Diagnosa teknis: apakah ini anomali berbahaya/valid (0) atau aktivitas normal/false alarm (1). Maks 2 kalimat."}}'
             )
         else:
             prompt = (
