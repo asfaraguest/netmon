@@ -17,7 +17,8 @@ try:
     import matplotlib.dates as mdates
     from matplotlib.ticker import FuncFormatter
     HAS_MATPLOTLIB = True
-except ImportError:
+except Exception as e:
+    print(f"[ChartGenerator] Matplotlib unavailable ({type(e).__name__}: {e}). PNG charts disabled.")
     HAS_MATPLOTLIB = False
 
 
