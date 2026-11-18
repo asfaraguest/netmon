@@ -55,11 +55,24 @@
       </div>
       <div class="panel-body p-4" id="printable-area">
         
-        <!-- Document Header (Shown in Print) -->
-        <div class="print-header text-center mb-4 d-none">
-          <h2 class="mb-1" style="color: var(--primary);">NetMon Network Management</h2>
-          <p class="text-muted mb-0">Laporan Penggunaan Bandwidth & Throughput</p>
-          <hr style="border-top: 1px solid #e5e5ea;">
+        <!-- Document Header (Shown in Print & PDF Export) -->
+        <div class="print-header mb-4 d-none" style="border-bottom: 3px double #1e293b; padding-bottom: 12px;">
+          <div class="d-flex align-items-center gap-3">
+            <img src="/static/img/polije-logo.svg" alt="Logo Polije" width="75" height="75" style="flex-shrink: 0;">
+            <div class="flex-grow-1 text-center" style="line-height: 1.25; color: #0f172a;">
+              <div style="font-size: 13px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;">KEMENTERIAN PENDIDIKAN TINGGI, SAINS, DAN TEKNOLOGI</div>
+              <div style="font-size: 17px; font-weight: 800; letter-spacing: 0.3px; text-transform: uppercase; color: #0a2a5e;">POLITEKNIK NEGERI JEMBER</div>
+              <div style="font-size: 13px; font-weight: 700; color: #028daa; text-transform: uppercase;">UPT TEKNOLOGI INFORMASI DAN KOMUNIKASI (TIK)</div>
+              <div style="font-size: 10px; color: #475569; margin-top: 3px;">
+                Jl. Mastrip PO. BOX 164 Jember 68101 Telp: (0331) 333532-34 Fax: (0331) 333531<br>
+                Laman: <span style="color: #028daa;">www.polije.ac.id</span> • Email: <span style="color: #028daa;">politeknik@polije.ac.id</span>
+              </div>
+            </div>
+          </div>
+          <div class="text-center mt-3 pt-2" style="border-top: 1px solid #cbd5e1;">
+            <h5 class="mb-0 fw-800" style="color: #0f172a; letter-spacing: 0.2px;">LAPORAN PENGAMATAN TRAFFIC &amp; STATUS KESEHATAN ROUTER</h5>
+            <small class="text-muted fw-600">Sistem Telemetri Jaringan Kampus — TIKWatch</small>
+          </div>
         </div>
 
         <!-- Section 1: Backbone Summary -->
@@ -547,7 +560,7 @@ function downloadPDF() {
   
   // Format file name
   const [year, month] = activeReport.report_month.split('-');
-  const filename = `NetMon_Laporan_Bandwidth_${year}_${month}.pdf`;
+  const filename = `TIKWatch_Laporan_Bandwidth_${year}_${month}.pdf`;
   
   const opt = {
     margin:       0.4,

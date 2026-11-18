@@ -427,13 +427,13 @@ class TelegramBot:
             if text.startswith("/"):
                 reply = (
                     "🔒 <b>Akses Ditolak / Belum Diotorisasi</b>\n\n"
-                    "Akun atau grup Anda belum terdaftar di whitelist NetMon.\n\n"
+                    "Akun atau grup Anda belum terdaftar di whitelist TIKWatch.\n\n"
                     f"• <b>Chat ID Anda:</b> <code>{chat_id}</code>\n"
                     f"• <b>User ID:</b> <code>{user_id}</code>\n"
                     f"• <b>Username:</b> @{username if username else '-'}\n"
                     f"• <b>Nama:</b> {first_name}\n\n"
                     "<i>Untuk memberikan akses, salin <b>Chat ID</b> di atas lalu masukkan ke menu "
-                    "<b>Settings &gt; Telegram Bot Integration &gt; Authorized Chat IDs</b> di Web Dashboard NetMon, lalu klik tombol <b>Save All Settings</b>.</i>"
+                    "<b>Settings &gt; Telegram Bot Integration &gt; Authorized Chat IDs</b> di Web Dashboard TIKWatch, lalu klik tombol <b>Save All Settings</b>.</i>"
                 )
                 self.send_message(chat_id, reply)
             return
@@ -622,7 +622,7 @@ class TelegramBot:
     def _cmd_help(self, chat_id, name):
         text = (
             f"👋 Halo, <b>{name}</b>!\n\n"
-            "🤖 <b>NetMon Telegram Bot</b> siap membantu monitoring jaringan & traffic secara real-time.\n\n"
+            "🏛️ <b>TIKWatch Bot</b> siap membantu monitoring utilisasi & kesehatan router kampus Politeknik Negeri Jember secara real-time.\n\n"
             "<b>📊 Monitoring Bandwidth & Traffic:</b>\n"
             "• <code>/traffic all</code> — Agregat bandwidth seluruh router (Hanya Uplink WAN)\n"
             "• <code>/traffic select</code> — Menu interaktif memilih router untuk melihat Active Ports\n"
@@ -632,7 +632,7 @@ class TelegramBot:
             "• <code>/iface &lt;ip/id&gt;</code> — Cek status & daftar interface perangkat\n\n"
             "<b>📈 Visualisasi Grafik Gambar (Charts):</b>\n"
             "• <code>/chart</code> — Grafik Total Backbone 24 Jam terakhir (PNG)\n"
-            "• <code>/chart [1h|6h|24h|7d|30d]</code> — Grafik dengan rentang waktu NetMon\n"
+            "• <code>/chart [1h|6h|24h|7d|30d]</code> — Grafik throughput dengan rentang waktu TIKWatch\n"
             "• <code>/chart &lt;nama/ip/id&gt;</code> — Grafik traffic router tertentu (contoh: <code>/chart core 7d</code>)\n"
             "• <code>/chart select</code> — Menu interaktif memilih router untuk digambar grafiknya\n\n"
             "<b>🖥️ Status Jaringan & Kontrol:</b>\n"
@@ -656,7 +656,7 @@ class TelegramBot:
             f"• <b>User ID:</b> <code>{user_id}</code>\n"
             f"• <b>Nama:</b> {first_name}\n"
             f"• <b>Username:</b> @{username if username else '-'}\n"
-            "• <b>Status Akses:</b> ✅ <i>Terotorisasi di NetMon</i>"
+            "• <b>Status Akses:</b> ✅ <i>Terotorisasi di TIKWatch</i>"
         )
         self.send_message(chat_id, text)
 
@@ -678,7 +678,7 @@ class TelegramBot:
             status_icon = "🟢" if down == 0 else "🔴"
 
             text = (
-                f"{status_icon} <b>Ringkasan Status Jaringan NetMon</b>\n"
+                f"{status_icon} <b>Ringkasan Status Jaringan TIKWatch</b>\n"
                 f"<i>Waktu: {now_str} WIB</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🖥 <b>Total Perangkat:</b> {total}\n"
@@ -875,7 +875,7 @@ class TelegramBot:
             uplink_str = f"{total_uplink_mbps} Mbps" if total_uplink_mbps < 1000 else f"{total_uplink_mbps/1000:.1f} Gbps"
 
             text = (
-                "🌐 <b>Ringkasan Backbone Traffic (Hanya Uplink WAN)</b>\n"
+                "🌐 <b>Ringkasan Backbone TIKWatch (Hanya Uplink WAN)</b>\n"
                 f"<i>Waktu: {now_str} WIB</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🌊 <b>THROUGHPUT BACKBONE ({len(agg_routers)} Router Agregasi ON):</b>\n"
@@ -1510,7 +1510,7 @@ class TelegramBot:
             self.send_message(
                 chat_id,
                 f"⚠️ Perangkat <b>{device.get('name', target)}</b> ({device.get('ip')}) belum mengaktifkan SNMP.\n"
-                "Aktifkan SNMP pada perangkat dan di menu Settings/Device NetMon untuk menggunakan fitur Live Capture."
+                "Aktifkan SNMP pada perangkat dan di menu Settings/Device TIKWatch untuk menggunakan fitur Live Capture."
             )
             return
 
@@ -1654,7 +1654,7 @@ class TelegramBot:
                 pass
 
         text = (
-            f"{icon} <b>[NETMON] {title}</b>\n"
+            f"{icon} <b>[TIKWatch] {title}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"• <b>Perangkat:</b> <code>{dev_name}</code>\n"
             f"• <b>IP Address:</b> <code>{dev_ip}</code>\n"
@@ -1708,7 +1708,7 @@ class TelegramBot:
             status_headline = "🟢 Kondisi Jaringan Normal" if down == 0 else f"🔴 Perhatian: {down} Perangkat Offline"
 
             text = (
-                "📊 <b>NETMON DAILY DIGEST</b>\n"
+                "📊 <b>TIKWatch DAILY DIGEST</b>\n"
                 f"🗓 <i>{today_str} WIB</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
                 f"<b>Status Umum:</b> {status_headline}\n\n"
@@ -1719,7 +1719,7 @@ class TelegramBot:
                 f"⚡ <b>Rata-rata Latensi:</b> {avg_lat} ms\n"
                 f"🚨 <b>Alert Terbuka:</b> {unacked} (Kritis: {crit})\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Gunakan /status atau buka Web Dashboard NetMon untuk detail lengkap.</i>"
+                "<i>Gunakan /status atau buka Web Dashboard TIKWatch untuk detail lengkap.</i>"
             )
 
             targets = [target_chat_id] if target_chat_id else self.chat_ids
@@ -1758,9 +1758,9 @@ class TelegramBot:
         sent_count = 0
         now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
         test_text = (
-            "🧪 <b>Uji Coba Integrasi Telegram NetMon</b>\n"
+            "🧪 <b>Uji Coba Integrasi Telegram TIKWatch</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "✅ <b>Koneksi Berhasil!</b> Bot Telegram telah terhubung dengan server NetMon.\n"
+            "✅ <b>Koneksi Berhasil!</b> Bot Telegram telah terhubung dengan server TIKWatch.\n"
             f"• <b>Bot:</b> @{bot_user.get('username')}\n"
             f"• <b>Waktu Uji:</b> {now_str} WIB\n\n"
             "<i>Notifikasi alert insiden dan perintah interaktif bot kini siap digunakan.</i>"

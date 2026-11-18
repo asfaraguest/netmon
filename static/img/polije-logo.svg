@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">
+  <defs>
+    <linearGradient id="shieldBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0a2a5e"/>
+      <stop offset="100%" stop-color="#041633"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fcd34d"/>
+      <stop offset="50%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="pulseGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00d4ff" stop-opacity="0.3"/>
+      <stop offset="35%" stop-color="#00d4ff" stop-opacity="1"/>
+      <stop offset="65%" stop-color="#38bdf8" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#00d4ff" stop-opacity="0.3"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Pentagon Shield (Pancasila Crest) -->
+  <polygon points="50,5 93,35 77,91 23,91 7,35" fill="url(#shieldBg)" stroke="url(#goldGrad)" stroke-width="3.2" stroke-linejoin="round"/>
+  
+  <!-- Inner Pentagon border -->
+  <polygon points="50,11 87,37 73,86 27,86 13,37" fill="none" stroke="#fcd34d" stroke-width="0.8" stroke-opacity="0.45" stroke-linejoin="round"/>
+
+  <!-- Gear Wheel (Cakra Teknologi Polije) -->
+  <g transform="translate(50, 48)">
+    <circle r="21" fill="none" stroke="url(#goldGrad)" stroke-width="3.2"/>
+    <circle r="13" fill="#041633" stroke="url(#goldGrad)" stroke-width="1.4"/>
+    <!-- 8 Gear Teeth -->
+    <rect x="-3" y="-24" width="6" height="4.5" rx="1" fill="url(#goldGrad)"/>
+    <rect x="-3" y="19.5" width="6" height="4.5" rx="1" fill="url(#goldGrad)"/>
+    <rect x="-24" y="-3" width="4.5" height="6" rx="1" fill="url(#goldGrad)"/>
+    <rect x="19.5" y="-3" width="4.5" height="6" rx="1" fill="url(#goldGrad)"/>
+    <rect x="-18" y="-18" width="5.5" height="4.5" rx="1" transform="rotate(45)" fill="url(#goldGrad)"/>
+    <rect x="-18" y="13.5" width="5.5" height="4.5" rx="1" transform="rotate(45)" fill="url(#goldGrad)"/>
+    <rect x="13.5" y="-18" width="5.5" height="4.5" rx="1" transform="rotate(45)" fill="url(#goldGrad)"/>
+    <rect x="13.5" y="13.5" width="5.5" height="4.5" rx="1" transform="rotate(45)" fill="url(#goldGrad)"/>
+    
+    <!-- Central Torch / Flame of Education -->
+    <path d="M 0,-9 C 3,-5 4,-2 2,2 C 1,3.5 -1,3.5 -2,2 C -4,-2 -3,-5 0,-9 Z" fill="#ef4444"/>
+    <path d="M 0,-6 C 1.5,-3 2,-1 1,1 C 0.5,2 -0.5,2 -1,1 C -2,-1 -1.5,-3 0,-6 Z" fill="#fbbf24"/>
+  </g>
+
+  <!-- Open Book of Knowledge at Base -->
+  <path d="M 50,71 C 43,67 33,67 25,69 L 25,78 C 33,76 43,76 50,80 C 57,76 67,76 75,78 L 75,69 C 67,67 57,67 50,71 Z" fill="#ffffff" fill-opacity="0.95"/>
+  <path d="M 50,71 L 50,80" stroke="#041633" stroke-width="1.2"/>
+  <path d="M 27,72 C 34,70 42,70 48,73" fill="none" stroke="#cbd5e1" stroke-width="0.6"/>
+  <path d="M 52,73 C 58,70 66,70 73,72" fill="none" stroke="#cbd5e1" stroke-width="0.6"/>
+
+  <!-- RouterPulse Telemetry Pulse Wave Overlay -->
+  <path d="M 8,50 L 26,50 L 32,50 L 37,34 L 42,64 L 47,43 L 52,55 L 57,47 L 62,50 L 92,50" 
+        fill="none" stroke="url(#pulseGrad)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+  
+  <!-- Pulse Node Dots -->
+  <circle cx="37" cy="34" r="1.8" fill="#00d4ff"/>
+  <circle cx="42" cy="64" r="1.8" fill="#38bdf8"/>
+  <circle cx="47" cy="43" r="1.8" fill="#ffffff"/>
+  <circle cx="50" cy="50" r="2.2" fill="#00d4ff"/>
+</svg>

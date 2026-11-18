@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="favBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#09264f"/>
+      <stop offset="100%" stop-color="#021024"/>
+    </linearGradient>
+    <linearGradient id="favPulse" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00d4ff"/>
+      <stop offset="50%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle rounded background -->
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="url(#favBg)" stroke="#f59e0b" stroke-width="1.2"/>
+
+  <!-- TIKWatch ECG wave line -->
+  <path d="M 3,16 L 8,16 L 11,9 L 15,23 L 18,12 L 21,18 L 24,16 L 29,16" 
+        fill="none" stroke="url(#favPulse)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Status nodes -->
+  <circle cx="11" cy="9" r="1.5" fill="#f59e0b"/>
+  <circle cx="15" cy="23" r="1.5" fill="#00d4ff"/>
+  <circle cx="18" cy="12" r="1.5" fill="#ffffff"/>
+</svg>

@@ -430,7 +430,7 @@ class NetMonTUI:
         alerts = self.db.get_alerts(limit=4)
 
         # 1. --- HEADER PANEL ---
-        draw_box(1, 1, cols, header_h, "NETMON MONITOR (btop-style)", C_BORDER)
+        draw_box(1, 1, cols, header_h, "TIKWATCH MONITOR (btop-style)", C_BORDER)
         
         # Calculate averages for header progress bars
         active_cpus = [d['cpu_usage'] for d in devices if d.get('cpu_usage') is not None]
@@ -727,7 +727,7 @@ class NetMonTUI:
         cleanup_terminal()
         self.clear_screen()
 
-        print(f"{C_BOLD}{C_CYAN}=== NETMON NETWORK SCAN & DISCOVERY ==={C_RESET}\n")
+        print(f"{C_BOLD}{C_CYAN}=== TIKWATCH NETWORK SCAN & DISCOVERY ==={C_RESET}\n")
         net = input(" Masukkan subnet CIDR (contoh: 172.17.17.0/24): ").strip()
         if net:
             community = input(" SNMP Community String (Default 'public'): ").strip() or 'public'
@@ -767,7 +767,7 @@ class NetMonTUI:
         self.running = False
         cleanup_terminal()
         self.clear_screen()
-        print("\nKeluar dari NetMon TUI. Terima kasih!\n")
+        print("\nKeluar dari TIKWatch TUI. Terima kasih!\n")
         sys.exit(0)
 
 

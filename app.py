@@ -707,8 +707,8 @@ def get_device_downtime_forensics(device_id):
         narration = (
             f"Konektivitas fisik ke perangkat {device.get('name')} ({device.get('ip')}) dalam kondisi normal via Ping, "
             f"namun query SNMP mengalami timeout (UDP port 161). Pastikan:\n"
-            f"1. Community String di NetMon ('{device.get('snmp_community', 'public')}') cocok dengan konfigurasi SNMP di MikroTik.\n"
-            f"2. IP NetMon telah diizinkan (Allowed Address) di setting SNMP MikroTik.\n"
+            f"1. Community String di TIKWatch ('{device.get('snmp_community', 'public')}') cocok dengan konfigurasi SNMP di MikroTik.\n"
+            f"2. IP TIKWatch telah diizinkan (Allowed Address) di setting SNMP MikroTik.\n"
             f"3. Service SNMP di MikroTik sudah diaktifkan (/ip snmp set enabled=yes)."
         )
     elif latest['up_time'] is None:
@@ -731,7 +731,7 @@ def get_device_downtime_forensics(device_id):
                     f"- Nama: {device.get('name')}\n"
                     f"- Tipe: {device.get('type')}\n"
                     f"- IP: {device.get('ip')}\n"
-                    f"- SNMP Community di NetMon: {device.get('snmp_community', 'public')}\n"
+                    f"- SNMP Community di TIKWatch: {device.get('snmp_community', 'public')}\n"
                     f"Kondisi Saat Ini:\n"
                     f"- Koneksi Fisik: ONLINE / PING OK\n"
                     f"- Query SNMP: TIMEOUT / PORT UDP 161 TIDAK MERESPON\n\n"
@@ -1378,7 +1378,7 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     host = os.environ.get('HOST', '0.0.0.0')
     print(f"\n{'='*50}")
-    print(f"  NetMon starting → http://{host}:{port}")
+    print(f"  TIKWatch starting → http://{host}:{port}")
     print(f"  SNMP poll status every {poll_interval}s")
     print(f"  SNMP poll traffic every {traffic_poll_interval}s")
     print(f"{'='*50}\n")

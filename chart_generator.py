@@ -170,7 +170,7 @@ def render_traffic_chart_image(data):
     fig.text(0.08, 0.95, target_name, color=text_color, fontsize=13, fontweight='bold', ha='left')
     fig.text(0.08, 0.90, f"Traffic Throughput & Bandwidth Usage • {time_label} ({len(points)} titik sampel)", color=muted_color, fontsize=9, ha='left')
     fig.text(0.92, 0.95, f"Kapasitas Uplink: {uplink_str} (Peak: {max_peak_pct:.1f}%)", color="#38bdf8", fontsize=9, fontweight='semibold', ha='right')
-    fig.text(0.92, 0.90, "NetMon Network Monitor", color="#64748b", fontsize=8.5, ha='right')
+    fig.text(0.92, 0.90, "TIKWatch • NOC UPT TIK", color="#38bdf8", fontsize=8.5, ha='right')
 
     # Save to in-memory bytes
     buf = io.BytesIO()

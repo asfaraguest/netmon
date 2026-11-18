@@ -173,7 +173,7 @@
         <div class="col-md-12">
           <label class="nm-label">Groq API Key</label>
           <input type="password" class="nm-input" id="s-groq-key" placeholder="Leave blank or enter Groq API Key">
-          <small class="text-muted">NetMon utilizes Groq (openai/gpt-oss-120b) to automatically detect false alarms (e.g. SNMP timeouts on pingable hosts). If not configured, it will fall back to local rule-based heuristics.</small>
+          <small class="text-muted">TIKWatch utilizes Groq (openai/gpt-oss-120b) to automatically detect false alarms (e.g. SNMP timeouts on pingable hosts). If not configured, it will fall back to local rule-based heuristics.</small>
         </div>
       </div>
       <div id="groq-test-result" class="mt-2"></div>
@@ -298,7 +298,8 @@
     <div class="panel-header"><span><i class="bi bi-info-circle-fill me-2 text-accent"></i>About</span></div>
     <div class="panel-body">
       <div class="about-grid">
-        <div class="about-item"><span class="about-lbl">Application</span><span class="about-val">NetMon</span></div>
+        <div class="about-item"><span class="about-lbl">Application</span><span class="about-val">TIKWatch</span></div>
+        <div class="about-item"><span class="about-lbl">Organization</span><span class="about-val">Politeknik Negeri Jember (UPT TIK)</span></div>
         <div class="about-item"><span class="about-lbl">Version</span><span class="about-val mono-sm">1.0.0</span></div>
         <div class="about-item"><span class="about-lbl">Database</span><span class="about-val mono-sm" id="about-db">—</span></div>
         <div class="about-item"><span class="about-lbl">Devices</span><span class="about-val" id="about-devs">—</span></div>
@@ -564,7 +565,7 @@ function testTelegram() {
     }
   })
   .catch(() => {
-    res.innerHTML = '<div class="text-danger text-sm"><i class="bi bi-x-circle-fill me-1"></i>Gagal menghubungi server NetMon.</div>';
+    res.innerHTML = '<div class="text-danger text-sm"><i class="bi bi-x-circle-fill me-1"></i>Gagal menghubungi server TIKWatch.</div>';
     showToast('Koneksi gagal', 'danger');
   });
 }

@@ -253,7 +253,7 @@ function exportLogs() {
   const blob = new Blob([csv], {type:'text/csv'});
   const a    = document.createElement('a');
   a.href     = URL.createObjectURL(blob);
-  a.download = `netmon-${tab}-log-${new Date().toISOString().slice(0,10)}.csv`;
+  a.download = `tikwatch-${tab}-log-${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
 }
 </script>

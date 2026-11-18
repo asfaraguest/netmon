@@ -258,7 +258,7 @@ class Database:
                 'unifi_pass': '',
                 'unifi_port': '8443',
                 'unifi_site': 'default',
-                'app_name': 'NetMon',
+                'app_name': 'TIKWatch',
                 'alert_retention_days': '30',
                 'log_retention_days': '90',
                 'traffic_retention_hours': '720',

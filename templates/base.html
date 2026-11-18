@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}NetMon{% endblock %} — Network Monitor</title>
+  <title>{% block title %}Dashboard{% endblock %} — TIKWatch</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -25,9 +26,12 @@
 <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleMobileSidebar(true)"></div>
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-logo">
-    <i class="bi bi-hdd-network-fill text-accent"></i>
-    <span class="logo-text">NetMon</span>
-    <div class="live-badge"><span class="pulse"></span>LIVE</div>
+    <img src="/static/img/polije-logo.svg" alt="Polije Logo" width="30" height="30" style="flex-shrink: 0; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
+    <div class="d-flex flex-column" style="line-height: 1.15; overflow: hidden;">
+      <span class="logo-text" style="font-size: 16px; font-weight: 700; letter-spacing: -0.3px; white-space: nowrap;">TIK<span class="text-accent" style="font-weight: 800;">Watch</span></span>
+      <span class="text-muted" style="font-size: 9.5px; font-weight: 500; letter-spacing: 0.2px; opacity: 0.85;">UPT TIK Polije</span>
+    </div>
+    <div class="live-badge ms-auto"><span class="pulse"></span>LIVE</div>
   </div>
 
   <nav class="sidebar-nav">
@@ -97,9 +101,9 @@
 <main class="main-content" id="main">
   <!-- Mobile Topbar -->
   <div class="mobile-topbar d-md-none">
-    <div class="d-flex align-items-center">
-      <i class="bi bi-hdd-network-fill text-accent me-2"></i>
-      <span class="fw-600">NetMon</span>
+    <div class="d-flex align-items-center gap-2">
+      <img src="/static/img/polije-logo.svg" alt="Polije Logo" width="24" height="24" style="flex-shrink: 0;">
+      <span class="fw-700" style="font-size: 15px;">TIK<span class="text-accent">Watch</span></span>
     </div>
     <button class="mobile-menu-btn" onclick="toggleMobileSidebar()">
       <i class="bi bi-list"></i>
