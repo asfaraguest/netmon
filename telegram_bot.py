@@ -83,6 +83,8 @@ class TelegramBot:
             logger.warning("[Telegram] Invalid bot token, polling not started.")
             return
 
+        self._register_bot_commands()
+
         self._stop_event.clear()
         self.is_running = True
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True, name="TelegramPollThread")
@@ -98,6 +100,26 @@ class TelegramBot:
         if self._poll_thread and self._poll_thread.is_alive():
             self._poll_thread.join(timeout=2)
         print("[Telegram] Bot polling stopped.")
+
+    def _register_bot_commands(self, token=None):
+        """Automatically register bot commands with Telegram so they appear in the Menu button."""
+        tok = token or self.bot_token
+        if not tok:
+            return
+        commands = [
+            {"command": "status", "description": "Ringkasan kesehatan jaringan"},
+            {"command": "down", "description": "Daftar perangkat offline"},
+            {"command": "alerts", "description": "Alert aktif yang belum di-ack"},
+            {"command": "poll", "description": "Poll seluruh perangkat SNMP sekarang"},
+            {"command": "digest", "description": "Kirim rekap harian sekarang"},
+            {"command": "myid", "description": "Tampilkan Chat ID & User ID Anda"},
+            {"command": "help", "description": "Panduan & bantuan perintah"}
+        ]
+        try:
+            url = f"https://api.telegram.org/bot{tok}/setMyCommands"
+            requests.post(url, json={"commands": commands}, timeout=10)
+        except Exception as e:
+            logger.debug(f"[Telegram] Failed to set bot commands: {e}")
 
     def _verify_bot_info(self):
         """Verify token with getMe and cache bot identity."""
@@ -698,6 +720,8 @@ class TelegramBot:
             if not data.get('ok'):
                 return {"status": "error", "message": f"Token tidak valid: {data.get('description')}"}
             bot_user = data.get('result', {})
+            # Automatically register commands menu with Telegram
+            self._register_bot_commands(token=test_token)
         except Exception as e:
             return {"status": "error", "message": f"Koneksi ke Telegram API gagal: {e}"}
 
