@@ -160,3 +160,16 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
       - Menambahkan tombol pintasan `[📈 Grafik 24 Jam]` dan `[📊 Grafik 7 Hari]` langsung di bawah pesan respons `/traffic all` maupun rincian `/traffic <router>` sehingga pengguna dapat beralih antara mode teks dan grafik gambar hanya dengan 1 sentuhan.
     - **Optimasi Query Data Time-Series (`database.py`):** Menambahkan method `get_chart_traffic_data(device_id, time_range)` dengan bucketing SQL agregat berpresisi tinggi dan konversi waktu lokal (`'localtime'`).
     - **Sinkronisasi Dependensi (`requirements.txt` & `update.sh`):** Menambahkan `matplotlib>=3.7.0` pada `requirements.txt` yang otomatis diinstal oleh skrip update server tanpa mempengaruhi database.
+
+16. **Perbaikan Menyeluruh Bug Lonjakan Traffic di Atas Threshold SFP & Pemulihan Hard Cap 5 Gbps:**
+    - **Akar Masalah (Root Cause):** Pada pembaruan sebelumnya, setting batas anomali `anomaly_cap_gbps` tidak sengaja termigrasi naik dari `5.0 Gbps` ke `10.0 Gbps` dan `anomaly_cap_multiplier` dari `1.05` ke `1.25`. Selain itu, saat terjadi lonjakan traffic abnormal, data yang melebihi batas link malah di-cap ke batas maksimum port fisik (`min(wan_in_bps, effective_speed)`) dan tetap disimpan ke database, alih-alih di-drop (`return None`) atau di-nolkan. Akibatnya, pada router dengan modul SFP/SFP+ 10G (namun bandwidth ISP sebenarnya hanya 5–6 Gbps), glitch counter SNMP mencatat lonjakan traffic mustahil hingga 10 Gbps ke database dan merusak grafik dashboard.
+    - **Pemulihan Aturan Mutlak & Hard Cap SFP / ISP:**
+      - Mengembalikan `anomaly_cap_gbps` ke **`5.0 Gbps`** (plafon absolut batas total ISP untuk link 10G SFP+).
+      - Mengembalikan `anomaly_cap_multiplier` ke **`1.05`** (buffer 5% di atas kapasitas link).
+      - Menghubungkan batas interface dengan pengaturan `uplink_speed_mbps` per-perangkat di database: jika port fisik SFP+ berkapasitas 10G namun setting uplink router diatur 1G atau 5G, batas efektif akan mengunci pada nilai terkecil (`min(speed_bps, uplink_bps_fallback)`), sehingga traffic tidak dapat melampaui kapasitas langganan.
+    - **Penolakan Sampel Anomali Ekstrem (Drop & Zero-Out):**
+      - Pada `_poll_router_traffic`: Setiap sampel traffic yang melebihi `limit_bps` seketika di-drop dengan mengembalikan `None`, mencegah data anomali merusak grafik dashboard dan metrik WAN.
+      - Pada `collect_interface_traffic`: Sampel per-interface yang melebihi `limit_bps` otomatis di-reset ke `0.0`.
+    - **Pembersihan Otomatis Data Korup Historis (`database.py`):**
+      - Menambahkan migrasi pembersihan otomatis saat startup aplikasi di `_init_db()` untuk langsung menolkan data historis anomali yang sempat tersimpan melebihi batas SFP (`MIN(uplink_speed_mbps * 1.05, 5.0 Gbps)`) pada tabel `snmp_metrics`, `devices`, dan `interface_traffic`.
+      - Menyelaraskan kembali input default dan nilai fallback pada `templates/settings.html`.

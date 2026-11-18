@@ -264,8 +264,8 @@ class Database:
                 'traffic_retention_hours': '720',
                 'report_metrics_retention_hours': '1440',
                 'interface_chart_retention_hours': '168',
-                'anomaly_cap_multiplier': '1.25',
-                'anomaly_cap_gbps': '10.0',
+                'anomaly_cap_multiplier': '1.05',
+                'anomaly_cap_gbps': '5.0',
                 'telegram_enabled': 'false',
                 'telegram_bot_token': '',
                 'telegram_chat_ids': '',
@@ -285,8 +285,6 @@ class Database:
 
             # Migrate old overly aggressive default settings to conservative non-spam defaults
             old_aggressive_defaults = {
-                'anomaly_cap_multiplier': ('1.05', '1.25'),
-                'anomaly_cap_gbps': ('5.0', '10.0'),
                 'traffic_spike_multiplier': ('2.5', '4.0'),
                 'traffic_spike_min_mbps': ('20.0', '80.0'),
                 'cpu_spike_threshold': ('85.0', '92.0'),
@@ -295,6 +293,59 @@ class Database:
             }
             for key, (old_val, new_val) in old_aggressive_defaults.items():
                 c.execute('UPDATE settings SET value=? WHERE key=? AND value=?', (new_val, key, old_val))
+
+            # Strictly enforce the SFP / ISP anomaly link cap (1.05x tolerance, 5.0 Gbps ceiling)
+            c.execute("UPDATE settings SET value='1.05' WHERE key='anomaly_cap_multiplier' AND value='1.25'")
+            c.execute("UPDATE settings SET value='5.0' WHERE key='anomaly_cap_gbps' AND value='10.0'")
+
+            # Automatically purge any nonsensical traffic spikes (> SFP / link cap) that may have been recorded
+            try:
+                mult_row = c.execute("SELECT value FROM settings WHERE key='anomaly_cap_multiplier'").fetchone()
+                cap_row = c.execute("SELECT value FROM settings WHERE key='anomaly_cap_gbps'").fetchone()
+                clean_mult = float(mult_row[0]) if mult_row else 1.05
+                clean_cap_bps = float(cap_row[0]) * 1e9 if cap_row else 5e9
+
+                c.execute('''
+                    UPDATE snmp_metrics 
+                    SET metric_value = '0' 
+                    WHERE metric_name IN ('wan_in', 'wan_out') 
+                    AND CAST(metric_value AS REAL) > (
+                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?) 
+                        FROM devices WHERE devices.id = snmp_metrics.device_id
+                    )
+                ''', (clean_mult, clean_cap_bps))
+
+                c.execute('''
+                    UPDATE devices 
+                    SET wan_in = 0
+                    WHERE wan_in > MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?)
+                ''', (clean_mult, clean_cap_bps))
+
+                c.execute('''
+                    UPDATE devices 
+                    SET wan_out = 0
+                    WHERE wan_out > MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?)
+                ''', (clean_mult, clean_cap_bps))
+
+                c.execute('''
+                    UPDATE interface_traffic 
+                    SET rx_bps = 0
+                    WHERE rx_bps > (
+                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?) 
+                        FROM devices WHERE devices.id = interface_traffic.device_id
+                    )
+                ''', (clean_mult, clean_cap_bps))
+
+                c.execute('''
+                    UPDATE interface_traffic 
+                    SET tx_bps = 0
+                    WHERE tx_bps > (
+                        SELECT MIN(IFNULL(uplink_speed_mbps, 1000) * 1000000.0 * ?, ?) 
+                        FROM devices WHERE devices.id = interface_traffic.device_id
+                    )
+                ''', (clean_mult, clean_cap_bps))
+            except Exception as e:
+                print(f"[DB init] Auto-clean traffic spikes note: {e}")
 
             c.execute('INSERT OR IGNORE INTO zones (id, name, color, description) VALUES (1, "Default Zone", "#00d4ff", "Default network zone")')
             c.execute('INSERT OR IGNORE INTO floorplans (id) VALUES (1)')
@@ -312,8 +363,8 @@ class Database:
             with self.conn() as c:
                 mult_row = c.execute("SELECT value FROM settings WHERE key='anomaly_cap_multiplier'").fetchone()
                 cap_row = c.execute("SELECT value FROM settings WHERE key='anomaly_cap_gbps'").fetchone()
-                mult = float(mult_row[0]) if mult_row else 1.25
-                cap_bps = float(cap_row[0]) * 1000000000.0 if cap_row else 10000000000.0
+                mult = float(mult_row[0]) if mult_row else 1.05
+                cap_bps = float(cap_row[0]) * 1000000000.0 if cap_row else 5000000000.0
 
                 cur = c.execute('''
                     UPDATE snmp_metrics

@@ -115,17 +115,17 @@ class SNMPWorker:
     def _anomaly_limit_bps(self, effective_speed_bps):
         """Batas atas (bps) untuk mendeteksi spike/anomali traffic.
         Diambil dari settings:
-          - anomaly_cap_multiplier : toleransi terhadap kapasitas link (default 1.25)
-          - anomaly_cap_gbps      : plafon mutlak dalam Gbps (default 10.0)
+          - anomaly_cap_multiplier : toleransi terhadap kapasitas link (default 1.05)
+          - anomaly_cap_gbps      : plafon mutlak dalam Gbps (default 5.0)
         """
         try:
-            mult = float(self.db.get_settings().get('anomaly_cap_multiplier', 1.25))
+            mult = float(self.db.get_settings().get('anomaly_cap_multiplier', 1.05))
         except (ValueError, TypeError):
-            mult = 1.25
+            mult = 1.05
         try:
-            cap_gbps = float(self.db.get_settings().get('anomaly_cap_gbps', 10.0))
+            cap_gbps = float(self.db.get_settings().get('anomaly_cap_gbps', 5.0))
         except (ValueError, TypeError):
-            cap_gbps = 10.0
+            cap_gbps = 5.0
         cap_bps = cap_gbps * 1e9
         if effective_speed_bps and effective_speed_bps > 0:
             limit = effective_speed_bps * mult
@@ -1487,7 +1487,12 @@ class SNMPWorker:
                         except ValueError:
                             pass
                 
-                limit_bps = self._anomaly_limit_bps(speed_bps)
+                uplink_bps_fallback = float((latest or device).get('uplink_speed_mbps') or 1000) * 1e6
+                effective_if_speed = speed_bps if speed_bps > 0 else uplink_bps_fallback
+                if (latest or device).get('wan_iface_idx') and str((latest or device).get('wan_iface_idx')) == str(idx):
+                    effective_if_speed = min(effective_if_speed, uplink_bps_fallback)
+
+                limit_bps = self._anomaly_limit_bps(effective_if_speed)
 
                 # Rollover / Reboot protection for 32-bit counters
                 if d_rx < 0:
@@ -1518,14 +1523,14 @@ class SNMPWorker:
                 tx_bps = (d_tx * 8) / dt
                 
                 if rx_bps > limit_bps:
-                    cap_mbps = (speed_bps / 1e6) if speed_bps > 0 else 100000.0
-                    print(f"[Traffic] Spike terdeteksi pada device_id={did} interface={name} (rx_bps={rx_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps)")
-                    rx_bps = 0.0 if rx_bps > (limit_bps * 2.0) else (speed_bps if speed_bps > 0 else limit_bps)
+                    cap_mbps = (limit_bps / 1e6) if limit_bps > 0 else 100000.0
+                    print(f"[Traffic] Spike terdeteksi pada device_id={did} interface={name} (rx_bps={rx_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps) - reset to 0")
+                    rx_bps = 0.0
 
                 if tx_bps > limit_bps:
-                    cap_mbps = (speed_bps / 1e6) if speed_bps > 0 else 100000.0
-                    print(f"[Traffic] Spike terdeteksi pada device_id={did} interface={name} (tx_bps={tx_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps)")
-                    tx_bps = 0.0 if tx_bps > (limit_bps * 2.0) else (speed_bps if speed_bps > 0 else limit_bps)
+                    cap_mbps = (limit_bps / 1e6) if limit_bps > 0 else 100000.0
+                    print(f"[Traffic] Spike terdeteksi pada device_id={did} interface={name} (tx_bps={tx_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps) - reset to 0")
+                    tx_bps = 0.0
                 
                 with self.db_write_lock:
                     self.db.save_interface_traffic(did, str(name), int(idx), rx_bps, tx_bps)
@@ -1788,7 +1793,9 @@ class SNMPWorker:
                     # Prevent false positives on PPPoE/virtual interfaces that report 0 or fake low speeds
                     # by falling back to the auto-detected physical uplink speed
                     uplink_bps_fallback = float(device.get('uplink_speed_mbps') or 1000) * 1e6
-                    effective_speed = max(speed_bps, uplink_bps_fallback)
+                    effective_speed = speed_bps if speed_bps > 0 else uplink_bps_fallback
+                    if uplink_bps_fallback > 0 and speed_bps > 0:
+                        effective_speed = min(speed_bps, uplink_bps_fallback)
                     
                     # Custom rule: 
                     # If link is 1 Gbps, limit is ~1 Gbps (plus 5% tolerance).
@@ -1796,12 +1803,10 @@ class SNMPWorker:
                     limit_bps = self._anomaly_limit_bps(effective_speed)
                     
                     if wan_in_bps > limit_bps or wan_out_bps > limit_bps:
-                        cap_mbps = (effective_speed / 1e6) if effective_speed > 0 else 100000.0
-                        print(f"[Traffic] Spike terdeteksi pada device_id={did} WAN interface={target_idx} (wan_in={wan_in_bps:.1f}, wan_out={wan_out_bps:.1f} melebihi kapasitas link {cap_mbps:.1f} Mbps)")
-                        if wan_in_bps > (limit_bps * 2.0) or wan_out_bps > (limit_bps * 2.0):
-                            return None
-                        wan_in_bps = min(wan_in_bps, effective_speed)
-                        wan_out_bps = min(wan_out_bps, effective_speed)
+                        cap_mbps = (limit_bps / 1e6) if limit_bps > 0 else 100000.0
+                        print(f"[Traffic] Spike terdeteksi pada device_id={did} WAN interface={target_idx} (wan_in={wan_in_bps:.1f}, wan_out={wan_out_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps) - dropped")
+                        # Skip recording this anomalous poll to avoid ruining the graph (return None instead of 0)
+                        return None
 
                     return {"wan_in": wan_in_bps, "wan_out": wan_out_bps}
         except Exception:
