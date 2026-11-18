@@ -115,3 +115,9 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
     - **Perintah `/iface <ip/id>`:** Memeriksa status dan daftar interface perangkat tertentu secara instan.
     - **Inline Keyboard Interaktif:** Menambahkan tombol shortcut pada pesan Telegram (`🔄 Refresh Traffic`, `🔝 Top Bandwidth`, `⚡ Live Capture (3s)`, dsb.) untuk navigasi data secara seamless tanpa mengetik ulang command.
     - **Optimasi Query Database Traffic:** Menambahkan method `get_latest_device_interface_traffic()`, `get_top_bandwidth_interfaces()`, dan `get_router_traffic_summary()` pada `database.py` dengan query agregasi CTE efisien.
+
+13. **Pengembangan Sub-Command Pemilihan Traffic Router (All Routers vs Selected Router):**
+    - **Sub-Command `/traffic all` (atau `/traffic`):** Menampilkan ringkasan throughput agregat seluruh router jaringan (backbone WAN in/out) lengkap dengan tombol interaktif untuk langsung beralih ke pemilihan router spesifik.
+    - **Sub-Command `/traffic select` (atau `/traffic pilih` / `/traffic list`):** Menampilkan menu pemilih interaktif berbasis inline keyboard berisi tombol daftar router yang terdaftar, memudahkan pemilihan router hanya dengan sekali sentuh/klik di Telegram.
+    - **Pencarian Cerdas Router Spesifik (`/traffic <nama/ip/id>`):** Meningkatkan fleksibilitas pemanggilan traffic perangkat melalui pencocokan cerdas ID numerik, IP address, maupun nama perangkat (substring & case-insensitive, misal: `/traffic core`).
+    - **Navigasi Bolak-Balik Real-Time:** Menambahkan tombol `🔀 Pilih Router Lain` dan `🌐 Semua Router (All)` di setiap tampilan rincian router, serta integrasi callback query `cmd:traffic_picker` untuk transisi antar tampilan tanpa perlu mengetik ulang command.

@@ -148,7 +148,7 @@ class TelegramBot:
             return
         commands = [
             {"command": "status", "description": "Ringkasan kesehatan jaringan"},
-            {"command": "traffic", "description": "Snapshot bandwidth & traffic WAN"},
+            {"command": "traffic", "description": "Traffic: All router / Selected router"},
             {"command": "top", "description": "Top 10 bandwidth interface tertinggi"},
             {"command": "capture", "description": "Live capture traffic real-time via SNMP"},
             {"command": "down", "description": "Daftar perangkat offline"},
@@ -348,11 +348,20 @@ class TelegramBot:
             self._cmd_myid(chat_id, user_id, first_name, username)
         elif cmd in ("/status", "/summary"):
             self._cmd_status(chat_id)
-        elif cmd in ("/traffic", "/bandwidth", "/bw"):
-            if args:
-                self._cmd_traffic_device(chat_id, args)
-            else:
+        elif cmd in ("/traffic", "/traffict", "/bandwidth", "/bw"):
+            sub = args[0].lower().strip() if args else ""
+            if not sub or sub in ("all", "semua", "backbone", "total"):
                 self._cmd_traffic_summary(chat_id)
+            elif sub in ("select", "pilih", "list", "daftar", "router", "routers"):
+                self._cmd_traffic_picker(chat_id)
+            elif sub in ("help", "bantuan", "?"):
+                self._cmd_traffic_help(chat_id)
+            else:
+                self._cmd_traffic_device(chat_id, args)
+        elif cmd in ("/traffic_all", "/traffict_all"):
+            self._cmd_traffic_summary(chat_id)
+        elif cmd in ("/traffic_select", "/traffict_select"):
+            self._cmd_traffic_picker(chat_id)
         elif cmd in ("/top", "/toptraffic", "/topbw", "/top_bandwidth"):
             self._cmd_top_bandwidth(chat_id)
         elif cmd in ("/capture", "/torch", "/live"):
@@ -457,6 +466,9 @@ class TelegramBot:
             elif action == "traffic_summary":
                 self.answer_callback_query(cq_id, text="🔄 Memperbarui data traffic...")
                 self._cmd_traffic_summary(chat_id, edit_msg_id=message_id)
+            elif action == "traffic_picker":
+                self.answer_callback_query(cq_id, text="🔀 Memuat daftar router...")
+                self._cmd_traffic_picker(chat_id, edit_msg_id=message_id)
             elif action == "top_bandwidth":
                 self.answer_callback_query(cq_id, text="🔄 Mengambil top bandwidth...")
                 self._cmd_top_bandwidth(chat_id, edit_msg_id=message_id)
@@ -496,8 +508,9 @@ class TelegramBot:
             f"👋 Halo, <b>{name}</b>!\n\n"
             "🤖 <b>NetMon Telegram Bot</b> siap membantu monitoring jaringan & traffic secara real-time.\n\n"
             "<b>📊 Monitoring Bandwidth & Traffic:</b>\n"
-            "• <code>/traffic</code> atau <code>/bw</code> — Snapshot bandwidth WAN & total throughput backbone\n"
-            "• <code>/traffic &lt;ip/id&gt;</code> — Detail pemakaian bandwidth per-interface perangkat\n"
+            "• <code>/traffic all</code> — Agregat bandwidth seluruh router (All Traffic)\n"
+            "• <code>/traffic select</code> — Menu interaktif memilih router (Selected Router)\n"
+            "• <code>/traffic &lt;nama/ip/id&gt;</code> — Detail pemakaian bandwidth router spesifik\n"
             "• <code>/top</code> — Top 10 interface dengan beban bandwidth tertinggi\n"
             "• <code>/capture &lt;ip/id&gt;</code> — Live active capture traffic real-time via SNMP (3 detik)\n"
             "• <code>/iface &lt;ip/id&gt;</code> — Cek status & daftar interface perangkat\n\n"
@@ -725,7 +738,7 @@ class TelegramBot:
             total_all = total_in + total_out
 
             text = (
-                "🌐 <b>Ringkasan Traffic & Bandwidth Jaringan</b>\n"
+                "🌐 <b>Ringkasan Seluruh Traffic Router (All Routers)</b>\n"
                 f"<i>Waktu: {now_str} WIB</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
                 "📊 <b>Total Throughput Backbone:</b>\n"
@@ -736,7 +749,7 @@ class TelegramBot:
             )
 
             if routers:
-                text += "🛰️ <b>Status Bandwidth Router:</b>\n\n"
+                text += "🛰️ <b>Status Bandwidth Tiap Router:</b>\n\n"
                 for r in routers[:8]:
                     rname = r.get('name') or r.get('ip')
                     rip = r.get('ip')
@@ -759,15 +772,18 @@ class TelegramBot:
                 text += "<i>Belum ada router atau perangkat dengan metrik WAN terdeteksi.</i>\n\n"
 
             text += (
-                "💡 <i>Ketik <code>/traffic &lt;ip&gt;</code> untuk interface spesifik, "
-                "atau <code>/capture &lt;ip&gt;</code> untuk live traffic capture.</i>"
+                "💡 <i>Ketik <code>/traffic select</code> untuk memilih router tertentu, "
+                "atau klik tombol <b>Pilih Router Spesifik</b> di bawah.</i>"
             )
 
             markup = {
                 "inline_keyboard": [
                     [
-                        {"text": "🔄 Refresh Traffic", "callback_data": "cmd:traffic_summary"},
+                        {"text": "🔄 Refresh All", "callback_data": "cmd:traffic_summary"},
                         {"text": "🔝 Top Bandwidth", "callback_data": "cmd:top_bandwidth"}
+                    ],
+                    [
+                        {"text": "🔀 Pilih Router Spesifik (Selected)", "callback_data": "cmd:traffic_picker"}
                     ]
                 ]
             }
@@ -779,6 +795,71 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"[Telegram] Error in traffic summary: {e}")
             self.send_message(chat_id, f"⚠️ Gagal mengambil ringkasan traffic: {e}")
+
+    def _cmd_traffic_picker(self, chat_id, edit_msg_id=None):
+        """Interactive router selector menu."""
+        try:
+            routers = self.db.get_router_traffic_summary()
+            if not routers:
+                all_devs = self.db.get_all_devices()
+                routers = [d for d in all_devs if d.get('snmp_enabled')] or all_devs
+
+            if not routers:
+                self.send_message(chat_id, "ℹ️ Belum ada perangkat atau router yang terdaftar di database.")
+                return
+
+            text = (
+                "🔀 <b>Pilih Router untuk Monitoring Traffic:</b>\n\n"
+                "Silakan pilih router di bawah untuk melihat rincian utilisasi link & throughput per-interface:\n"
+            )
+
+            buttons = []
+            row = []
+            for r in routers[:16]:
+                rname = r.get('name') or r.get('ip')
+                status_icon = "🟢" if r.get('status') == 'up' else "🔴"
+                label = f"{status_icon} {rname[:15]}"
+                row.append({"text": label, "callback_data": f"cmd:traffic_dev:{r['id']}"})
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+
+            buttons.append([
+                {"text": "🌐 Pantau Semua Router (All)", "callback_data": "cmd:traffic_summary"},
+                {"text": "🔝 Top Bandwidth", "callback_data": "cmd:top_bandwidth"}
+            ])
+
+            markup = {"inline_keyboard": buttons}
+
+            if edit_msg_id:
+                self.edit_message_text(chat_id, edit_msg_id, text, reply_markup=markup)
+            else:
+                self.send_message(chat_id, text, reply_markup=markup)
+        except Exception as e:
+            logger.error(f"[Telegram] Error in traffic picker: {e}")
+            self.send_message(chat_id, f"⚠️ Gagal memuat daftar router: {e}")
+
+    def _cmd_traffic_help(self, chat_id):
+        """Show guide for traffic subcommands."""
+        text = (
+            "ℹ️ <b>Panduan Perintah Traffic & Bandwidth:</b>\n\n"
+            "• <code>/traffic all</code> — Pantau agregat bandwidth seluruh router (All Traffic)\n"
+            "• <code>/traffic select</code> — Menu interaktif memilih router (Selected Router)\n"
+            "• <code>/traffic &lt;nama/ip/id&gt;</code> — Langsung pilih router (contoh: <code>/traffic core</code> atau <code>/traffic 192.168.1.1</code>)\n"
+            "• <code>/top</code> — 10 interface dengan beban bandwidth tertinggi\n"
+            "• <code>/capture &lt;ip/id&gt;</code> — Live active capture traffic real-time via SNMP (3 detik)"
+        )
+        markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "🌐 Semua Router (All)", "callback_data": "cmd:traffic_summary"},
+                    {"text": "🔀 Pilih Router (Select)", "callback_data": "cmd:traffic_picker"}
+                ]
+            ]
+        }
+        self.send_message(chat_id, text, reply_markup=markup)
 
     def _cmd_traffic_device(self, chat_id, args, edit_msg_id=None):
         if not args:
@@ -792,8 +873,26 @@ class TelegramBot:
         if not device:
             device = self.db.get_device_by_ip(target)
 
+        # Name search (exact or partial)
         if not device:
-            self.send_message(chat_id, f"⚠️ Perangkat dengan IP/ID <code>{target}</code> tidak ditemukan.")
+            all_devs = self.db.get_all_devices()
+            t_low = target.lower()
+            for d in all_devs:
+                if (d.get('name') or '').strip().lower() == t_low:
+                    device = d
+                    break
+            if not device:
+                for d in all_devs:
+                    if t_low in (d.get('name') or '').lower():
+                        device = d
+                        break
+
+        if not device:
+            self.send_message(
+                chat_id,
+                f"⚠️ Perangkat atau router dengan nama/IP/ID <code>{target}</code> tidak ditemukan.\n\n"
+                "Ketik <code>/traffic select</code> untuk melihat daftar router yang tersedia."
+            )
             return
 
         did = device.get('id')
@@ -851,7 +950,8 @@ class TelegramBot:
                     {"text": "🔄 Refresh", "callback_data": f"cmd:traffic_dev:{did}"}
                 ],
                 [
-                    {"text": "🌐 Kembali ke Backbone", "callback_data": "cmd:traffic_summary"}
+                    {"text": "🔀 Pilih Router Lain", "callback_data": "cmd:traffic_picker"},
+                    {"text": "🌐 Semua Router (All)", "callback_data": "cmd:traffic_summary"}
                 ]
             ]
         }
@@ -894,7 +994,10 @@ class TelegramBot:
                 "inline_keyboard": [
                     [
                         {"text": "🔄 Refresh Top", "callback_data": "cmd:top_bandwidth"},
-                        {"text": "🌐 Ringkasan Backbone", "callback_data": "cmd:traffic_summary"}
+                        {"text": "🔀 Pilih Router", "callback_data": "cmd:traffic_picker"}
+                    ],
+                    [
+                        {"text": "🌐 Pantau Semua Router (All)", "callback_data": "cmd:traffic_summary"}
                     ]
                 ]
             }
