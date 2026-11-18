@@ -874,7 +874,7 @@ class TelegramBot:
 
             uplink_str = f"{total_uplink_mbps} Mbps" if total_uplink_mbps < 1000 else f"{total_uplink_mbps/1000:.1f} Gbps"
 
-            text = (
+            header = (
                 "🌐 <b>Ringkasan Backbone TIKWatch (Hanya Uplink WAN)</b>\n"
                 f"<i>Waktu: {now_str} WIB</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
@@ -890,9 +890,15 @@ class TelegramBot:
                 "━━━━━━━━━━━━━━━━━━━━━\n"
             )
 
+            footer = (
+                "💡 <i>Tampilan Semua Router hanya menampilkan traffic Uplink. "
+                "Untuk melihat rincian <b>Active Port</b> tiap interface, pilih router via tombol di bawah.</i>"
+            )
+
+            messages = []
             if routers:
-                text += "🛰️ <b>Status Uplink Tiap Router (Agregasi ON):</b>\n\n"
-                for r in routers[:8]:
+                current_msg = header + f"🛰️ <b>Status Uplink Semua Router ({len(routers)}):</b>\n\n"
+                for idx, r in enumerate(routers, start=1):
                     rname = r.get('name') or r.get('ip')
                     rip = r.get('ip')
                     win = r.get('wan_in') or 0.0
@@ -911,18 +917,23 @@ class TelegramBot:
                     if is_bgp:
                         badge = "[BGP / Agg ON]" if is_agg else "[BGP / Agg OFF]"
 
-                    text += (
-                        f"🔹 <b>{rname}</b> ({rip}) {status_icon} <code>{badge}</code>\n"
-                        f"  📥 Uplink IN: <b>{format_speed(win)}</b> | 📤 Uplink OUT: <b>{format_speed(wout)}</b>\n"
-                        f"  📊 Utilisasi: <code>{format_bar(util_pct, 8)}</code> {util_pct:.1f}% ({uplink_mbps}M){warn_tag}\n\n"
+                    block = (
+                        f"{idx}. 🔹 <b>{rname}</b> ({rip}) {status_icon} <code>{badge}</code>\n"
+                        f"  📥 IN: <b>{format_speed(win)}</b> | 📤 OUT: <b>{format_speed(wout)}</b>\n"
+                        f"  📊 Util: <code>{format_bar(util_pct, 8)}</code> {util_pct:.1f}% ({uplink_mbps}M){warn_tag}\n\n"
                     )
-            else:
-                text += "<i>Belum ada router atau perangkat dengan metrik WAN terdeteksi.</i>\n\n"
+                    if len(current_msg) + len(block) > 3600:
+                        messages.append(current_msg)
+                        current_msg = f"🛰️ <b>Lanjutan Status Uplink Router ({idx}-{len(routers)}):</b>\n\n"
+                    current_msg += block
 
-            text += (
-                "💡 <i>Tampilan Semua Router hanya menampilkan traffic Uplink. "
-                "Untuk melihat rincian <b>Active Port</b> tiap interface, pilih router via tombol di bawah.</i>"
-            )
+                if len(current_msg) + len(footer) > 3950:
+                    messages.append(current_msg)
+                    messages.append(footer)
+                else:
+                    messages.append(current_msg + footer)
+            else:
+                messages.append(header + "<i>Belum ada router atau perangkat dengan metrik WAN terdeteksi.</i>\n\n" + footer)
 
             markup = {
                 "inline_keyboard": [
@@ -940,10 +951,13 @@ class TelegramBot:
                 ]
             }
 
-            if edit_msg_id:
-                self.edit_message_text(chat_id, edit_msg_id, text, reply_markup=markup)
-            else:
-                self.send_message(chat_id, text, reply_markup=markup)
+            for i, msg_text in enumerate(messages):
+                is_last = (i == len(messages) - 1)
+                rm = markup if is_last else None
+                if i == 0 and edit_msg_id:
+                    self.edit_message_text(chat_id, edit_msg_id, msg_text, reply_markup=rm)
+                else:
+                    self.send_message(chat_id, msg_text, reply_markup=rm)
         except Exception as e:
             logger.error(f"[Telegram] Error in traffic summary: {e}")
             self.send_message(chat_id, f"⚠️ Gagal mengambil ringkasan traffic: {e}")
@@ -968,7 +982,7 @@ class TelegramBot:
 
             buttons = []
             row = []
-            for r in routers[:16]:
+            for r in routers[:90]:
                 rname = (r.get('name') or r.get('ip') or '')[:14]
                 status_icon = "🟢" if r.get('status') == 'up' else "🔴"
                 is_agg = r.get('include_in_aggregate', 1) == 1
@@ -1130,7 +1144,7 @@ class TelegramBot:
 
             buttons = []
             row = []
-            for r in routers[:16]:
+            for r in routers[:90]:
                 rname = (r.get('name') or r.get('ip') or '')[:14]
                 status_icon = "🟢" if r.get('status') == 'up' else "🔴"
                 is_agg = r.get('include_in_aggregate', 1) == 1
