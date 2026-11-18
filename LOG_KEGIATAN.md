@@ -193,3 +193,14 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
       - **Traffic Throughput (Laju Aliran Data):** Menampilkan laju transfer data aktual dalam satuan Mbps / Gbps (Terkini / Current, Puncak / Peak, dan Rata-rata / Average) untuk WAN IN (Download) dan WAN OUT (Upload).
       - **Bandwidth Usage (Utilisasi Kapasitas Pipa):** Menampilkan persentase pemakaian link (`%` terhadap kapasitas uplink), visualisasi progress bar (`[████░░░░]`), kapasitas total link/uplink, serta sisa ruang kapasitas bebas (*headroom*).
       - Keduanya disajikan secara terstruktur dan informatif pada gambar grafik PNG (`chart_generator.py`) maupun teks caption bot Telegram (`telegram_bot.py`).
+
+18. **Pengkhususan Traffic Top 10 & All Router Hanya Uplink WAN, Serta Tampilan Active Ports Pada Selected Router:**
+    - **Top 10 HANYA Menampilkan Uplink (`/top`):**
+      - Mengubah implementasi `get_top_bandwidth_interfaces()` di `database.py`: jika sebelumnya mengambil seluruh interface mentah (termasuk bridge, vlan internal, atau port lokal), kini secara mutlak HANYA meranking dan menampilkan traffic **Uplink WAN** (`wan_in` + `wan_out`) antar router.
+      - Setiap entri top 10 menampilkan ranking (1-10), nama router, IP, nama port uplink fisik (misal `sfp-sfpplus1` atau `ether1-WAN`), laju Inbound (RX), Outbound (TX), Total Throughput, persentase utilisasi bandwidth terhadap kapasitas uplink beserta progress bar, dan badge status `[Agg ON]` / `[BGP]`.
+    - **All Router HANYA Menampilkan Ringkasan Uplink (`/traffic all`):**
+      - Pada tampilan `/traffic` atau `/traffic all`, antarmuka difokuskan 100% pada performa kapasitas Uplink Backbone (Inbound, Outbound, Total, dan Utilisasi Uplink).
+      - Rincian port individual internal dihilangkan dari tampilan Semua Router agar tidak membingungkan dan menjaga fokus pemantauan pada link uplink utama.
+    - **Selected Router BARU Menampilkan Active Ports (`/traffic <router>`):**
+      - Menambahkan parameter `active_only=True` pada `get_latest_device_interface_traffic()` di `database.py` yang menyaring interface sehingga HANYA port dengan traffic aktif (`rx_bps + tx_bps > 0`) yang dimunculkan.
+      - Saat pengguna memilih router tertentu via `/traffic <nama>` atau picker, bot menampilkan ringkasan performa Uplink WAN di atas, kemudian menyajikan rincian **Active Ports** yang sedang mengalirkan traffic, lengkap dengan penanda `[Uplink WAN]` pada port uplink-nya. Port idle/dormant (0 bps) otomatis disembunyikan.

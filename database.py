@@ -1098,10 +1098,12 @@ class Database:
             ''', (device_id, f'-{int(hours)}')).fetchall()
             return [{'name': r[0], 'idx': r[1]} for r in rows]
 
-    def get_latest_device_interface_traffic(self, device_id, limit=15):
-        """Ambil data traffic interface terbaru untuk suatu perangkat (diambil dari sampel terkini)."""
+    def get_latest_device_interface_traffic(self, device_id, limit=15, active_only=False):
+        """Ambil data traffic interface terbaru untuk suatu perangkat (diambil dari sampel terkini).
+        Jika active_only=True, hanya mengembalikan interface yang memiliki traffic aktif (rx_bps + tx_bps > 0)."""
         with self.conn() as c:
-            rows = c.execute('''
+            where_active = "AND (COALESCE(it.rx_bps, 0) > 0 OR COALESCE(it.tx_bps, 0) > 0)" if active_only else ""
+            rows = c.execute(f'''
                 WITH latest_sample AS (
                     SELECT iface_name, MAX(sampled_at) AS max_sampled
                     FROM interface_traffic
@@ -1114,6 +1116,7 @@ class Database:
                   ON ls.iface_name = it.iface_name
                  AND ls.max_sampled = it.sampled_at
                 WHERE it.device_id = ?
+                  {where_active}
                 ORDER BY (COALESCE(it.rx_bps, 0) + COALESCE(it.tx_bps, 0)) DESC
                 LIMIT ?
             ''', (device_id, device_id, limit)).fetchall()
@@ -1127,35 +1130,116 @@ class Database:
             } for r in rows]
 
     def get_top_bandwidth_interfaces(self, limit=10):
-        """Ambil daftar interface dengan total traffic (rx + tx) tertinggi lintas jaringan."""
+        """Ambil daftar traffic uplink (WAN In + Out) tertinggi lintas router/perangkat (Hanya Uplink)."""
         with self.conn() as c:
+            # Ambil router atau perangkat dengan traffic uplink aktif
             rows = c.execute('''
-                WITH latest_sample AS (
-                    SELECT device_id, iface_name, MAX(sampled_at) AS max_sampled
-                    FROM interface_traffic
-                    WHERE sampled_at >= datetime('now', '-24 hours')
-                    GROUP BY device_id, iface_name
-                )
-                SELECT d.id, d.name, d.ip, it.iface_name, it.rx_bps, it.tx_bps, it.sampled_at
-                FROM latest_sample ls
-                JOIN interface_traffic it
-                  ON ls.device_id = it.device_id
-                 AND ls.iface_name = it.iface_name
-                 AND ls.max_sampled = it.sampled_at
-                JOIN devices d ON d.id = it.device_id
-                ORDER BY (COALESCE(it.rx_bps, 0) + COALESCE(it.tx_bps, 0)) DESC
+                SELECT d.id, d.name, d.ip, d.type, d.wan_in, d.wan_out,
+                       (COALESCE(d.wan_in, 0) + COALESCE(d.wan_out, 0)) AS total_bps,
+                       d.uplink_speed_mbps, d.wan_iface_idx, d.status,
+                       COALESCE(d.include_in_aggregate, 1) AS include_in_aggregate
+                FROM devices d
+                WHERE (d.type = 'router' OR d.wan_in IS NOT NULL OR d.wan_out IS NOT NULL)
+                  AND (COALESCE(d.wan_in, 0) + COALESCE(d.wan_out, 0)) > 0
+                ORDER BY (COALESCE(d.wan_in, 0) + COALESCE(d.wan_out, 0)) DESC
                 LIMIT ?
             ''', (limit,)).fetchall()
-            return [{
-                'device_id': r[0],
-                'device_name': r[1],
-                'device_ip': r[2],
-                'iface_name': r[3],
-                'rx_bps': float(r[4] or 0.0),
-                'tx_bps': float(r[5] or 0.0),
-                'total_bps': float(r[4] or 0.0) + float(r[5] or 0.0),
-                'sampled_at': r[6]
-            } for r in rows]
+
+            results = []
+            for r in rows:
+                did = r['id']
+                wan_idx = r['wan_iface_idx']
+                iface_name = "Uplink WAN"
+                if wan_idx:
+                    it_row = c.execute("SELECT iface_name FROM interface_traffic WHERE device_id=? AND iface_idx=? ORDER BY sampled_at DESC LIMIT 1", (did, str(wan_idx))).fetchone()
+                    if it_row and it_row[0]:
+                        iface_name = it_row[0]
+                else:
+                    it_row = c.execute('''
+                        SELECT iface_name FROM interface_traffic
+                        WHERE device_id=? AND (
+                            LOWER(iface_name) LIKE '%wan%' OR
+                            LOWER(iface_name) LIKE '%sfp%' OR
+                            LOWER(iface_name) LIKE '%ether1%' OR
+                            LOWER(iface_name) LIKE '%pppoe%'
+                        )
+                        ORDER BY sampled_at DESC LIMIT 1
+                    ''', (did,)).fetchone()
+                    if it_row and it_row[0]:
+                        iface_name = it_row[0]
+
+                win = float(r['wan_in'] or 0.0)
+                wout = float(r['wan_out'] or 0.0)
+                tot = win + wout
+                uplink_mbps = int(r['uplink_speed_mbps'] or 1000)
+                uplink_bps = uplink_mbps * 1_000_000.0
+                util_pct = (max(win, wout) / uplink_bps * 100.0) if uplink_bps > 0 else 0.0
+
+                results.append({
+                    'device_id': did,
+                    'device_name': r['name'] or r['ip'],
+                    'device_ip': r['ip'],
+                    'device_type': r['type'],
+                    'iface_name': iface_name,
+                    'rx_bps': win,
+                    'tx_bps': wout,
+                    'total_bps': tot,
+                    'uplink_speed_mbps': uplink_mbps,
+                    'util_pct': util_pct,
+                    'include_in_aggregate': r['include_in_aggregate'],
+                    'status': r['status']
+                })
+
+            # Jika devices belum memiliki nilai wan_in/wan_out di tabel devices, fallback cari dari interface_traffic khusus uplink
+            if not results:
+                rows_it = c.execute('''
+                    WITH latest_sample AS (
+                        SELECT device_id, iface_name, MAX(sampled_at) AS max_sampled
+                        FROM interface_traffic
+                        WHERE sampled_at >= datetime('now', '-24 hours')
+                          AND (
+                              LOWER(iface_name) LIKE '%wan%' OR
+                              LOWER(iface_name) LIKE '%sfp%' OR
+                              LOWER(iface_name) LIKE '%ether1%' OR
+                              LOWER(iface_name) LIKE '%pppoe%' OR
+                              LOWER(iface_name) LIKE '%uplink%'
+                          )
+                        GROUP BY device_id, iface_name
+                    )
+                    SELECT d.id, d.name, d.ip, it.iface_name, it.rx_bps, it.tx_bps, it.sampled_at,
+                           d.uplink_speed_mbps, COALESCE(d.include_in_aggregate, 1) AS include_in_aggregate, d.status
+                    FROM latest_sample ls
+                    JOIN interface_traffic it
+                      ON ls.device_id = it.device_id
+                     AND ls.iface_name = it.iface_name
+                     AND ls.max_sampled = it.sampled_at
+                    JOIN devices d ON d.id = it.device_id
+                    WHERE (COALESCE(it.rx_bps, 0) + COALESCE(it.tx_bps, 0)) > 0
+                    ORDER BY (COALESCE(it.rx_bps, 0) + COALESCE(it.tx_bps, 0)) DESC
+                    LIMIT ?
+                ''', (limit,)).fetchall()
+                for r in rows_it:
+                    win = float(r['rx_bps'] or 0.0)
+                    wout = float(r['tx_bps'] or 0.0)
+                    uplink_mbps = int(r['uplink_speed_mbps'] or 1000)
+                    uplink_bps = uplink_mbps * 1_000_000.0
+                    util_pct = (max(win, wout) / uplink_bps * 100.0) if uplink_bps > 0 else 0.0
+                    results.append({
+                        'device_id': r['id'],
+                        'device_name': r['name'] or r['ip'],
+                        'device_ip': r['ip'],
+                        'device_type': 'router',
+                        'iface_name': r['iface_name'],
+                        'rx_bps': win,
+                        'tx_bps': wout,
+                        'total_bps': win + wout,
+                        'uplink_speed_mbps': uplink_mbps,
+                        'util_pct': util_pct,
+                        'include_in_aggregate': r['include_in_aggregate'],
+                        'status': r['status']
+                    })
+
+            return results
 
     def get_router_traffic_summary(self):
         """Ambil data utilisasi bandwidth WAN seluruh router yang terdaftar."""

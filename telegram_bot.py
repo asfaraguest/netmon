@@ -624,10 +624,10 @@ class TelegramBot:
             f"👋 Halo, <b>{name}</b>!\n\n"
             "🤖 <b>NetMon Telegram Bot</b> siap membantu monitoring jaringan & traffic secara real-time.\n\n"
             "<b>📊 Monitoring Bandwidth & Traffic:</b>\n"
-            "• <code>/traffic all</code> — Agregat bandwidth seluruh router (All Traffic)\n"
-            "• <code>/traffic select</code> — Menu interaktif memilih router (Selected Router)\n"
-            "• <code>/traffic &lt;nama/ip/id&gt;</code> — Detail pemakaian bandwidth router spesifik\n"
-            "• <code>/top</code> — Top 10 interface dengan beban bandwidth tertinggi\n"
+            "• <code>/traffic all</code> — Agregat bandwidth seluruh router (Hanya Uplink WAN)\n"
+            "• <code>/traffic select</code> — Menu interaktif memilih router untuk melihat Active Ports\n"
+            "• <code>/traffic &lt;nama/ip/id&gt;</code> — Detail uplink & active ports router spesifik\n"
+            "• <code>/top</code> — Top 10 router dengan traffic uplink tertinggi\n"
             "• <code>/capture &lt;ip/id&gt;</code> — Live active capture traffic real-time via SNMP (3 detik)\n"
             "• <code>/iface &lt;ip/id&gt;</code> — Cek status & daftar interface perangkat\n\n"
             "<b>📈 Visualisasi Grafik Gambar (Charts):</b>\n"
@@ -875,14 +875,14 @@ class TelegramBot:
             uplink_str = f"{total_uplink_mbps} Mbps" if total_uplink_mbps < 1000 else f"{total_uplink_mbps/1000:.1f} Gbps"
 
             text = (
-                "🌐 <b>Ringkasan Backbone Traffic & Bandwidth Usage</b>\n"
+                "🌐 <b>Ringkasan Backbone Traffic (Hanya Uplink WAN)</b>\n"
                 f"<i>Waktu: {now_str} WIB</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🌊 <b>THROUGHPUT BACKBONE ({len(agg_routers)} Router Agregasi ON):</b>\n"
                 f"  📥 <b>Inbound (WAN IN):</b>  <b>{format_speed(total_in)}</b>\n"
                 f"  📤 <b>Outbound (WAN OUT):</b> <b>{format_speed(total_out)}</b>\n"
                 f"  ⚡ <b>Total Agregat:</b> <b>{format_speed(total_all)}</b>\n\n"
-                "📈 <b>BANDWIDTH USAGE (Utilisasi Kapasitas):</b>\n"
+                "📈 <b>BANDWIDTH USAGE (Utilisasi Kapasitas Uplink):</b>\n"
                 f"  🔌 <b>Kapasitas Backbone:</b> {uplink_str}\n"
                 f"  📥 <b>Inbound Usage:</b>  <code>{format_bar(util_in, 8)}</code> {util_in:.1f}%\n"
                 f"  📤 <b>Outbound Usage:</b> <code>{format_bar(util_out, 8)}</code> {util_out:.1f}%\n"
@@ -891,7 +891,7 @@ class TelegramBot:
             )
 
             if routers:
-                text += "🛰️ <b>Rincian Tiap Router:</b>\n\n"
+                text += "🛰️ <b>Status Uplink Tiap Router (Agregasi ON):</b>\n\n"
                 for r in routers[:8]:
                     rname = r.get('name') or r.get('ip')
                     rip = r.get('ip')
@@ -913,15 +913,15 @@ class TelegramBot:
 
                     text += (
                         f"🔹 <b>{rname}</b> ({rip}) {status_icon} <code>{badge}</code>\n"
-                        f"  📥 In: <b>{format_speed(win)}</b> | 📤 Out: <b>{format_speed(wout)}</b>\n"
+                        f"  📥 Uplink IN: <b>{format_speed(win)}</b> | 📤 Uplink OUT: <b>{format_speed(wout)}</b>\n"
                         f"  📊 Utilisasi: <code>{format_bar(util_pct, 8)}</code> {util_pct:.1f}% ({uplink_mbps}M){warn_tag}\n\n"
                     )
             else:
                 text += "<i>Belum ada router atau perangkat dengan metrik WAN terdeteksi.</i>\n\n"
 
             text += (
-                "💡 <i>Ketik <code>/chart</code> untuk melihat gambar grafik visual (PNG), "
-                "atau klik tombol <b>Grafik Backbone</b> di bawah.</i>"
+                "💡 <i>Tampilan Semua Router hanya menampilkan traffic Uplink. "
+                "Untuk melihat rincian <b>Active Port</b> tiap interface, pilih router via tombol di bawah.</i>"
             )
 
             markup = {
@@ -931,11 +931,11 @@ class TelegramBot:
                         {"text": "📊 Grafik 7 Hari", "callback_data": "chart:all:7d"}
                     ],
                     [
-                        {"text": "🔄 Refresh All", "callback_data": "cmd:traffic_summary"},
-                        {"text": "🔝 Top Bandwidth", "callback_data": "cmd:top_bandwidth"}
+                        {"text": "🔄 Refresh All (Uplink)", "callback_data": "cmd:traffic_summary"},
+                        {"text": "🔝 Top 10 Uplink", "callback_data": "cmd:top_bandwidth"}
                     ],
                     [
-                        {"text": "🔀 Pilih Router Spesifik (Selected)", "callback_data": "cmd:traffic_picker"}
+                        {"text": "🔀 Pilih Router (Lihat Active Ports)", "callback_data": "cmd:traffic_picker"}
                     ]
                 ]
             }
@@ -961,8 +961,9 @@ class TelegramBot:
                 return
 
             text = (
-                "🔀 <b>Pilih Router untuk Monitoring Traffic & Bandwidth:</b>\n\n"
-                "Pilih router di bawah untuk melihat rincian utilisasi link & throughput per-interface:\n"
+                "🔀 <b>Pilih Router untuk Melihat Active Ports:</b>\n\n"
+                "Pilih router spesifik di bawah untuk melihat rincian traffic <b>Active Ports</b> tiap interface, "
+                "atau pilih <b>Semua Router</b> untuk ringkasan Uplink saja:\n"
             )
 
             buttons = []
@@ -984,8 +985,8 @@ class TelegramBot:
                 buttons.append(row)
 
             buttons.append([
-                {"text": "🌐 Pantau Semua Router (Agregasi ON)", "callback_data": "cmd:traffic_summary"},
-                {"text": "🔝 Top Bandwidth", "callback_data": "cmd:top_bandwidth"}
+                {"text": "🌐 Semua Router (Hanya Uplink)", "callback_data": "cmd:traffic_summary"},
+                {"text": "🔝 Top 10 Uplink", "callback_data": "cmd:top_bandwidth"}
             ])
 
             markup = {"inline_keyboard": buttons}
@@ -1002,12 +1003,21 @@ class TelegramBot:
         """Show guide for traffic subcommands."""
         text = (
             "ℹ️ <b>Panduan Perintah Traffic & Bandwidth:</b>\n\n"
-            "• <code>/traffic all</code> — Pantau agregat bandwidth seluruh router (All Traffic)\n"
-            "• <code>/traffic select</code> — Menu interaktif memilih router (Selected Router)\n"
-            "• <code>/traffic &lt;nama/ip/id&gt;</code> — Langsung pilih router (contoh: <code>/traffic core</code> atau <code>/traffic 192.168.1.1</code>)\n"
-            "• <code>/top</code> — 10 interface dengan beban bandwidth tertinggi\n"
+            "• <code>/traffic all</code> — Pantau ringkasan bandwidth seluruh router (Hanya Uplink WAN)\n"
+            "• <code>/traffic select</code> — Menu interaktif memilih router untuk melihat rincian Active Ports\n"
+            "• <code>/traffic &lt;nama/ip/id&gt;</code> — Langsung pilih router (tampilkan Uplink & Active Ports)\n"
+            "• <code>/top</code> — Top 10 router dengan traffic uplink tertinggi\n"
             "• <code>/capture &lt;ip/id&gt;</code> — Live active capture traffic real-time via SNMP (3 detik)"
         )
+        markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "🌐 Semua Router (Uplink)", "callback_data": "cmd:traffic_summary"},
+                    {"text": "🔀 Pilih Router (Active Ports)", "callback_data": "cmd:traffic_picker"}
+                ]
+            ]
+        }
+        self.send_message(chat_id, text, reply_markup=markup)
         markup = {
             "inline_keyboard": [
                 [
@@ -1362,21 +1372,33 @@ class TelegramBot:
             )
 
         text += "━━━━━━━━━━━━━━━━━━━━━\n"
-        text += "🔌 <b>Interface Traffic (Terkini):</b>\n\n"
+        text += "🔌 <b>ACTIVE PORTS TRAFFIC (Port Aktif):</b>\n\n"
 
-        ifaces = self.db.get_latest_device_interface_traffic(did, limit=10)
-        if ifaces:
-            for ifc in ifaces:
+        # Tampilkan HANYA interface aktif yang memiliki traffic (rx_bps + tx_bps > 0)
+        active_ifaces = self.db.get_latest_device_interface_traffic(did, limit=15, active_only=True)
+        if active_ifaces:
+            for ifc in active_ifaces:
                 iname = ifc.get('name')
+                i_idx = str(ifc.get('idx') or '')
                 rx = ifc.get('rx_bps') or 0.0
                 tx = ifc.get('tx_bps') or 0.0
                 total = ifc.get('total_bps') or (rx + tx)
+
+                # Tandai jika active port ini adalah port Uplink WAN
+                is_uplink_port = False
+                if wan_idx and i_idx == wan_idx:
+                    is_uplink_port = True
+                elif any(k in iname.lower() for k in ('wan', 'sfp', 'sfpplus', 'ether1', 'pppoe')):
+                    is_uplink_port = True
+
+                tag = " <code>[Uplink WAN]</code>" if is_uplink_port else ""
+
                 text += (
-                    f"• <b>{iname}</b> (Total: {format_speed(total)})\n"
+                    f"• <b>{iname}</b>{tag} (Total: <b>{format_speed(total)}</b>)\n"
                     f"  📥 RX: <b>{format_speed(rx)}</b> | 📤 TX: <b>{format_speed(tx)}</b>\n"
                 )
         else:
-            text += "<i>Belum ada sampel interface traffic tersimpan. Pastikan SNMP aktif pada perangkat ini.</i>\n"
+            text += "<i>ℹ️ Tidak ada port yang sedang aktif mengalirkan traffic saat ini (seluruh port idle atau 0 bps).</i>\n"
 
         text += f"\n<i>Waktu: {now_str} WIB</i>"
 
@@ -1392,7 +1414,7 @@ class TelegramBot:
                 ],
                 [
                     {"text": "🔀 Pilih Router Lain", "callback_data": "cmd:traffic_picker"},
-                    {"text": "🌐 Semua Router (Agregasi ON)", "callback_data": "cmd:traffic_summary"}
+                    {"text": "🌐 Semua Router (Hanya Uplink)", "callback_data": "cmd:traffic_summary"}
                 ]
             ]
         }
@@ -1404,41 +1426,53 @@ class TelegramBot:
 
     def _cmd_top_bandwidth(self, chat_id, edit_msg_id=None):
         try:
-            top_ifaces = self.db.get_top_bandwidth_interfaces(limit=10)
+            top_uplinks = self.db.get_top_bandwidth_interfaces(limit=10)
             now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
             text = (
-                "🔝 <b>Top 10 Interface Pemakai Bandwidth Tertinggi:</b>\n"
+                "🔝 <b>Top 10 Uplink Bandwidth (Hanya Uplink WAN):</b>\n"
                 f"<i>Waktu: {now_str} WIB</i>\n"
-                "━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                "<i>Daftar 10 router/perangkat dengan beban traffic uplink tertinggi:</i>\n\n"
             )
 
-            if not top_ifaces:
-                text += "<i>Belum ada data traffic interface yang terekam dalam 24 jam terakhir.</i>\n"
+            if not top_uplinks:
+                text += "<i>Belum ada data traffic uplink yang terekam atau seluruh router idle.</i>\n"
             else:
                 medals = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-                for i, row in enumerate(top_ifaces):
+                for i, row in enumerate(top_uplinks):
                     rank_icon = medals[i] if i < len(medals) else f"{i+1}."
                     dname = row.get('device_name') or row.get('device_ip')
-                    iname = row.get('iface_name')
+                    dip = row.get('device_ip')
+                    iname = row.get('iface_name', 'Uplink WAN')
                     rx = row.get('rx_bps') or 0.0
                     tx = row.get('tx_bps') or 0.0
                     tot = row.get('total_bps') or (rx + tx)
+                    uplink_mbps = row.get('uplink_speed_mbps', 1000)
+                    util_pct = row.get('util_pct', 0.0)
+
+                    is_agg = row.get('include_in_aggregate', 1) == 1
+                    is_bgp = 'bgp' in dname.lower()
+                    badge = "[Agg ON]" if is_agg else "[Agg OFF]"
+                    if is_bgp:
+                        badge = "[BGP / Agg ON]" if is_agg else "[BGP]"
 
                     text += (
-                        f"{rank_icon} <b>{dname}</b> — <code>{iname}</code>\n"
-                        f"   📥 RX: {format_speed(rx)} | 📤 TX: {format_speed(tx)}\n"
-                        f"   ⚡ <b>Total: {format_speed(tot)}</b>\n\n"
+                        f"{rank_icon} <b>{dname}</b> (<code>{dip}</code>) {badge}\n"
+                        f"   🔌 <b>Port:</b> <code>{iname}</code>\n"
+                        f"   📥 In: <b>{format_speed(rx)}</b> | 📤 Out: <b>{format_speed(tx)}</b>\n"
+                        f"   ⚡ <b>Total: {format_speed(tot)}</b>\n"
+                        f"   📊 <b>Utilisasi:</b> <code>{format_bar(util_pct, 8)}</code> {util_pct:.1f}% ({uplink_mbps} Mbps)\n\n"
                     )
 
             markup = {
                 "inline_keyboard": [
                     [
-                        {"text": "🔄 Refresh Top", "callback_data": "cmd:top_bandwidth"},
-                        {"text": "🔀 Pilih Router", "callback_data": "cmd:traffic_picker"}
+                        {"text": "🔄 Refresh Top Uplink", "callback_data": "cmd:top_bandwidth"},
+                        {"text": "🔀 Pilih Router (Active Ports)", "callback_data": "cmd:traffic_picker"}
                     ],
                     [
-                        {"text": "🌐 Pantau Semua Router (All)", "callback_data": "cmd:traffic_summary"}
+                        {"text": "🌐 Pantau Semua Router (Uplink)", "callback_data": "cmd:traffic_summary"}
                     ]
                 ]
             }
