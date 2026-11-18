@@ -19,6 +19,18 @@ PORT="${NETMON_PORT:-5000}"
 BACKUP_DIR="/var/backups/netmon"
 OS=$(uname -s)
 
+# Auto-detect existing systemd service configuration if not explicitly set
+if [[ -z "${NETMON_DIR:-}" && -f "/etc/systemd/system/netmon.service" ]]; then
+  DETECTED_DIR=$(grep -E '^[[:space:]]*WorkingDirectory=' /etc/systemd/system/netmon.service 2>/dev/null | cut -d= -f2 | tr -d ' "' || true)
+  if [[ -n "$DETECTED_DIR" && -d "$DETECTED_DIR" ]]; then
+    INSTALL_DIR="$DETECTED_DIR"
+  fi
+  DETECTED_USER=$(grep -E '^[[:space:]]*User=' /etc/systemd/system/netmon.service 2>/dev/null | cut -d= -f2 | tr -d ' "' || true)
+  if [[ -n "$DETECTED_USER" ]]; then
+    SERVICE_USER="$DETECTED_USER"
+  fi
+fi
+
 info()    { echo -e "  ${CYAN}[INFO]${NC}  $*"; }
 success() { echo -e "  ${GREEN}[OK]${NC}    $*"; }
 warn()    { echo -e "  ${YELLOW}[WARN]${NC}  $*"; }
@@ -58,6 +70,14 @@ if [[ ! -d "$INSTALL_DIR" ]]; then
   mkdir -p "$INSTALL_DIR"
 fi
 
+# If database exists in SCRIPT_DIR but not in INSTALL_DIR, preserve and migrate it
+if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" && -f "$SCRIPT_DIR/netmon.db" && ! -f "$INSTALL_DIR/netmon.db" ]]; then
+  info "Found existing database in source directory ($SCRIPT_DIR). Migrating to $INSTALL_DIR to preserve data..."
+  cp -p "$SCRIPT_DIR/netmon.db" "$INSTALL_DIR/netmon.db"
+  [[ -f "$SCRIPT_DIR/netmon.db-wal" ]] && cp -p "$SCRIPT_DIR/netmon.db-wal" "$INSTALL_DIR/netmon.db-wal" 2>/dev/null || true
+  [[ -f "$SCRIPT_DIR/netmon.db-shm" ]] && cp -p "$SCRIPT_DIR/netmon.db-shm" "$INSTALL_DIR/netmon.db-shm" 2>/dev/null || true
+fi
+
 step "2. Database safety backup"
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
@@ -67,14 +87,23 @@ if [[ -f "$INSTALL_DIR/netmon.db" ]]; then
   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
   BACKUP_FILE="$BACKUP_DIR/netmon.db_${TIMESTAMP}"
   
-  # Checkpoint WAL if python/sqlite is available before copy
+  # Checkpoint WAL if python/sqlite is available before copy to flush memory/journal to disk
+  PY_CHECKPOINT=""
   if [[ -x "$INSTALL_DIR/venv/bin/python" ]]; then
-    "$INSTALL_DIR/venv/bin/python" -c "
+    PY_CHECKPOINT="$INSTALL_DIR/venv/bin/python"
+  elif command -v python3 &>/dev/null; then
+    PY_CHECKPOINT="python3"
+  elif command -v python &>/dev/null; then
+    PY_CHECKPOINT="python"
+  fi
+
+  if [[ -n "$PY_CHECKPOINT" ]]; then
+    "$PY_CHECKPOINT" -c "
 import sqlite3, os
 p = '$INSTALL_DIR/netmon.db'
 if os.path.exists(p):
     try:
-        conn = sqlite3.connect(p)
+        conn = sqlite3.connect(p, timeout=10.0)
         conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
         conn.close()
     except Exception:
@@ -82,7 +111,7 @@ if os.path.exists(p):
 " 2>/dev/null || true
   fi
 
-  # Safely backup main database file
+  # Safely backup main database file to central backup directory
   cp -p "$INSTALL_DIR/netmon.db" "$BACKUP_FILE"
   
   # Also backup WAL and SHM if they exist
@@ -93,9 +122,17 @@ if os.path.exists(p):
   cp -p "$INSTALL_DIR/netmon.db" "$BACKUP_DIR/netmon_latest.db" 2>/dev/null || true
   [[ -f "$INSTALL_DIR/netmon.db-wal" ]] && cp -p "$INSTALL_DIR/netmon.db-wal" "$BACKUP_DIR/netmon_latest.db-wal" 2>/dev/null || true
 
-  success "Database backed up to $BACKUP_FILE"
+  # Also save redundant local backup in $INSTALL_DIR/.db_backup
+  LOCAL_BACKUP_DIR="$INSTALL_DIR/.db_backup"
+  mkdir -p "$LOCAL_BACKUP_DIR"
+  chmod 700 "$LOCAL_BACKUP_DIR" 2>/dev/null || true
+  cp -p "$INSTALL_DIR/netmon.db" "$LOCAL_BACKUP_DIR/netmon.db_${TIMESTAMP}" 2>/dev/null || true
+  [[ -f "$INSTALL_DIR/netmon.db-wal" ]] && cp -p "$INSTALL_DIR/netmon.db-wal" "$LOCAL_BACKUP_DIR/netmon.db_${TIMESTAMP}-wal" 2>/dev/null || true
+  ls -tp "$LOCAL_BACKUP_DIR"/netmon.db_* 2>/dev/null | grep -v '/$' | tail -n +6 | xargs -I {} rm -f -- {} 2>/dev/null || true
+
+  success "Database backed up to $BACKUP_FILE (and $LOCAL_BACKUP_DIR)"
   
-  # Retain only last 10 backups
+  # Retain only last 10 central backups
   ls -tp "$BACKUP_DIR"/netmon.db_* 2>/dev/null | grep -v '/$' | tail -n +11 | xargs -I {} rm -f -- {} 2>/dev/null || true
 else
   info "No existing netmon.db found in $INSTALL_DIR (fresh install will generate one)."
@@ -119,6 +156,8 @@ if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" ]]; then
       --exclude='netmon.db*' \
       --exclude='*.db' \
       --exclude='*.db-*' \
+      --exclude='.db_backup' \
+      --exclude='static/img/floorplan.*' \
       --exclude='*.pyc' \
       --exclude='__pycache__' \
       --exclude='.git' \
@@ -127,7 +166,12 @@ if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" ]]; then
     # Fallback to selective cp
     mkdir -p "$INSTALL_DIR/templates" "$INSTALL_DIR/static"
     cp -r "$SCRIPT_DIR"/templates/* "$INSTALL_DIR/templates/" 2>/dev/null || true
-    cp -r "$SCRIPT_DIR"/static/* "$INSTALL_DIR/static/" 2>/dev/null || true
+    # Only copy static assets that don't overwrite custom floorplan images
+    if command -v rsync &>/dev/null; then
+      rsync -a --exclude='img/floorplan.*' "$SCRIPT_DIR/static/" "$INSTALL_DIR/static/" 2>/dev/null || true
+    else
+      cp -r "$SCRIPT_DIR"/static/* "$INSTALL_DIR/static/" 2>/dev/null || true
+    fi
     for f in "$SCRIPT_DIR"/*.py "$SCRIPT_DIR"/*.html "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/requirements.txt; do
       [[ -f "$f" ]] && cp -p "$f" "$INSTALL_DIR/" 2>/dev/null || true
     done
@@ -179,6 +223,11 @@ if [[ $OS == "Linux" ]]; then
       chmod 664 "$db_f" || true
     fi
   done
+
+  # Secure local backup directory
+  if [[ -d "$INSTALL_DIR/.db_backup" ]]; then
+    chmod 700 "$INSTALL_DIR/.db_backup" 2>/dev/null || true
+  fi
   success "Permissions configured for $SERVICE_USER"
 fi
 
