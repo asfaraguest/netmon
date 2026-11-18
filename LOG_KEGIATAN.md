@@ -138,3 +138,25 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
       - Menambahkan migrasi otomatis pada `database.py` saat startup untuk memperbarui setting default database lama tanpa menimpa setting kustom pengguna.
       - Menyelaraskan seluruh form input, nilai fallback Javascript, dan teks petunjuk di `templates/settings.html`.
       - Memperbarui instruksi prompt AI detector (`ai_detector.py`) agar model LLM Groq dapat secara akurat mengidentifikasi `is_false_alarm` (0 atau 1) saat analisis insiden anomali.
+
+15. **Fitur Visualisasi Grafik Gambar (Traffic Charts) via Bot Telegram:**
+    - **Engine Visualisasi Gambar (`chart_generator.py`):** Mengembangkan modul generator grafik visual (PNG) modern berbasis `matplotlib` dengan tema gelap (Dark Theme) selaras antarmuka NetMon. Menghasilkan kurva throughput WAN IN (Neon Cyan) dan WAN OUT (Emerald Green) lengkap dengan arsiran area, grid, timeline waktu lokal, legenda statistik (Peak, Avg, Current), dan watermark NetMon.
+    - **Sinkronisasi Rentang Waktu dengan NetMon:**
+      - Mendukung seluruh rentang waktu resmi NetMon:
+        - `1h` (1 Jam terakhir, interval ~1 menit)
+        - `6h` (6 Jam terakhir, interval ~5 menit)
+        - `24h` (24 Jam terakhir, interval ~15 menit — sesuai grafik harian NetMon)
+        - `7d` (7 Hari terakhir, interval ~2 jam — sesuai laporan mingguan NetMon)
+        - `30d` (30 Hari / 1 Bulan terakhir, interval ~6 jam — sesuai laporan bulanan NetMon)
+    - **Perintah Bot `/chart` (atau `/grafik`, `/plot`):**
+      - `/chart` — Mengirimkan gambar grafik Total Backbone 24 Jam terakhir secara instan.
+      - `/chart <rentang>` (contoh: `/chart 1h`, `/chart 7d`, `/chart 30d`) — Grafik agregat dengan rentang waktu fleksibel.
+      - `/chart <router> [rentang]` (contoh: `/chart core 7d` atau `/chart 192.168.1.1 24h`) — Visualisasi throughput router spesifik.
+      - `/chart select` — Menu pemilih router interaktif khusus visualisasi grafik.
+    - **Keyboard Interaktif Dinamis & In-Place Media Editing (`editMessageMedia`):**
+      - Setiap gambar grafik yang dikirim ke Telegram dilengkapi tombol pintasan rentang waktu (`[1 Jam]`, `[6 Jam]`, `[24 Jam]`, `[7 Hari]`, `[30 Hari]`, `[Pilih Router]`, `[Total Backbone]`).
+      - Saat pengguna menekan tombol rentang waktu, gambar grafik otomatis berganti secara *in-place* di Telegram tanpa membanjiri chat dengan pesan baru.
+    - **Integrasi Seamless dengan Perintah `/traffic`:**
+      - Menambahkan tombol pintasan `[📈 Grafik 24 Jam]` dan `[📊 Grafik 7 Hari]` langsung di bawah pesan respons `/traffic all` maupun rincian `/traffic <router>` sehingga pengguna dapat beralih antara mode teks dan grafik gambar hanya dengan 1 sentuhan.
+    - **Optimasi Query Data Time-Series (`database.py`):** Menambahkan method `get_chart_traffic_data(device_id, time_range)` dengan bucketing SQL agregat berpresisi tinggi dan konversi waktu lokal (`'localtime'`).
+    - **Sinkronisasi Dependensi (`requirements.txt` & `update.sh`):** Menambahkan `matplotlib>=3.7.0` pada `requirements.txt` yang otomatis diinstal oleh skrip update server tanpa mempengaruhi database.

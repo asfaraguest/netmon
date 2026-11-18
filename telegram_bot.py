@@ -12,6 +12,7 @@ import threading
 import time
 from datetime import datetime
 import requests
+from chart_generator import render_traffic_chart_image, is_chart_available
 
 logger = logging.getLogger('netmon.telegram')
 
@@ -149,6 +150,7 @@ class TelegramBot:
         commands = [
             {"command": "status", "description": "Ringkasan kesehatan jaringan"},
             {"command": "traffic", "description": "Traffic: All router / Selected router"},
+            {"command": "chart", "description": "Grafik gambar traffic (1h, 6h, 24h, 7d, 30d)"},
             {"command": "top", "description": "Top 10 bandwidth interface tertinggi"},
             {"command": "capture", "description": "Live capture traffic real-time via SNMP"},
             {"command": "down", "description": "Daftar perangkat offline"},
@@ -251,6 +253,68 @@ class TelegramBot:
             payload["text"] = text
             payload["show_alert"] = show_alert
         return self._send_request("answerCallbackQuery", payload, timeout=5)
+
+    def send_photo(self, chat_id, photo_bytes, caption=None, parse_mode="HTML", reply_markup=None):
+        """Send a photo image to Telegram chat."""
+        if not self.bot_token:
+            return None
+        try:
+            url = f"{self.api_url}/sendPhoto"
+            data = {"chat_id": chat_id}
+            if caption:
+                data["caption"] = caption
+            if parse_mode:
+                data["parse_mode"] = parse_mode
+            if reply_markup:
+                data["reply_markup"] = json.dumps(reply_markup) if isinstance(reply_markup, dict) else reply_markup
+
+            files = {"photo": ("chart.png", photo_bytes, "image/png")}
+            resp = requests.post(url, data=data, files=files, timeout=30)
+            data_res = resp.json()
+            if not data_res.get("ok"):
+                if caption and "entities" in str(data_res.get("description", "")).lower():
+                    data["parse_mode"] = ""
+                    data["caption"] = re.sub(r'<[^>]+>', '', caption)
+                    resp = requests.post(url, data=data, files={"photo": ("chart.png", photo_bytes, "image/png")}, timeout=30)
+                    data_res = resp.json()
+                logger.error(f"[Telegram] sendPhoto error: {data_res.get('description')}")
+            return data_res
+        except Exception as e:
+            logger.error(f"[Telegram] sendPhoto exception: {e}")
+            return None
+
+    def edit_message_media(self, chat_id, message_id, photo_bytes, caption=None, parse_mode="HTML", reply_markup=None):
+        """Edit an existing photo message in-place in Telegram."""
+        if not self.bot_token:
+            return None
+        try:
+            url = f"{self.api_url}/editMessageMedia"
+            media_obj = {
+                "type": "photo",
+                "media": "attach://photo"
+            }
+            if caption:
+                media_obj["caption"] = caption
+            if parse_mode:
+                media_obj["parse_mode"] = parse_mode
+
+            data = {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "media": json.dumps(media_obj)
+            }
+            if reply_markup:
+                data["reply_markup"] = json.dumps(reply_markup) if isinstance(reply_markup, dict) else reply_markup
+
+            files = {"photo": ("chart.png", photo_bytes, "image/png")}
+            resp = requests.post(url, data=data, files=files, timeout=30)
+            data_res = resp.json()
+            if not data_res.get("ok"):
+                logger.warning(f"[Telegram] editMessageMedia note: {data_res.get('description')}")
+            return data_res
+        except Exception as e:
+            logger.error(f"[Telegram] editMessageMedia exception: {e}")
+            return None
 
     # ─── Polling Loop ────────────────────────────────────────────────
 
@@ -362,6 +426,8 @@ class TelegramBot:
             self._cmd_traffic_summary(chat_id)
         elif cmd in ("/traffic_select", "/traffict_select"):
             self._cmd_traffic_picker(chat_id)
+        elif cmd in ("/chart", "/grafik", "/graph", "/plot"):
+            self._cmd_chart(chat_id, args)
         elif cmd in ("/top", "/toptraffic", "/topbw", "/top_bandwidth"):
             self._cmd_top_bandwidth(chat_id)
         elif cmd in ("/capture", "/torch", "/live"):
@@ -458,11 +524,21 @@ class TelegramBot:
             else:
                 self.answer_callback_query(cq_id, text="⚠️ Perangkat tidak ditemukan atau worker belum siap.")
 
+        elif data.startswith("chart:"):
+            # Format: chart:<target_key>:<time_range>
+            parts = data.split(":")
+            target_key = parts[1] if len(parts) > 1 else "all"
+            time_range = parts[2] if len(parts) > 2 else "24h"
+            self._send_or_update_chart(chat_id, target_key, time_range, message_id=message_id, cq_id=cq_id)
+
         elif data.startswith("cmd:"):
             action = data.split(":", 1)[1]
             if action == "down":
                 self.answer_callback_query(cq_id)
                 self._cmd_down(chat_id)
+            elif action == "chart_picker":
+                self.answer_callback_query(cq_id, text="📈 Memuat daftar router...")
+                self._cmd_chart_picker(chat_id, edit_msg_id=message_id)
             elif action == "traffic_summary":
                 self.answer_callback_query(cq_id, text="🔄 Memperbarui data traffic...")
                 self._cmd_traffic_summary(chat_id, edit_msg_id=message_id)
@@ -514,6 +590,11 @@ class TelegramBot:
             "• <code>/top</code> — Top 10 interface dengan beban bandwidth tertinggi\n"
             "• <code>/capture &lt;ip/id&gt;</code> — Live active capture traffic real-time via SNMP (3 detik)\n"
             "• <code>/iface &lt;ip/id&gt;</code> — Cek status & daftar interface perangkat\n\n"
+            "<b>📈 Visualisasi Grafik Gambar (Charts):</b>\n"
+            "• <code>/chart</code> — Grafik Total Backbone 24 Jam terakhir (PNG)\n"
+            "• <code>/chart [1h|6h|24h|7d|30d]</code> — Grafik dengan rentang waktu NetMon\n"
+            "• <code>/chart &lt;nama/ip/id&gt;</code> — Grafik traffic router tertentu (contoh: <code>/chart core 7d</code>)\n"
+            "• <code>/chart select</code> — Menu interaktif memilih router untuk digambar grafiknya\n\n"
             "<b>🖥️ Status Jaringan & Kontrol:</b>\n"
             "• <code>/status</code> atau <code>/summary</code> — Ringkasan kesehatan sistem & metrik perangkat\n"
             "• <code>/down</code> — Menampilkan seluruh perangkat yang sedang offline (DOWN)\n"
@@ -576,6 +657,9 @@ class TelegramBot:
                 buttons.append([{"text": "🔴 Lihat Perangkat DOWN", "callback_data": "cmd:down"}])
             buttons.append([
                 {"text": "📊 Traffic & Bandwidth", "callback_data": "cmd:traffic_summary"},
+                {"text": "📈 Grafik 24 Jam", "callback_data": "chart:all:24h"}
+            ])
+            buttons.append([
                 {"text": "🔝 Top Bandwidth", "callback_data": "cmd:top_bandwidth"}
             ])
             markup = {"inline_keyboard": buttons}
@@ -772,12 +856,16 @@ class TelegramBot:
                 text += "<i>Belum ada router atau perangkat dengan metrik WAN terdeteksi.</i>\n\n"
 
             text += (
-                "💡 <i>Ketik <code>/traffic select</code> untuk memilih router tertentu, "
-                "atau klik tombol <b>Pilih Router Spesifik</b> di bawah.</i>"
+                "💡 <i>Ketik <code>/chart</code> untuk melihat gambar grafik traffic (1h/6h/24h/7d/30d), "
+                "atau klik tombol <b>Grafik</b> di bawah.</i>"
             )
 
             markup = {
                 "inline_keyboard": [
+                    [
+                        {"text": "📈 Grafik 24 Jam", "callback_data": "chart:all:24h"},
+                        {"text": "📊 Grafik 7 Hari", "callback_data": "chart:all:7d"}
+                    ],
                     [
                         {"text": "🔄 Refresh All", "callback_data": "cmd:traffic_summary"},
                         {"text": "🔝 Top Bandwidth", "callback_data": "cmd:top_bandwidth"}
@@ -861,31 +949,248 @@ class TelegramBot:
         }
         self.send_message(chat_id, text, reply_markup=markup)
 
+    def _find_device_by_target(self, target):
+        """Find a device by ID, IP, exact name, or partial name."""
+        if not target:
+            return None
+        t = str(target).strip()
+        if t.isdigit():
+            dev = self.db.get_device(int(t))
+            if dev:
+                return dev
+        dev = self.db.get_device_by_ip(t)
+        if dev:
+            return dev
+        all_devs = self.db.get_all_devices()
+        t_low = t.lower()
+        for d in all_devs:
+            if (d.get('name') or '').strip().lower() == t_low:
+                return d
+        for d in all_devs:
+            if t_low in (d.get('name') or '').lower():
+                return d
+        return None
+
+    def _cmd_chart(self, chat_id, args):
+        """Handle /chart command for generating traffic PNG images."""
+        if not is_chart_available():
+            self.send_message(
+                chat_id,
+                "⚠️ <b>Fitur Grafik Membutuhkan Modul Matplotlib</b>\n\n"
+                "Modul visualisasi <code>matplotlib</code> belum terpasang di virtual environment server.\n"
+                "Silakan jalankan update di server Linux:\n"
+                "<code>sudo ./update.sh</code>\n"
+                "untuk memasang dependensi grafik secara otomatis tanpa merusak database."
+            )
+            return
+
+        target_id = "all"
+        time_range = "24h"
+
+        if not args:
+            self._send_or_update_chart(chat_id, "all", "24h")
+            return
+
+        first_arg = args[0].lower().strip()
+        if first_arg in ("select", "pilih", "list", "daftar", "router", "routers"):
+            tr = args[1].lower().strip() if len(args) > 1 else "24h"
+            self._cmd_chart_picker(chat_id, time_range=tr)
+            return
+        elif first_arg in ("help", "bantuan", "?"):
+            self._cmd_chart_help(chat_id)
+            return
+        elif first_arg in ("all", "semua", "backbone", "total"):
+            target_id = "all"
+            if len(args) > 1:
+                time_range = args[1].lower().strip()
+            self._send_or_update_chart(chat_id, target_id, time_range)
+            return
+
+        # Check if first argument is a time range like "1h", "6h", "24h", "7d", "30d"
+        valid_ranges = ("1h", "6h", "24h", "7d", "30d", "1m", "1hour", "6hours", "24hours", "7days", "30days", "1month")
+        if first_arg in valid_ranges:
+            target_id = "all"
+            time_range = first_arg
+            self._send_or_update_chart(chat_id, target_id, time_range)
+            return
+
+        # Target is a router / device
+        device = self._find_device_by_target(args[0])
+        if not device:
+            self.send_message(
+                chat_id,
+                f"⚠️ Router / perangkat <code>{html.escape(args[0])}</code> tidak ditemukan.\n\n"
+                "Ketik <code>/chart select</code> untuk memilih router dari daftar interaktif."
+            )
+            return
+
+        target_id = str(device['id'])
+        if len(args) > 1:
+            time_range = args[1].lower().strip()
+
+        self._send_or_update_chart(chat_id, target_id, time_range)
+
+    def _cmd_chart_picker(self, chat_id, time_range='24h', edit_msg_id=None):
+        """Interactive router selector menu specifically for charts."""
+        try:
+            routers = self.db.get_router_traffic_summary()
+            if not routers:
+                all_devs = self.db.get_all_devices()
+                routers = [d for d in all_devs if d.get('snmp_enabled')] or all_devs
+
+            text = (
+                "📈 <b>Pilih Router untuk Visualisasi Grafik Traffic:</b>\n\n"
+                f"Silakan pilih router di bawah untuk melihat kurva grafik throughput (rentang waktu: <b>{time_range}</b>):\n"
+            )
+
+            buttons = []
+            row = []
+            for r in routers[:16]:
+                rname = r.get('name') or r.get('ip')
+                status_icon = "🟢" if r.get('status') == 'up' else "🔴"
+                label = f"{status_icon} {rname[:15]}"
+                row.append({"text": label, "callback_data": f"chart:{r['id']}:{time_range}"})
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+
+            buttons.append([
+                {"text": "🌐 Grafik Total Backbone (All)", "callback_data": f"chart:all:{time_range}"},
+                {"text": "📋 Teks Traffic", "callback_data": "cmd:traffic_summary"}
+            ])
+
+            markup = {"inline_keyboard": buttons}
+            if edit_msg_id:
+                self.edit_message_text(chat_id, edit_msg_id, text, reply_markup=markup)
+            else:
+                self.send_message(chat_id, text, reply_markup=markup)
+        except Exception as e:
+            logger.error(f"[Telegram] Error in chart picker: {e}")
+            self.send_message(chat_id, f"⚠️ Gagal memuat pemilih router: {e}")
+
+    def _cmd_chart_help(self, chat_id):
+        text = (
+            "📊 <b>Panduan Perintah Grafik Traffic (/chart):</b>\n\n"
+            "• <code>/chart</code> — Grafik Total Backbone 24 Jam terakhir (PNG)\n"
+            "• <code>/chart &lt;rentang&gt;</code> — Grafik Total Backbone dengan rentang waktu:\n"
+            "   ▫️ <code>/chart 1h</code> — 1 Jam terakhir\n"
+            "   ▫️ <code>/chart 6h</code> — 6 Jam terakhir\n"
+            "   ▫️ <code>/chart 24h</code> — 24 Jam terakhir (default)\n"
+            "   ▫️ <code>/chart 7d</code> — 7 Hari terakhir\n"
+            "   ▫️ <code>/chart 30d</code> — 30 Hari / 1 Bulan terakhir\n"
+            "• <code>/chart &lt;router&gt;</code> — Grafik router spesifik (contoh: <code>/chart core</code> atau <code>/chart 192.168.1.1</code>)\n"
+            "• <code>/chart &lt;router&gt; &lt;rentang&gt;</code> — Contoh: <code>/chart core 7d</code>\n"
+            "• <code>/chart select</code> — Menu interaktif memilih router untuk digambar grafiknya\n\n"
+            "<i>💡 Setiap gambar grafik dilengkapi tombol interaktif di bawahnya untuk beralih rentang waktu secara instan!</i>"
+        )
+        markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "📈 Grafik Backbone (24h)", "callback_data": "chart:all:24h"},
+                    {"text": "📊 Grafik 7 Hari", "callback_data": "chart:all:7d"},
+                ],
+                [
+                    {"text": "🔀 Pilih Router", "callback_data": "cmd:chart_picker"},
+                    {"text": "📋 Teks Traffic", "callback_data": "cmd:traffic_summary"}
+                ]
+            ]
+        }
+        self.send_message(chat_id, text, reply_markup=markup)
+
+    def _send_or_update_chart(self, chat_id, target_id, time_range='24h', message_id=None, cq_id=None):
+        """Fetch data, render chart PNG, and send or edit photo with interactive buttons."""
+        if not is_chart_available():
+            if cq_id:
+                self.answer_callback_query(cq_id, text="⚠️ Modul matplotlib belum terpasang di server.", show_alert=True)
+            else:
+                self.send_message(chat_id, "⚠️ Modul matplotlib belum terpasang. Jalankan <code>sudo ./update.sh</code> di server.")
+            return
+
+        if cq_id:
+            self.answer_callback_query(cq_id, text=f"📊 Menyiapkan grafik {time_range}...")
+
+        # Fetch chart data from database
+        dev_arg = None if str(target_id).lower() in ('all', 'backbone', 'total', '0') else target_id
+        data = self.db.get_chart_traffic_data(device_id=dev_arg, time_range=time_range)
+
+        # Render PNG image
+        img_bytes = render_traffic_chart_image(data)
+        if not img_bytes:
+            self.send_message(chat_id, "⚠️ Gagal me-render gambar grafik.")
+            return
+
+        target_key = "all" if str(target_id).lower() in ('all', 'backbone', 'total', '0') else str(data['target_id'])
+        target_name = data.get('target_name', 'Backbone Traffic')
+        time_label = data.get('time_label', '24 Jam')
+        cur_code = data.get('time_range', '24h')
+        peak_rx = data.get('peak_rx', 0.0)
+        peak_tx = data.get('peak_tx', 0.0)
+        avg_rx = data.get('avg_rx', 0.0)
+        avg_tx = data.get('avg_tx', 0.0)
+        cur_rx = data.get('cur_rx', 0.0)
+        cur_tx = data.get('cur_tx', 0.0)
+        sample_count = len(data.get('points', []))
+        now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
+        caption = (
+            f"📊 <b>Grafik Throughput Traffic — {target_name}</b>\n"
+            f"⏱️ <b>Rentang Waktu:</b> {time_label} ({sample_count} sampel)\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📥 <b>Download (WAN IN):</b>\n"
+            f"  • Puncak (Peak): <b>{peak_rx:.2f} Mbps</b>\n"
+            f"  • Rata-rata (Avg): <b>{avg_rx:.2f} Mbps</b>\n"
+            f"  • Terkini (Current): <b>{cur_rx:.2f} Mbps</b>\n\n"
+            f"📤 <b>Upload (WAN OUT):</b>\n"
+            f"  • Puncak (Peak): <b>{peak_tx:.2f} Mbps</b>\n"
+            f"  • Rata-rata (Avg): <b>{avg_tx:.2f} Mbps</b>\n"
+            f"  • Terkini (Current): <b>{cur_tx:.2f} Mbps</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Waktu generate: {now_str} WIB</i>"
+        )
+
+        def b_lbl(label, code):
+            return f"▶ {label}" if code == cur_code else label
+
+        markup = {
+            "inline_keyboard": [
+                [
+                    {"text": b_lbl("1 Jam", "1h"), "callback_data": f"chart:{target_key}:1h"},
+                    {"text": b_lbl("6 Jam", "6h"), "callback_data": f"chart:{target_key}:6h"},
+                    {"text": b_lbl("24 Jam", "24h"), "callback_data": f"chart:{target_key}:24h"},
+                ],
+                [
+                    {"text": b_lbl("7 Hari", "7d"), "callback_data": f"chart:{target_key}:7d"},
+                    {"text": b_lbl("30 Hari", "30d"), "callback_data": f"chart:{target_key}:30d"},
+                    {"text": "🔄 Refresh", "callback_data": f"chart:{target_key}:{cur_code}"},
+                ],
+                [
+                    {"text": "🔀 Pilih Router Lain", "callback_data": "cmd:chart_picker"},
+                    {"text": "🌐 Total Backbone", "callback_data": f"chart:all:{cur_code}"},
+                ],
+                [
+                    {"text": "📋 Teks Traffic", "callback_data": f"cmd:traffic_dev:{target_key}" if target_key != "all" else "cmd:traffic_summary"}
+                ]
+            ]
+        }
+
+        # If editing an existing photo message, attempt editMessageMedia
+        if message_id:
+            res = self.edit_message_media(chat_id, message_id, img_bytes, caption=caption, reply_markup=markup)
+            if res and res.get('ok'):
+                return
+
+        # Otherwise send fresh photo
+        self.send_photo(chat_id, img_bytes, caption=caption, reply_markup=markup)
+
     def _cmd_traffic_device(self, chat_id, args, edit_msg_id=None):
         if not args:
             self._cmd_traffic_summary(chat_id, edit_msg_id=edit_msg_id)
             return
 
         target = str(args[0]).strip()
-        device = None
-        if target.isdigit():
-            device = self.db.get_device(int(target))
-        if not device:
-            device = self.db.get_device_by_ip(target)
-
-        # Name search (exact or partial)
-        if not device:
-            all_devs = self.db.get_all_devices()
-            t_low = target.lower()
-            for d in all_devs:
-                if (d.get('name') or '').strip().lower() == t_low:
-                    device = d
-                    break
-            if not device:
-                for d in all_devs:
-                    if t_low in (d.get('name') or '').lower():
-                        device = d
-                        break
+        device = self._find_device_by_target(target)
 
         if not device:
             self.send_message(
@@ -945,6 +1250,10 @@ class TelegramBot:
 
         markup = {
             "inline_keyboard": [
+                [
+                    {"text": "📈 Grafik 24 Jam", "callback_data": f"chart:{did}:24h"},
+                    {"text": "📊 Grafik 7 Hari", "callback_data": f"chart:{did}:7d"}
+                ],
                 [
                     {"text": "⚡ Live Capture (3s)", "callback_data": f"cmd:capture:{did}"},
                     {"text": "🔄 Refresh", "callback_data": f"cmd:traffic_dev:{did}"}

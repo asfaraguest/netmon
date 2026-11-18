@@ -815,6 +815,186 @@ class Database:
 
         return [{'t': r['bucket'], 'in': round((r['rx_sum'] or 0) / 1000000.0, 2), 'out': round((r['tx_sum'] or 0) / 1000000.0, 2)} for r in rows]
 
+    def get_chart_traffic_data(self, device_id=None, time_range='24h'):
+        """Ambil data time-series throughput untuk rendering chart grafik (PNG) sesuai rentang waktu NetMon.
+        Mendukung target:
+          - None / 'all': Backbone total (semua router dengan include_in_aggregate = 1)
+          - int / device_id: Router / perangkat spesifik
+        Mendukung rentang waktu:
+          - '1h' (1 jam, interval ~1 mnt)
+          - '6h' (6 jam, interval ~5 mnt)
+          - '24h' (24 jam, interval ~15 mnt, default)
+          - '7d' (7 hari, interval ~2 jam)
+          - '30d' (30 hari, interval ~6 jam)
+        """
+        tr = str(time_range).lower().strip()
+        if tr in ('1h', '1hour', '1jam'):
+            code = '1h'
+            hours = 1
+            label = '1 Jam Terakhir'
+            bucket_sql = "strftime('%Y-%m-%d %H:%M', m.timestamp, 'localtime')"
+            bucket_it_sql = "strftime('%Y-%m-%d %H:%M', sampled_at, 'localtime')"
+            limit = 70
+        elif tr in ('6h', '6hours', '6jam'):
+            code = '6h'
+            hours = 6
+            label = '6 Jam Terakhir'
+            bucket_sql = ("strftime('%Y-%m-%d %H:', m.timestamp, 'localtime') || "
+                          "substr('0' || ((CAST(strftime('%M', m.timestamp, 'localtime') AS INTEGER) / 5) * 5), -2)")
+            bucket_it_sql = ("strftime('%Y-%m-%d %H:', sampled_at, 'localtime') || "
+                             "substr('0' || ((CAST(strftime('%M', sampled_at, 'localtime') AS INTEGER) / 5) * 5), -2)")
+            limit = 80
+        elif tr in ('7d', '7days', '7hari', '1week'):
+            code = '7d'
+            hours = 168
+            label = '7 Hari Terakhir'
+            bucket_sql = ("strftime('%Y-%m-%d ', m.timestamp, 'localtime') || "
+                          "substr('0' || ((CAST(strftime('%H', m.timestamp, 'localtime') AS INTEGER) / 2) * 2), -2) || ':00'")
+            bucket_it_sql = ("strftime('%Y-%m-%d ', sampled_at, 'localtime') || "
+                             "substr('0' || ((CAST(strftime('%H', sampled_at, 'localtime') AS INTEGER) / 2) * 2), -2) || ':00'")
+            limit = 90
+        elif tr in ('30d', '30days', '30hari', '1m', '1month'):
+            code = '30d'
+            hours = 720
+            label = '30 Hari Terakhir'
+            bucket_sql = ("strftime('%Y-%m-%d ', m.timestamp, 'localtime') || "
+                          "substr('0' || ((CAST(strftime('%H', m.timestamp, 'localtime') AS INTEGER) / 6) * 6), -2) || ':00'")
+            bucket_it_sql = ("strftime('%Y-%m-%d ', sampled_at, 'localtime') || "
+                             "substr('0' || ((CAST(strftime('%H', sampled_at, 'localtime') AS INTEGER) / 6) * 6), -2) || ':00'")
+            limit = 130
+        else: # default 24h
+            code = '24h'
+            hours = 24
+            label = '24 Jam Terakhir'
+            bucket_sql = ("strftime('%Y-%m-%d %H:', m.timestamp, 'localtime') || "
+                          "(CASE "
+                          "WHEN CAST(strftime('%M', m.timestamp, 'localtime') AS INTEGER) < 15 THEN '00' "
+                          "WHEN CAST(strftime('%M', m.timestamp, 'localtime') AS INTEGER) < 30 THEN '15' "
+                          "WHEN CAST(strftime('%M', m.timestamp, 'localtime') AS INTEGER) < 45 THEN '30' ELSE '45' END)")
+            bucket_it_sql = ("strftime('%Y-%m-%d %H:', sampled_at, 'localtime') || "
+                             "(CASE "
+                             "WHEN CAST(strftime('%M', sampled_at, 'localtime') AS INTEGER) < 15 THEN '00' "
+                             "WHEN CAST(strftime('%M', sampled_at, 'localtime') AS INTEGER) < 30 THEN '15' "
+                             "WHEN CAST(strftime('%M', sampled_at, 'localtime') AS INTEGER) < 45 THEN '30' ELSE '45' END)")
+            limit = 100
+
+        target_id = 'all'
+        target_name = 'Total Backbone (All Routers)'
+        target_ip = ''
+        uplink_mbps = 1000
+
+        with self.conn() as c:
+            if device_id and str(device_id).lower() not in ('all', 'backbone', 'total', '0'):
+                try:
+                    dev_id_int = int(device_id)
+                except ValueError:
+                    dev_id_int = None
+
+                dev = None
+                if dev_id_int:
+                    dev = c.execute("SELECT id, name, ip, uplink_speed_mbps FROM devices WHERE id=?", (dev_id_int,)).fetchone()
+                if not dev and isinstance(device_id, str):
+                    dev = c.execute("SELECT id, name, ip, uplink_speed_mbps FROM devices WHERE ip=? OR name=?", (device_id, device_id)).fetchone()
+
+                if dev:
+                    target_id = dev['id']
+                    target_name = dev['name'] or dev['ip']
+                    target_ip = dev['ip']
+                    uplink_mbps = dev['uplink_speed_mbps'] or 1000
+
+                    # 1. Query snmp_metrics
+                    rows = c.execute(f'''
+                        SELECT {bucket_sql} AS bucket,
+                               MAX(CASE WHEN m.metric_name = 'wan_in' THEN CAST(m.metric_value AS REAL) ELSE 0 END) AS rx_bps,
+                               MAX(CASE WHEN m.metric_name = 'wan_out' THEN CAST(m.metric_value AS REAL) ELSE 0 END) AS tx_bps
+                        FROM snmp_metrics m
+                        WHERE m.device_id = ?
+                          AND m.metric_name IN ('wan_in', 'wan_out')
+                          AND m.timestamp >= datetime('now', ? || ' hours')
+                        GROUP BY bucket
+                        ORDER BY bucket ASC
+                        LIMIT ?
+                    ''', (target_id, f'-{hours}', limit)).fetchall()
+
+                    # Fallback to interface_traffic if snmp_metrics empty
+                    if not rows:
+                        rows = c.execute(f'''
+                            SELECT {bucket_it_sql} AS bucket,
+                                   SUM(rx_bps) AS rx_bps,
+                                   SUM(tx_bps) AS tx_bps
+                            FROM interface_traffic
+                            WHERE device_id = ?
+                              AND sampled_at >= datetime('now', ? || ' hours')
+                            GROUP BY bucket
+                            ORDER BY bucket ASC
+                            LIMIT ?
+                        ''', (target_id, f'-{hours}', limit)).fetchall()
+                else:
+                    rows = []
+            else:
+                # Target: All aggregate routers
+                rows = c.execute(f'''
+                    WITH per_device_bucket AS (
+                        SELECT
+                            m.device_id,
+                            {bucket_sql} AS bucket,
+                            MAX(CASE WHEN m.metric_name = 'wan_in' THEN CAST(m.metric_value AS REAL) ELSE 0 END) AS rx_peak,
+                            MAX(CASE WHEN m.metric_name = 'wan_out' THEN CAST(m.metric_value AS REAL) ELSE 0 END) AS tx_peak
+                        FROM snmp_metrics m
+                        JOIN devices d ON m.device_id = d.id
+                        WHERE d.type = 'router'
+                          AND d.include_in_aggregate = 1
+                          AND m.metric_name IN ('wan_in', 'wan_out')
+                          AND m.timestamp >= datetime('now', ? || ' hours')
+                        GROUP BY m.device_id, bucket
+                    )
+                    SELECT bucket, SUM(rx_peak) AS rx_bps, SUM(tx_peak) AS tx_bps
+                    FROM per_device_bucket
+                    GROUP BY bucket
+                    ORDER BY bucket ASC
+                    LIMIT ?
+                ''', (f'-{hours}', limit)).fetchall()
+
+        # Parse points into list
+        points = []
+        rx_vals = []
+        tx_vals = []
+        for r in rows:
+            b_str = r['bucket']
+            rx_m = round((r['rx_bps'] or 0.0) / 1_000_000.0, 2)
+            tx_m = round((r['tx_bps'] or 0.0) / 1_000_000.0, 2)
+            points.append({
+                'bucket': b_str,
+                'rx_mbps': rx_m,
+                'tx_mbps': tx_m
+            })
+            rx_vals.append(rx_m)
+            tx_vals.append(tx_m)
+
+        peak_rx = max(rx_vals) if rx_vals else 0.0
+        peak_tx = max(tx_vals) if tx_vals else 0.0
+        avg_rx = round(sum(rx_vals) / len(rx_vals), 2) if rx_vals else 0.0
+        avg_tx = round(sum(tx_vals) / len(tx_vals), 2) if tx_vals else 0.0
+        cur_rx = rx_vals[-1] if rx_vals else 0.0
+        cur_tx = tx_vals[-1] if tx_vals else 0.0
+
+        return {
+            'target_id': target_id,
+            'target_name': target_name,
+            'target_ip': target_ip,
+            'uplink_mbps': uplink_mbps,
+            'time_range': code,
+            'time_label': label,
+            'hours': hours,
+            'points': points,
+            'peak_rx': peak_rx,
+            'peak_tx': peak_tx,
+            'avg_rx': avg_rx,
+            'avg_tx': avg_tx,
+            'cur_rx': cur_rx,
+            'cur_tx': cur_tx
+        }
+
     def get_device_interfaces(self, device_id, hours=24):
         with self.conn() as c:
             rows = c.execute('''
