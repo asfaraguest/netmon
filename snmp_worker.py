@@ -1517,6 +1517,80 @@ class SNMPWorker:
                 with self.db_write_lock:
                     self.db.save_interface_traffic(did, str(name), int(idx), rx_bps, tx_bps)
 
+    def capture_live_traffic(self, device, sample_seconds=3):
+        """Ambil 2 sampel SNMP berjarak sample_seconds detik dan kembalikan delta traffic instan per-interface."""
+        if not SNMP_OK:
+            return None, "Modul SNMP (puresnmp) tidak aktif atau belum terpasang."
+        ip = device.get('ip', '')
+        community = device.get('snmp_community', 'public') or 'public'
+        try:
+            port = int(device.get('snmp_port', 161) or 161)
+        except Exception:
+            port = 161
+        version = device.get('snmp_version', '2c') or '2c'
+
+        if_desc = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.2', port, version, timeout=2)
+        if not if_desc:
+            return None, f"SNMP ke {ip} unreachable atau tidak merespons (cek community/port)."
+
+        # Cek apakah device mendukung 64-bit HC counter
+        hc_in_1 = self._walk(ip, community, '1.3.6.1.2.1.31.1.1.1.6', port, version, timeout=2)
+        hc_out_1 = self._walk(ip, community, '1.3.6.1.2.1.31.1.1.1.10', port, version, timeout=2)
+        is_64bit = True
+        if not hc_in_1:
+            hc_in_1 = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.10', port, version, timeout=2)
+            hc_out_1 = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.16', port, version, timeout=2)
+            is_64bit = False
+
+        t1 = time.time()
+        time.sleep(max(1, int(sample_seconds)))
+
+        if is_64bit:
+            hc_in_2 = self._walk(ip, community, '1.3.6.1.2.1.31.1.1.1.6', port, version, timeout=2)
+            hc_out_2 = self._walk(ip, community, '1.3.6.1.2.1.31.1.1.1.10', port, version, timeout=2)
+        else:
+            hc_in_2 = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.10', port, version, timeout=2)
+            hc_out_2 = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.16', port, version, timeout=2)
+
+        t2 = time.time()
+        dt = max(0.1, t2 - t1)
+
+        results = []
+        for oid, name in if_desc.items():
+            idx = oid.split('.')[-1]
+            name_str = str(name).strip()
+            if name_str.lower() in ('lo', 'lo0') or 'loopback' in name_str.lower():
+                continue
+
+            rx1 = next((int(v) for k in [f'1.3.6.1.2.1.31.1.1.1.6.{idx}', f'1.3.6.1.31.1.1.1.6.{idx}', f'1.3.6.1.2.1.2.2.1.10.{idx}'] if (v := (hc_in_1 or {}).get(k)) is not None), None)
+            tx1 = next((int(v) for k in [f'1.3.6.1.2.1.31.1.1.1.10.{idx}', f'1.3.6.1.31.1.1.1.10.{idx}', f'1.3.6.1.2.1.2.2.1.16.{idx}'] if (v := (hc_out_1 or {}).get(k)) is not None), None)
+            rx2 = next((int(v) for k in [f'1.3.6.1.2.1.31.1.1.1.6.{idx}', f'1.3.6.1.31.1.1.1.6.{idx}', f'1.3.6.1.2.1.2.2.1.10.{idx}'] if (v := (hc_in_2 or {}).get(k)) is not None), None)
+            tx2 = next((int(v) for k in [f'1.3.6.1.2.1.31.1.1.1.10.{idx}', f'1.3.6.1.31.1.1.1.10.{idx}', f'1.3.6.1.2.1.2.2.1.16.{idx}'] if (v := (hc_out_2 or {}).get(k)) is not None), None)
+
+            if rx1 is None or rx2 is None or tx1 is None or tx2 is None:
+                continue
+
+            delta_rx = rx2 - rx1
+            delta_tx = tx2 - tx1
+            if delta_rx < 0:
+                delta_rx += (2**64 if is_64bit else 2**32)
+            if delta_tx < 0:
+                delta_tx += (2**64 if is_64bit else 2**32)
+
+            rx_bps = (delta_rx * 8.0) / dt
+            tx_bps = (delta_tx * 8.0) / dt
+
+            results.append({
+                'name': name_str,
+                'idx': idx,
+                'rx_bps': rx_bps,
+                'tx_bps': tx_bps,
+                'total_bps': rx_bps + tx_bps
+            })
+
+        results.sort(key=lambda x: x['total_bps'], reverse=True)
+        return results, None
+
     def _poll_router_traffic(self, device, ip, community, port, version):
         did = device['id']
         # 1. Walk ifDescr and ifOperStatus to find the best WAN interface

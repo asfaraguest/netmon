@@ -16,6 +16,36 @@ import requests
 logger = logging.getLogger('netmon.telegram')
 
 
+def format_speed(bps):
+    """Format bits per second into human-readable string."""
+    if bps is None:
+        return "0.00 bps"
+    try:
+        val = float(bps)
+    except Exception:
+        return "0.00 bps"
+    if val >= 1_000_000_000:
+        return f"{val / 1_000_000_000:.2f} Gbps"
+    elif val >= 1_000_000:
+        return f"{val / 1_000_000:.2f} Mbps"
+    elif val >= 1_000:
+        return f"{val / 1_000:.1f} Kbps"
+    else:
+        return f"{val:.0f} bps"
+
+
+def format_bar(pct, length=10):
+    """Format percentage as ASCII bar."""
+    try:
+        val = max(0.0, min(100.0, float(pct)))
+    except Exception:
+        val = 0.0
+    filled = int(round(val / 100.0 * length))
+    filled = max(0, min(length, filled))
+    bar = "█" * filled + "░" * (length - filled)
+    return f"[{bar}] {val:.1f}%"
+
+
 class TelegramBot:
     """Manages Telegram Bot notifications and 2-way interactive polling."""
 
@@ -118,9 +148,12 @@ class TelegramBot:
             return
         commands = [
             {"command": "status", "description": "Ringkasan kesehatan jaringan"},
+            {"command": "traffic", "description": "Snapshot bandwidth & traffic WAN"},
+            {"command": "top", "description": "Top 10 bandwidth interface tertinggi"},
+            {"command": "capture", "description": "Live capture traffic real-time via SNMP"},
             {"command": "down", "description": "Daftar perangkat offline"},
             {"command": "alerts", "description": "Alert aktif yang belum di-ack"},
-            {"command": "poll", "description": "Poll seluruh perangkat SNMP sekarang"},
+            {"command": "poll", "description": "Poll ulang perangkat SNMP sekarang"},
             {"command": "digest", "description": "Kirim rekap harian sekarang"},
             {"command": "myid", "description": "Tampilkan Chat ID & User ID Anda"},
             {"command": "help", "description": "Panduan & bantuan perintah"}
@@ -315,6 +348,17 @@ class TelegramBot:
             self._cmd_myid(chat_id, user_id, first_name, username)
         elif cmd in ("/status", "/summary"):
             self._cmd_status(chat_id)
+        elif cmd in ("/traffic", "/bandwidth", "/bw"):
+            if args:
+                self._cmd_traffic_device(chat_id, args)
+            else:
+                self._cmd_traffic_summary(chat_id)
+        elif cmd in ("/top", "/toptraffic", "/topbw", "/top_bandwidth"):
+            self._cmd_top_bandwidth(chat_id)
+        elif cmd in ("/capture", "/torch", "/live"):
+            self._cmd_capture(chat_id, args)
+        elif cmd in ("/iface", "/interfaces"):
+            self._cmd_interfaces(chat_id, args)
         elif cmd == "/alerts":
             self._cmd_alerts(chat_id)
         elif cmd == "/down":
@@ -410,6 +454,20 @@ class TelegramBot:
             if action == "down":
                 self.answer_callback_query(cq_id)
                 self._cmd_down(chat_id)
+            elif action == "traffic_summary":
+                self.answer_callback_query(cq_id, text="🔄 Memperbarui data traffic...")
+                self._cmd_traffic_summary(chat_id, edit_msg_id=message_id)
+            elif action == "top_bandwidth":
+                self.answer_callback_query(cq_id, text="🔄 Mengambil top bandwidth...")
+                self._cmd_top_bandwidth(chat_id, edit_msg_id=message_id)
+            elif action.startswith("traffic_dev:"):
+                dev_id = action.split(":", 1)[1]
+                self.answer_callback_query(cq_id, text="🔄 Memuat data traffic...")
+                self._cmd_traffic_device(chat_id, [dev_id], edit_msg_id=message_id)
+            elif action.startswith("capture:"):
+                dev_id = action.split(":", 1)[1]
+                self.answer_callback_query(cq_id, text="⏱️ Memulai live traffic capture (3s)...")
+                self._cmd_capture(chat_id, [dev_id])
 
     def _run_poll_and_notify(self, chat_id, device):
         """Poll device and reply with updated status."""
@@ -436,17 +494,23 @@ class TelegramBot:
     def _cmd_help(self, chat_id, name):
         text = (
             f"👋 Halo, <b>{name}</b>!\n\n"
-            "🤖 <b>NetMon Telegram Bot</b> siap membantu monitoring jaringan secara real-time.\n\n"
-            "<b>Daftar Perintah:</b>\n"
-            "• <code>/status</code> atau <code>/summary</code> — Ringkasan status sistem & metrik jaringan\n"
-            "• <code>/alerts</code> — Daftar peringatan aktif yang belum di-acknowledge\n"
+            "🤖 <b>NetMon Telegram Bot</b> siap membantu monitoring jaringan & traffic secara real-time.\n\n"
+            "<b>📊 Monitoring Bandwidth & Traffic:</b>\n"
+            "• <code>/traffic</code> atau <code>/bw</code> — Snapshot bandwidth WAN & total throughput backbone\n"
+            "• <code>/traffic &lt;ip/id&gt;</code> — Detail pemakaian bandwidth per-interface perangkat\n"
+            "• <code>/top</code> — Top 10 interface dengan beban bandwidth tertinggi\n"
+            "• <code>/capture &lt;ip/id&gt;</code> — Live active capture traffic real-time via SNMP (3 detik)\n"
+            "• <code>/iface &lt;ip/id&gt;</code> — Cek status & daftar interface perangkat\n\n"
+            "<b>🖥️ Status Jaringan & Kontrol:</b>\n"
+            "• <code>/status</code> atau <code>/summary</code> — Ringkasan kesehatan sistem & metrik perangkat\n"
             "• <code>/down</code> — Menampilkan seluruh perangkat yang sedang offline (DOWN)\n"
+            "• <code>/alerts</code> — Daftar peringatan aktif yang belum di-acknowledge\n"
             "• <code>/devices</code> — Ringkasan jumlah perangkat per tipe dan zona\n"
+            "• <code>/poll [all|ip]</code> — Polling ulang status perangkat sekarang\n"
             "• <code>/ack &lt;id&gt;</code> — Acknowledge alert berdasarkan ID\n"
             "• <code>/ack_all</code> — Acknowledge semua alert aktif sekaligus\n"
-            "• <code>/poll &lt;ip/id&gt;</code> — Poll langsung status perangkat tertentu\n"
             "• <code>/digest</code> — Minta pengiriman Daily Digest sekarang\n"
-            "• <code>/myid</code> — Menampilkan informasi Chat ID Anda\n\n"
+            "• <code>/myid</code> — Menampilkan informasi Chat ID & User ID Anda\n\n"
             f"<b>Chat ID Anda:</b> <code>{chat_id}</code>"
         )
         self.send_message(chat_id, text)
@@ -494,10 +558,14 @@ class TelegramBot:
                 "━━━━━━━━━━━━━━━━━━━━━\n"
             )
 
-            # Check if there are down devices and add inline button
-            markup = None
+            buttons = []
             if down > 0:
-                markup = {"inline_keyboard": [[{"text": "🔴 Lihat Perangkat DOWN", "callback_data": "cmd:down"}]]}
+                buttons.append([{"text": "🔴 Lihat Perangkat DOWN", "callback_data": "cmd:down"}])
+            buttons.append([
+                {"text": "📊 Traffic & Bandwidth", "callback_data": "cmd:traffic_summary"},
+                {"text": "🔝 Top Bandwidth", "callback_data": "cmd:top_bandwidth"}
+            ])
+            markup = {"inline_keyboard": buttons}
 
             self.send_message(chat_id, text, reply_markup=markup)
         except Exception as e:
@@ -646,6 +714,312 @@ class TelegramBot:
 
         self.send_message(chat_id, f"🔄 Memulai polling untuk <b>{device.get('name', target)}</b> ({device.get('ip')})...")
         threading.Thread(target=self._run_poll_and_notify, args=(chat_id, device), daemon=True).start()
+
+    def _cmd_traffic_summary(self, chat_id, edit_msg_id=None):
+        try:
+            routers = self.db.get_router_traffic_summary()
+            now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
+            total_in = sum(r.get('wan_in') or 0.0 for r in routers)
+            total_out = sum(r.get('wan_out') or 0.0 for r in routers)
+            total_all = total_in + total_out
+
+            text = (
+                "🌐 <b>Ringkasan Traffic & Bandwidth Jaringan</b>\n"
+                f"<i>Waktu: {now_str} WIB</i>\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                "📊 <b>Total Throughput Backbone:</b>\n"
+                f"  📥 <b>Inbound (WAN IN):</b> {format_speed(total_in)}\n"
+                f"  📤 <b>Outbound (WAN OUT):</b> {format_speed(total_out)}\n"
+                f"  ⚡ <b>Total Agregat:</b> {format_speed(total_all)}\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+
+            if routers:
+                text += "🛰️ <b>Status Bandwidth Router:</b>\n\n"
+                for r in routers[:8]:
+                    rname = r.get('name') or r.get('ip')
+                    rip = r.get('ip')
+                    win = r.get('wan_in') or 0.0
+                    wout = r.get('wan_out') or 0.0
+                    uplink_mbps = r.get('uplink_speed_mbps') or 1000
+                    uplink_bps = uplink_mbps * 1_000_000
+
+                    peak_traffic = max(win, wout)
+                    util_pct = (peak_traffic / uplink_bps * 100) if uplink_bps > 0 else 0.0
+                    status_icon = "🟢" if r.get('status') == 'up' else "🔴"
+                    warn_tag = " ⚠️ <i>(Saturasi Tinggi)</i>" if util_pct >= 85 else ""
+
+                    text += (
+                        f"🔹 <b>{rname}</b> ({rip}) {status_icon}\n"
+                        f"  📥 In: <b>{format_speed(win)}</b> | 📤 Out: <b>{format_speed(wout)}</b>\n"
+                        f"  📊 Utilisasi: <code>{format_bar(util_pct, 8)}</code> ({uplink_mbps} Mbps){warn_tag}\n\n"
+                    )
+            else:
+                text += "<i>Belum ada router atau perangkat dengan metrik WAN terdeteksi.</i>\n\n"
+
+            text += (
+                "💡 <i>Ketik <code>/traffic &lt;ip&gt;</code> untuk interface spesifik, "
+                "atau <code>/capture &lt;ip&gt;</code> untuk live traffic capture.</i>"
+            )
+
+            markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🔄 Refresh Traffic", "callback_data": "cmd:traffic_summary"},
+                        {"text": "🔝 Top Bandwidth", "callback_data": "cmd:top_bandwidth"}
+                    ]
+                ]
+            }
+
+            if edit_msg_id:
+                self.edit_message_text(chat_id, edit_msg_id, text, reply_markup=markup)
+            else:
+                self.send_message(chat_id, text, reply_markup=markup)
+        except Exception as e:
+            logger.error(f"[Telegram] Error in traffic summary: {e}")
+            self.send_message(chat_id, f"⚠️ Gagal mengambil ringkasan traffic: {e}")
+
+    def _cmd_traffic_device(self, chat_id, args, edit_msg_id=None):
+        if not args:
+            self._cmd_traffic_summary(chat_id, edit_msg_id=edit_msg_id)
+            return
+
+        target = str(args[0]).strip()
+        device = None
+        if target.isdigit():
+            device = self.db.get_device(int(target))
+        if not device:
+            device = self.db.get_device_by_ip(target)
+
+        if not device:
+            self.send_message(chat_id, f"⚠️ Perangkat dengan IP/ID <code>{target}</code> tidak ditemukan.")
+            return
+
+        did = device.get('id')
+        dname = device.get('name') or device.get('ip')
+        dip = device.get('ip')
+        dtype = device.get('type', 'device').capitalize()
+        status = (device.get('status') or 'unknown').upper()
+        status_icon = "🟢" if status == "UP" else ("🔴" if status == "DOWN" else "🟡")
+        uplink_mbps = device.get('uplink_speed_mbps') or 1000
+        uplink_bps = uplink_mbps * 1_000_000
+        win = device.get('wan_in')
+        wout = device.get('wan_out')
+
+        now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
+        text = (
+            f"📡 <b>Traffic Bandwidth Perangkat: {dname}</b>\n"
+            f"• <b>IP:</b> <code>{dip}</code> | <b>Tipe:</b> {dtype}\n"
+            f"• <b>Status:</b> {status_icon} <b>{status}</b>\n"
+        )
+
+        if win is not None or wout is not None:
+            win_val = win or 0.0
+            wout_val = wout or 0.0
+            peak = max(win_val, wout_val)
+            pct = (peak / uplink_bps * 100) if uplink_bps > 0 else 0.0
+            text += (
+                f"• <b>Uplink:</b> {uplink_mbps} Mbps | <b>Utilisasi:</b> <code>{format_bar(pct, 8)}</code>\n"
+                f"• <b>WAN In:</b> <b>{format_speed(win_val)}</b> | <b>WAN Out:</b> <b>{format_speed(wout_val)}</b>\n"
+            )
+
+        text += "━━━━━━━━━━━━━━━━━━━━━\n"
+        text += "🔌 <b>Interface Traffic (Terkini):</b>\n\n"
+
+        ifaces = self.db.get_latest_device_interface_traffic(did, limit=10)
+        if ifaces:
+            for ifc in ifaces:
+                iname = ifc.get('name')
+                rx = ifc.get('rx_bps') or 0.0
+                tx = ifc.get('tx_bps') or 0.0
+                total = ifc.get('total_bps') or (rx + tx)
+                text += (
+                    f"• <b>{iname}</b> (Total: {format_speed(total)})\n"
+                    f"  📥 RX: <b>{format_speed(rx)}</b> | 📤 TX: <b>{format_speed(tx)}</b>\n"
+                )
+        else:
+            text += "<i>Belum ada sampel interface traffic tersimpan. Pastikan SNMP aktif pada perangkat ini.</i>\n"
+
+        text += f"\n<i>Waktu: {now_str} WIB</i>"
+
+        markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "⚡ Live Capture (3s)", "callback_data": f"cmd:capture:{did}"},
+                    {"text": "🔄 Refresh", "callback_data": f"cmd:traffic_dev:{did}"}
+                ],
+                [
+                    {"text": "🌐 Kembali ke Backbone", "callback_data": "cmd:traffic_summary"}
+                ]
+            ]
+        }
+
+        if edit_msg_id:
+            self.edit_message_text(chat_id, edit_msg_id, text, reply_markup=markup)
+        else:
+            self.send_message(chat_id, text, reply_markup=markup)
+
+    def _cmd_top_bandwidth(self, chat_id, edit_msg_id=None):
+        try:
+            top_ifaces = self.db.get_top_bandwidth_interfaces(limit=10)
+            now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
+            text = (
+                "🔝 <b>Top 10 Interface Pemakai Bandwidth Tertinggi:</b>\n"
+                f"<i>Waktu: {now_str} WIB</i>\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n\n"
+            )
+
+            if not top_ifaces:
+                text += "<i>Belum ada data traffic interface yang terekam dalam 24 jam terakhir.</i>\n"
+            else:
+                medals = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+                for i, row in enumerate(top_ifaces):
+                    rank_icon = medals[i] if i < len(medals) else f"{i+1}."
+                    dname = row.get('device_name') or row.get('device_ip')
+                    iname = row.get('iface_name')
+                    rx = row.get('rx_bps') or 0.0
+                    tx = row.get('tx_bps') or 0.0
+                    tot = row.get('total_bps') or (rx + tx)
+
+                    text += (
+                        f"{rank_icon} <b>{dname}</b> — <code>{iname}</code>\n"
+                        f"   📥 RX: {format_speed(rx)} | 📤 TX: {format_speed(tx)}\n"
+                        f"   ⚡ <b>Total: {format_speed(tot)}</b>\n\n"
+                    )
+
+            markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🔄 Refresh Top", "callback_data": "cmd:top_bandwidth"},
+                        {"text": "🌐 Ringkasan Backbone", "callback_data": "cmd:traffic_summary"}
+                    ]
+                ]
+            }
+
+            if edit_msg_id:
+                self.edit_message_text(chat_id, edit_msg_id, text, reply_markup=markup)
+            else:
+                self.send_message(chat_id, text, reply_markup=markup)
+        except Exception as e:
+            logger.error(f"[Telegram] Error in top bandwidth: {e}")
+            self.send_message(chat_id, f"⚠️ Gagal mengambil top bandwidth: {e}")
+
+    def _cmd_capture(self, chat_id, args):
+        if not args:
+            self.send_message(
+                chat_id,
+                "ℹ️ Gunakan format: <code>/capture &lt;ip/id&gt;</code>\n"
+                "Contoh: <code>/capture 192.168.1.1</code> atau <code>/capture 1</code>\n\n"
+                "<i>Bot akan mengambil 2 sampel SNMP berjarak 3 detik secara langsung untuk menghitung throughput real-time tiap interface.</i>"
+            )
+            return
+
+        target = str(args[0]).strip()
+        device = None
+        if target.isdigit():
+            device = self.db.get_device(int(target))
+        if not device:
+            device = self.db.get_device_by_ip(target)
+
+        if not device:
+            self.send_message(chat_id, f"⚠️ Perangkat dengan IP/ID <code>{target}</code> tidak ditemukan di database.")
+            return
+
+        if not device.get('snmp_enabled'):
+            self.send_message(
+                chat_id,
+                f"⚠️ Perangkat <b>{device.get('name', target)}</b> ({device.get('ip')}) belum mengaktifkan SNMP.\n"
+                "Aktifkan SNMP pada perangkat dan di menu Settings/Device NetMon untuk menggunakan fitur Live Capture."
+            )
+            return
+
+        if not self.snmp_worker:
+            self.send_message(chat_id, "⚠️ Worker SNMP belum siap.")
+            return
+
+        dname = device.get('name', target)
+        dip = device.get('ip')
+        did = device.get('id')
+
+        # Send initial progress notice
+        init_res = self.send_message(
+            chat_id,
+            f"⏱️ <i>Sedang melakukan <b>Live Traffic Capture (3 detik)</b> via SNMP pada <b>{dname}</b> ({dip})...\nMohon tunggu sebentar.</i>"
+        )
+        msg_id = init_res.get("result", {}).get("message_id") if init_res and init_res.get("ok") else None
+
+        def _do_capture():
+            results, err = self.snmp_worker.capture_live_traffic(device, sample_seconds=3)
+            now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
+            if err or results is None:
+                err_text = f"⚠️ Gagal melakukan live capture pada <b>{dname}</b> ({dip}):\n<i>{err or 'Unknown error'}</i>"
+                if msg_id:
+                    self.edit_message_text(chat_id, msg_id, err_text)
+                else:
+                    self.send_message(chat_id, err_text)
+                return
+
+            text = (
+                f"⚡ <b>Hasil Live Traffic Capture (3 Detik):</b>\n"
+                f"• <b>Perangkat:</b> <code>{dname}</code> ({dip})\n"
+                f"• <b>Waktu Capture:</b> {now_str} WIB\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                "🔌 <b>Throughput Interface Real-Time:</b>\n\n"
+            )
+
+            active_count = 0
+            for r in results[:12]:
+                rx = r.get('rx_bps', 0.0)
+                tx = r.get('tx_bps', 0.0)
+                tot = r.get('total_bps', 0.0)
+                if tot > 0:
+                    active_count += 1
+                text += (
+                    f"• <b>{r.get('name')}</b> (Total: <b>{format_speed(tot)}</b>)\n"
+                    f"  📥 RX: {format_speed(rx)} | 📤 TX: {format_speed(tx)}\n"
+                )
+
+            if not results:
+                text += "<i>Tidak ada interface yang merespons counter traffic.</i>\n"
+
+            text += f"\n✅ <i>Capture selesai. Terdeteksi {len(results)} interface ({active_count} aktif).</i>"
+
+            markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "⚡ Capture Ulang (3s)", "callback_data": f"cmd:capture:{did}"},
+                        {"text": "📊 Detail Traffic", "callback_data": f"cmd:traffic_dev:{did}"}
+                    ]
+                ]
+            }
+
+            if msg_id:
+                self.edit_message_text(chat_id, msg_id, text, reply_markup=markup)
+            else:
+                self.send_message(chat_id, text, reply_markup=markup)
+
+        threading.Thread(target=_do_capture, daemon=True).start()
+
+    def _cmd_interfaces(self, chat_id, args):
+        if not args:
+            self.send_message(chat_id, "ℹ️ Masukkan IP atau ID perangkat. Contoh: <code>/iface 192.168.1.1</code>")
+            return
+        target = str(args[0]).strip()
+        device = None
+        if target.isdigit():
+            device = self.db.get_device(int(target))
+        if not device:
+            device = self.db.get_device_by_ip(target)
+
+        if not device:
+            self.send_message(chat_id, f"⚠️ Perangkat dengan IP/ID <code>{target}</code> tidak ditemukan.")
+            return
+
+        self._cmd_traffic_device(chat_id, [device['id']])
 
     # ─── Alert Push Notification ─────────────────────────────────────
 

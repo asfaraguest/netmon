@@ -107,3 +107,11 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
     - **Fleksibilitas Whitelist Username:** Memperbarui `is_authorized()` agar mendukung pencocokan numerik Chat ID, User ID, maupun `@username` Telegram (case-insensitive) yang dimasukkan di menu Settings.
     - **Penanganan Command Tidak Dikenali & Peningkatan `/poll`:** Memberikan respons feedback bantuan saat command tidak dikenali, serta memperluas perintah `/poll` agar mendukung opsi `/poll all` untuk re-check seluruh status perangkat secara asinkron di latar belakang.
     - **Live Bot Status Badge di Settings UI:** Menambahkan indikator status real-time (`🟢 Active`, `🔴 Stopped`, atau `⚪ Disabled`) di panel Telegram Bot Integration pada `templates/settings.html` melalui endpoint `/api/telegram/status`.
+
+12. **Ekspansi Perintah Bot Telegram untuk Monitoring Traffic & Bandwidth Usage:**
+    - **Perintah `/traffic` (atau `/bw`):** Snapshot throughput agregat backbone (WAN In & Out) serta ringkasan utilisasi bandwidth seluruh router dengan indikator progress bar visual (`[████░░░░]`), status link, dan peringatan saturasi (utilisasi >= 85%). Mendukung argumen IP/ID (contoh: `/traffic 192.168.1.1`) untuk menampilkan statistik traffic per-interface perangkat tersebut.
+    - **Perintah `/top` (Top Bandwidth Usage):** Menampilkan 10 interface dengan konsumsi bandwidth (RX/TX/Total) tertinggi di seluruh jaringan secara real-time.
+    - **Perintah `/capture <ip/id>` (Live SNMP Capture 3 Detik):** Fitur pengukuran throughput aktif secara instan dengan mengambil 2 sampel SNMP berjarak 3 detik, mendukung 64-bit High Capacity (HC) octet counters dan proteksi counter rollover.
+    - **Perintah `/iface <ip/id>`:** Memeriksa status dan daftar interface perangkat tertentu secara instan.
+    - **Inline Keyboard Interaktif:** Menambahkan tombol shortcut pada pesan Telegram (`🔄 Refresh Traffic`, `🔝 Top Bandwidth`, `⚡ Live Capture (3s)`, dsb.) untuk navigasi data secara seamless tanpa mengetik ulang command.
+    - **Optimasi Query Database Traffic:** Menambahkan method `get_latest_device_interface_traffic()`, `get_top_bandwidth_interfaces()`, dan `get_router_traffic_summary()` pada `database.py` dengan query agregasi CTE efisien.

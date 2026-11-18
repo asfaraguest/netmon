@@ -811,6 +811,76 @@ class Database:
             ''', (device_id, f'-{int(hours)}')).fetchall()
             return [{'name': r[0], 'idx': r[1]} for r in rows]
 
+    def get_latest_device_interface_traffic(self, device_id, limit=15):
+        """Ambil data traffic interface terbaru untuk suatu perangkat (diambil dari sampel terkini)."""
+        with self.conn() as c:
+            rows = c.execute('''
+                WITH latest_sample AS (
+                    SELECT iface_name, MAX(sampled_at) AS max_sampled
+                    FROM interface_traffic
+                    WHERE device_id = ? AND sampled_at >= datetime('now', '-24 hours')
+                    GROUP BY iface_name
+                )
+                SELECT it.iface_name, it.iface_idx, it.rx_bps, it.tx_bps, it.sampled_at
+                FROM latest_sample ls
+                JOIN interface_traffic it
+                  ON ls.iface_name = it.iface_name
+                 AND ls.max_sampled = it.sampled_at
+                WHERE it.device_id = ?
+                ORDER BY (COALESCE(it.rx_bps, 0) + COALESCE(it.tx_bps, 0)) DESC
+                LIMIT ?
+            ''', (device_id, device_id, limit)).fetchall()
+            return [{
+                'name': r[0],
+                'idx': r[1],
+                'rx_bps': float(r[2] or 0.0),
+                'tx_bps': float(r[3] or 0.0),
+                'total_bps': float(r[2] or 0.0) + float(r[3] or 0.0),
+                'sampled_at': r[4]
+            } for r in rows]
+
+    def get_top_bandwidth_interfaces(self, limit=10):
+        """Ambil daftar interface dengan total traffic (rx + tx) tertinggi lintas jaringan."""
+        with self.conn() as c:
+            rows = c.execute('''
+                WITH latest_sample AS (
+                    SELECT device_id, iface_name, MAX(sampled_at) AS max_sampled
+                    FROM interface_traffic
+                    WHERE sampled_at >= datetime('now', '-24 hours')
+                    GROUP BY device_id, iface_name
+                )
+                SELECT d.id, d.name, d.ip, it.iface_name, it.rx_bps, it.tx_bps, it.sampled_at
+                FROM latest_sample ls
+                JOIN interface_traffic it
+                  ON ls.device_id = it.device_id
+                 AND ls.iface_name = it.iface_name
+                 AND ls.max_sampled = it.sampled_at
+                JOIN devices d ON d.id = it.device_id
+                ORDER BY (COALESCE(it.rx_bps, 0) + COALESCE(it.tx_bps, 0)) DESC
+                LIMIT ?
+            ''', (limit,)).fetchall()
+            return [{
+                'device_id': r[0],
+                'device_name': r[1],
+                'device_ip': r[2],
+                'iface_name': r[3],
+                'rx_bps': float(r[4] or 0.0),
+                'tx_bps': float(r[5] or 0.0),
+                'total_bps': float(r[4] or 0.0) + float(r[5] or 0.0),
+                'sampled_at': r[6]
+            } for r in rows]
+
+    def get_router_traffic_summary(self):
+        """Ambil data utilisasi bandwidth WAN seluruh router yang terdaftar."""
+        with self.conn() as c:
+            rows = c.execute('''
+                SELECT id, name, ip, type, wan_in, wan_out, uplink_speed_mbps, status, last_polled
+                FROM devices
+                WHERE type = 'router' OR wan_in IS NOT NULL OR wan_out IS NOT NULL
+                ORDER BY (COALESCE(wan_in, 0) + COALESCE(wan_out, 0)) DESC
+            ''').fetchall()
+            return [dict(r) for r in rows]
+
     def cleanup_interface_traffic(self, interface_retention_hours=168, metrics_retention_hours=None):
         # metrics_retention_hours default None -> pakai interface_retention_hours (kompatibel mundur
         # kalau caller lama cuma kirim 1 parameter). snmp_metrics itu sumber data laporan bulanan,
