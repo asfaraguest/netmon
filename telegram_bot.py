@@ -4,6 +4,7 @@ Provides 2-way interactive Telegram Bot and automated alert notifications.
 Uses standard requests library (lightweight, zero dependency conflicts).
 """
 
+import html
 import json
 import logging
 import re
@@ -61,7 +62,8 @@ class TelegramBot:
         self.daily_digest_time = settings.get('telegram_daily_digest_time', '08:00').strip() or "08:00"
 
         if self.enabled and self.bot_token:
-            if not self.is_running:
+            if not self.is_running or not (self._poll_thread and self._poll_thread.is_alive()):
+                self.is_running = False
                 self.start()
             else:
                 # Refresh bot info in case token changed
@@ -72,16 +74,24 @@ class TelegramBot:
 
     def start(self):
         """Start background polling thread."""
-        if self.is_running:
+        if self.is_running and self._poll_thread and self._poll_thread.is_alive():
             return
         if not self.bot_token:
             logger.warning("[Telegram] Cannot start bot: Token is empty")
+            print("[Telegram] Cannot start bot: Token is empty")
             return
 
         info = self._verify_bot_info()
         if not info:
             logger.warning("[Telegram] Invalid bot token, polling not started.")
+            print("[Telegram] Invalid bot token, polling not started.")
             return
+
+        # Ensure any old webhook is cleared so getUpdates works properly
+        try:
+            self._send_request("deleteWebhook", {"drop_pending_updates": False})
+        except Exception:
+            pass
 
         self._register_bot_commands()
 
@@ -136,13 +146,19 @@ class TelegramBot:
             logger.error(f"[Telegram] Connection test failed: {e}")
             return None
 
-    def is_authorized(self, chat_id, user_id=None):
-        """Check if chat_id or user_id is in whitelisted chat_ids."""
+    def is_authorized(self, chat_id, user_id=None, username=None):
+        """Check if chat_id, user_id, or username is in whitelisted chat_ids."""
         if not self.chat_ids:
             return False
         cid_str = str(chat_id).strip()
         uid_str = str(user_id).strip() if user_id else ""
-        return cid_str in self.chat_ids or uid_str in self.chat_ids
+        u_name = str(username).strip().lower().lstrip('@') if username else ""
+        
+        for allowed in self.chat_ids:
+            al_clean = str(allowed).strip().lower().lstrip('@')
+            if al_clean and (al_clean == cid_str or al_clean == uid_str or (u_name and al_clean == u_name)):
+                return True
+        return False
 
     # ─── Low-level Telegram API calls ────────────────────────────────
 
@@ -152,13 +168,18 @@ class TelegramBot:
         try:
             url = f"{self.api_url}/{method}"
             resp = requests.post(url, json=payload or {}, timeout=timeout)
-            return resp.json()
+            data = resp.json()
+            if not data.get("ok"):
+                logger.error(f"[Telegram] API {method} error: {data.get('description')} (code: {data.get('error_code')})")
+                print(f"[Telegram Error] {method} failed: {data.get('description')} (code: {data.get('error_code')})")
+            return data
         except Exception as e:
             logger.error(f"[Telegram] API call {method} error: {e}")
+            print(f"[Telegram Error] API call {method} exception: {e}")
             return None
 
     def send_message(self, chat_id, text, parse_mode="HTML", reply_markup=None):
-        """Send a message to a specific chat."""
+        """Send a message to a specific chat with automatic plain-text fallback."""
         payload = {
             "chat_id": chat_id,
             "text": text,
@@ -167,7 +188,15 @@ class TelegramBot:
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
-        return self._send_request("sendMessage", payload)
+        res = self._send_request("sendMessage", payload)
+        if not res or not res.get("ok"):
+            # Fallback: if HTML parsing failed, strip HTML and send plain text
+            logger.warning(f"[Telegram] Send message with HTML failed ({res.get('description') if res else 'None'}), retrying plain text...")
+            payload["parse_mode"] = None
+            clean_text = re.sub(r'<[^>]+>', '', text)
+            payload["text"] = clean_text
+            res = self._send_request("sendMessage", payload)
+        return res
 
     def edit_message_text(self, chat_id, message_id, text, parse_mode="HTML", reply_markup=None):
         """Edit an existing message."""
@@ -194,6 +223,7 @@ class TelegramBot:
 
     def _poll_loop(self):
         """Background long polling loop for 2-way Telegram communication."""
+        print(f"[Telegram Poller] Background polling loop active for @{self.bot_info.get('username','?')}")
         while not self._stop_event.is_set():
             try:
                 payload = {
@@ -205,6 +235,13 @@ class TelegramBot:
                 data = resp.json()
 
                 if not data.get("ok"):
+                    desc = data.get("description", "Unknown error")
+                    code = data.get("error_code")
+                    logger.error(f"[Telegram Polling Error] {desc} (code {code})")
+                    print(f"[Telegram Polling Error] {desc} (code {code})")
+                    if code == 409 and "webhook" in desc.lower():
+                        print("[Telegram] Active webhook conflict detected. Deleting webhook...")
+                        self._send_request("deleteWebhook", {"drop_pending_updates": False})
                     time.sleep(3)
                     continue
 
@@ -214,20 +251,25 @@ class TelegramBot:
                     if up_id:
                         self.last_update_id = max(self.last_update_id, up_id)
 
-                    if "message" in update:
-                        self._handle_message(update["message"])
-                    elif "callback_query" in update:
-                        self._handle_callback_query(update["callback_query"])
+                    try:
+                        if "message" in update:
+                            self._handle_message(update["message"])
+                        elif "callback_query" in update:
+                            self._handle_callback_query(update["callback_query"])
+                    except Exception as he:
+                        logger.error(f"[Telegram] Error processing update {up_id}: {he}")
+                        print(f"[Telegram] Error processing update {up_id}: {he}")
 
             except requests.exceptions.Timeout:
-                # Normal long-polling timeout, continue next loop
                 continue
             except requests.exceptions.RequestException as e:
-                # Network glitch or temporary offline, backoff briefly
+                logger.warning(f"[Telegram] Network glitch in poll loop: {e}")
                 time.sleep(4)
             except Exception as e:
                 logger.error(f"[Telegram] Unexpected poll error: {e}")
+                print(f"[Telegram] Unexpected poll error: {e}")
                 time.sleep(2)
+        print("[Telegram Poller] Background polling loop exited.")
 
     # ─── Message Dispatcher ──────────────────────────────────────────
 
@@ -243,17 +285,22 @@ class TelegramBot:
         if not text or not chat_id:
             return
 
+        print(f"[Telegram] Incoming command from chat_id={chat_id} (user={username or first_name}/{user_id}): '{text}'")
+
         # Check authorization
-        if not self.is_authorized(chat_id, user_id):
-            if text.startswith(("/start", "/help", "/myid", "/id", "/status")):
+        if not self.is_authorized(chat_id, user_id, username):
+            print(f"[Telegram Access Check] DENIED: chat_id={chat_id}, user={username}/{user_id} not in whitelist: {self.chat_ids}")
+            # Reply to ANY slash command so the user receives immediate feedback and knows their ID!
+            if text.startswith("/"):
                 reply = (
                     "🔒 <b>Akses Ditolak / Belum Diotorisasi</b>\n\n"
                     "Akun atau grup Anda belum terdaftar di whitelist NetMon.\n\n"
                     f"• <b>Chat ID Anda:</b> <code>{chat_id}</code>\n"
                     f"• <b>User ID:</b> <code>{user_id}</code>\n"
-                    f"• <b>Nama:</b> {first_name} (@{username if username else '-'})\n\n"
+                    f"• <b>Username:</b> @{username if username else '-'}\n"
+                    f"• <b>Nama:</b> {first_name}\n\n"
                     "<i>Untuk memberikan akses, salin <b>Chat ID</b> di atas lalu masukkan ke menu "
-                    "<b>Settings &gt; Telegram Bot Integration &gt; Authorized Chat IDs</b> di Web Dashboard NetMon.</i>"
+                    "<b>Settings &gt; Telegram Bot Integration &gt; Authorized Chat IDs</b> di Web Dashboard NetMon, lalu klik tombol <b>Save All Settings</b>.</i>"
                 )
                 self.send_message(chat_id, reply)
             return
@@ -274,7 +321,7 @@ class TelegramBot:
             self._cmd_down(chat_id)
         elif cmd == "/devices":
             self._cmd_devices(chat_id)
-        elif cmd == "/ack":
+        elif cmd in ("/ack", "/resolve"):
             self._cmd_ack(chat_id, args, username or first_name)
         elif cmd == "/ack_all":
             self._cmd_ack_all(chat_id, username or first_name)
@@ -282,6 +329,13 @@ class TelegramBot:
             self._cmd_poll(chat_id, args)
         elif cmd == "/digest":
             self.send_daily_digest(target_chat_id=chat_id)
+        else:
+            if text.startswith("/"):
+                clean_cmd = html.escape(cmd)
+                self.send_message(
+                    chat_id,
+                    f"❓ Perintah <code>{clean_cmd}</code> tidak dikenali.\nKetik <code>/help</code> untuk melihat daftar perintah yang tersedia."
+                )
 
     # ─── Callback Query (Inline Buttons) Dispatcher ──────────────────
 
@@ -295,7 +349,7 @@ class TelegramBot:
         user_id = user.get("id")
         username = user.get("username") or user.get("first_name", "Admin")
 
-        if not self.is_authorized(chat_id, user_id):
+        if not self.is_authorized(chat_id, user_id, username):
             self.answer_callback_query(cq_id, text="⚠️ Anda tidak memiliki otorisasi untuk aksi ini.", show_alert=True)
             return
 
@@ -553,10 +607,33 @@ class TelegramBot:
             self.send_message(chat_id, f"⚠️ Gagal ack all: {e}")
 
     def _cmd_poll(self, chat_id, args):
-        if not args:
-            self.send_message(chat_id, "⚠️ Masukkan IP atau ID perangkat. Contoh: <code>/poll 192.168.1.1</code>")
+        if not self.snmp_worker:
+            self.send_message(chat_id, "⚠️ Worker polling belum aktif atau belum siap.")
             return
+
+        if not args:
+            self.send_message(chat_id, "ℹ️ Gunakan: <code>/poll &lt;ip/id&gt;</code> untuk satu perangkat, atau <code>/poll all</code> untuk re-check seluruh perangkat.")
+            return
+
         target = args[0].strip()
+        if target.lower() in ("all", "semua"):
+            devices = self.db.get_all_devices()
+            if not devices:
+                self.send_message(chat_id, "ℹ️ Belum ada perangkat yang terdaftar di database.")
+                return
+            self.send_message(chat_id, f"🔄 Memulai polling re-check untuk <b>{len(devices)} perangkat</b> di latar belakang...")
+            def _poll_all():
+                done = 0
+                for d in devices:
+                    try:
+                        self.snmp_worker.poll_device(d)
+                        done += 1
+                    except Exception as pe:
+                        logger.warning(f"[Telegram Poll All] Error on {d.get('ip')}: {pe}")
+                self.send_message(chat_id, f"✅ Selesai melakukan re-check untuk <b>{done}/{len(devices)} perangkat</b>.")
+            threading.Thread(target=_poll_all, daemon=True).start()
+            return
+
         device = None
         if target.isdigit():
             device = self.db.get_device(int(target))
@@ -565,10 +642,6 @@ class TelegramBot:
 
         if not device:
             self.send_message(chat_id, f"⚠️ Perangkat dengan IP/ID <code>{target}</code> tidak ditemukan di database.")
-            return
-
-        if not self.snmp_worker:
-            self.send_message(chat_id, "⚠️ Worker polling belum aktif.")
             return
 
         self.send_message(chat_id, f"🔄 Memulai polling untuk <b>{device.get('name', target)}</b> ({device.get('ip')})...")
