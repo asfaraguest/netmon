@@ -930,9 +930,11 @@ class Database:
             limit = 100
 
         target_id = 'all'
-        target_name = 'Total Backbone (All Routers)'
+        target_name = 'Total Backbone (Agregasi ON)'
         target_ip = ''
         uplink_mbps = 1000
+        is_aggregate = True
+        device_agg_status = 1
 
         with self.conn() as c:
             if device_id and str(device_id).lower() not in ('all', 'backbone', 'total', '0'):
@@ -943,15 +945,17 @@ class Database:
 
                 dev = None
                 if dev_id_int:
-                    dev = c.execute("SELECT id, name, ip, uplink_speed_mbps FROM devices WHERE id=?", (dev_id_int,)).fetchone()
+                    dev = c.execute("SELECT id, name, ip, uplink_speed_mbps, COALESCE(include_in_aggregate, 1) AS include_in_aggregate FROM devices WHERE id=?", (dev_id_int,)).fetchone()
                 if not dev and isinstance(device_id, str):
-                    dev = c.execute("SELECT id, name, ip, uplink_speed_mbps FROM devices WHERE ip=? OR name=?", (device_id, device_id)).fetchone()
+                    dev = c.execute("SELECT id, name, ip, uplink_speed_mbps, COALESCE(include_in_aggregate, 1) AS include_in_aggregate FROM devices WHERE ip=? OR name=?", (device_id, device_id)).fetchone()
 
                 if dev:
                     target_id = dev['id']
                     target_name = dev['name'] or dev['ip']
                     target_ip = dev['ip']
                     uplink_mbps = dev['uplink_speed_mbps'] or 1000
+                    device_agg_status = dev['include_in_aggregate']
+                    is_aggregate = False
 
                     # 1. Query snmp_metrics
                     rows = c.execute(f'''
@@ -983,7 +987,21 @@ class Database:
                 else:
                     rows = []
             else:
-                # Target: All aggregate routers
+                # Target: All aggregate routers (strictly include_in_aggregate = 1)
+                target_id = 'all'
+                target_name = 'Total Backbone (Agregasi ON)'
+                target_ip = 'Backbone WAN'
+                is_aggregate = True
+                device_agg_status = 1
+
+                # Calculate total aggregate uplink speed from routers with include_in_aggregate = 1
+                tot_uplink = c.execute("""
+                    SELECT COALESCE(SUM(uplink_speed_mbps), 0)
+                    FROM devices
+                    WHERE type = 'router' AND COALESCE(include_in_aggregate, 1) = 1
+                """).fetchone()[0]
+                uplink_mbps = int(tot_uplink) if tot_uplink and tot_uplink > 0 else 1000
+
                 rows = c.execute(f'''
                     WITH per_device_bucket AS (
                         SELECT
@@ -994,7 +1012,7 @@ class Database:
                         FROM snmp_metrics m
                         JOIN devices d ON m.device_id = d.id
                         WHERE d.type = 'router'
-                          AND d.include_in_aggregate = 1
+                          AND COALESCE(d.include_in_aggregate, 1) = 1
                           AND m.metric_name IN ('wan_in', 'wan_out')
                           AND m.timestamp >= datetime('now', ? || ' hours')
                         GROUP BY m.device_id, bucket
@@ -1005,6 +1023,29 @@ class Database:
                     ORDER BY bucket ASC
                     LIMIT ?
                 ''', (f'-{hours}', limit)).fetchall()
+
+                # Fallback to interface_traffic if snmp_metrics empty
+                if not rows:
+                    rows = c.execute(f'''
+                        WITH iface_bucket AS (
+                            SELECT
+                                it.device_id,
+                                {bucket_it_sql} AS bucket,
+                                SUM(it.rx_bps) AS rx_sum,
+                                SUM(it.tx_bps) AS tx_sum
+                            FROM interface_traffic it
+                            JOIN devices d ON it.device_id = d.id
+                            WHERE d.type = 'router'
+                              AND COALESCE(d.include_in_aggregate, 1) = 1
+                              AND it.sampled_at >= datetime('now', ? || ' hours')
+                            GROUP BY it.device_id, bucket
+                        )
+                        SELECT bucket, SUM(rx_sum) AS rx_bps, SUM(tx_sum) AS tx_bps
+                        FROM iface_bucket
+                        GROUP BY bucket
+                        ORDER BY bucket ASC
+                        LIMIT ?
+                    ''', (f'-{hours}', limit)).fetchall()
 
         # Parse points into list
         points = []
@@ -1034,6 +1075,8 @@ class Database:
             'target_name': target_name,
             'target_ip': target_ip,
             'uplink_mbps': uplink_mbps,
+            'is_aggregate': is_aggregate,
+            'include_in_aggregate': device_agg_status,
             'time_range': code,
             'time_label': label,
             'hours': hours,
@@ -1118,10 +1161,11 @@ class Database:
         """Ambil data utilisasi bandwidth WAN seluruh router yang terdaftar."""
         with self.conn() as c:
             rows = c.execute('''
-                SELECT id, name, ip, type, wan_in, wan_out, uplink_speed_mbps, status, last_polled
+                SELECT id, name, ip, type, wan_in, wan_out, uplink_speed_mbps, status, last_polled,
+                       COALESCE(include_in_aggregate, 1) AS include_in_aggregate
                 FROM devices
                 WHERE type = 'router' OR wan_in IS NOT NULL OR wan_out IS NOT NULL
-                ORDER BY (COALESCE(wan_in, 0) + COALESCE(wan_out, 0)) DESC
+                ORDER BY COALESCE(include_in_aggregate, 1) DESC, (COALESCE(wan_in, 0) + COALESCE(wan_out, 0)) DESC
             ''').fetchall()
             return [dict(r) for r in rows]
 

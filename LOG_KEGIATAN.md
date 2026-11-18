@@ -173,3 +173,23 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
     - **Pembersihan Otomatis Data Korup Historis (`database.py`):**
       - Menambahkan migrasi pembersihan otomatis saat startup aplikasi di `_init_db()` untuk langsung menolkan data historis anomali yang sempat tersimpan melebihi batas SFP (`MIN(uplink_speed_mbps * 1.05, 5.0 Gbps)`) pada tabel `snmp_metrics`, `devices`, dan `interface_traffic`.
       - Menyelaraskan kembali input default dan nilai fallback pada `templates/settings.html`.
+
+17. **Perbaikan Menyeluruh Bug Opsi Perintah `/chart`, Filter Agregasi Router BGP, & Visualisasi Utilisasi Bandwidth:**
+    - **Akar Masalah Bug Opsi Grafik Telegram:**
+      - Pada Telegram Bot API, method `editMessageMedia` tidak dapat dipanggil pada pesan teks (menghasilkan error `Bad Request: there is no media in the message to edit`). Saat pengguna membuka chart dari menu teks (seperti `/chart select` atau `/traffic`), bot gagal memperbarui pesan secara in-place.
+      - Sebaliknya, method `editMessageText` tidak dapat dipanggil pada pesan foto/media (menghasilkan error `Bad Request: there is no text in the message to edit`). Akibatnya, saat pengguna berada pada tampilan grafik foto dan menekan tombol `[🔀 Pilih Router Lain]` atau `[📋 Teks Traffic]`, tombol tidak merespons sama sekali (dead button).
+      - Menekan tombol rentang waktu yang sama atau tombol Refresh memicu error `Bad Request: message is not modified` yang sebelumnya menyebabkan bot memicu fallback dan mengirimkan foto duplikat berulang-ulang ke chat.
+    - **Solusi Transisi Pesan Cerdas (Text <-> Media Seamless Transition):**
+      - Menambahkan method `delete_message(chat_id, message_id)` pada `TelegramBot`.
+      - Memperbarui `edit_message_text()`: Jika pesan target adalah pesan media/foto, bot otomatis menghapus pesan foto lama tersebut dan mengirimkan pesan teks baru beserta inline keyboard-nya tanpa error.
+      - Memperbarui `edit_message_media()`: Menangani fallback parsing HTML entities dan memastikan foto ter-update secara in-place.
+      - Pada `_send_or_update_chart()`: Jika dipanggil dari pesan teks (seperti tombol pemilih router), bot otomatis membersihkan pesan teks pemilih dan mengirimkan foto grafik baru yang segar; jika terjadi kondisi `message is not modified`, bot mengabaikannya dengan aman tanpa spamming foto duplikat.
+    - **Filter Ketat Agregasi Router (Agregasi ON) vs Router BGP Tunggal:**
+      - **All Traffic / Total Backbone:** Seluruh perhitungan agregat WAN In, WAN Out, dan Total Throughput pada `/traffic`, `/traffic all`, `/chart`, dan `/chart all` kini secara ketat HANYA menjumlahkan router dengan `include_in_aggregate = 1`. Router cabang atau router non-backbone dengan `include_in_aggregate = 0` tidak lagi menggelembungkan throughput backbone.
+      - **Total Kapasitas Uplink Backbone:** Dihitung secara dinamis dari `SUM(uplink_speed_mbps)` seluruh router agregasi aktif (`include_in_aggregate = 1`), bukan lagi nilai statis/hardcoded.
+      - **Router BGP / Tunggal (Pilihan User):** Pengguna dapat memilih router BGP/Core spesifik melalui menu interaktif (`/traffic select`, `/chart select`) atau langsung via perintah (`/traffic <nama>`, `/chart <nama>`). Disediakan deteksi otomatis kata kunci peranan seperti `bgp`, `core`, `edge`, dan `gateway`.
+      - Pada daftar router ditampilkan badge status yang jelas: `[Agg ON]` atau `[Agg OFF]`, serta tanda `[BGP]`.
+    - **Pemisahan Jelas antara Traffic Throughput vs Bandwidth Usage:**
+      - **Traffic Throughput (Laju Aliran Data):** Menampilkan laju transfer data aktual dalam satuan Mbps / Gbps (Terkini / Current, Puncak / Peak, dan Rata-rata / Average) untuk WAN IN (Download) dan WAN OUT (Upload).
+      - **Bandwidth Usage (Utilisasi Kapasitas Pipa):** Menampilkan persentase pemakaian link (`%` terhadap kapasitas uplink), visualisasi progress bar (`[████░░░░]`), kapasitas total link/uplink, serta sisa ruang kapasitas bebas (*headroom*).
+      - Keduanya disajikan secara terstruktur dan informatif pada gambar grafik PNG (`chart_generator.py`) maupun teks caption bot Telegram (`telegram_bot.py`).

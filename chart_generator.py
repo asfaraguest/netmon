@@ -50,6 +50,14 @@ def render_traffic_chart_image(data):
     avg_tx = data.get('avg_tx', 0.0)
     cur_rx = data.get('cur_rx', 0.0)
     cur_tx = data.get('cur_tx', 0.0)
+    uplink_mbps = float(data.get('uplink_mbps') or 1000.0)
+
+    # Bandwidth utilization percentages
+    cur_rx_pct = (cur_rx / uplink_mbps * 100.0) if uplink_mbps > 0 else 0.0
+    cur_tx_pct = (cur_tx / uplink_mbps * 100.0) if uplink_mbps > 0 else 0.0
+    peak_rx_pct = (peak_rx / uplink_mbps * 100.0) if uplink_mbps > 0 else 0.0
+    peak_tx_pct = (peak_tx / uplink_mbps * 100.0) if uplink_mbps > 0 else 0.0
+    max_peak_pct = max(peak_rx_pct, peak_tx_pct)
 
     # Theme colors (matching NetMon Dark UI)
     bg_color = "#0f172a"      # Slate 900 (Canvas)
@@ -121,15 +129,15 @@ def render_traffic_chart_image(data):
 
         ax.yaxis.set_major_formatter(FuncFormatter(y_fmt))
 
-        # Legend with statistics overview
+        # Legend with statistics overview (throughput rate & bandwidth usage)
         legend_labels = [
-            f"Download (IN)  | Peak: {peak_rx:.2f} Mbps  •  Avg: {avg_rx:.2f} Mbps  •  Cur: {cur_rx:.2f} Mbps",
-            f"Upload (OUT)   | Peak: {peak_tx:.2f} Mbps  •  Avg: {avg_tx:.2f} Mbps  •  Cur: {cur_tx:.2f} Mbps"
+            f"WAN IN (Download)  • Cur: {cur_rx:.2f} Mbps ({cur_rx_pct:.1f}%) | Peak: {peak_rx:.2f} Mbps ({peak_rx_pct:.1f}%) | Avg: {avg_rx:.2f} Mbps",
+            f"WAN OUT (Upload)   • Cur: {cur_tx:.2f} Mbps ({cur_tx_pct:.1f}%) | Peak: {peak_tx:.2f} Mbps ({peak_tx_pct:.1f}%) | Avg: {avg_tx:.2f} Mbps"
         ]
         leg = ax.legend(labels=legend_labels, loc='upper left', frameon=True,
                         facecolor=bg_color, edgecolor=border_color,
-                        labelcolor=text_color, fontsize=8.5)
-        leg.get_frame().set_alpha(0.85)
+                        labelcolor=text_color, fontsize=8.2)
+        leg.get_frame().set_alpha(0.88)
 
     else:
         # Placeholder when not enough data
@@ -155,12 +163,14 @@ def render_traffic_chart_image(data):
     plt.xticks(rotation=0)
 
     # Y-axis label
-    ax.set_ylabel("Throughput Rate", color=muted_color, fontsize=9, labelpad=8)
+    ax.set_ylabel("Throughput (Mbps)", color=muted_color, fontsize=9, labelpad=8)
 
     # Titles and watermarks
+    uplink_str = f"{int(uplink_mbps)} Mbps" if uplink_mbps < 1000 else f"{uplink_mbps/1000:.1f} Gbps"
     fig.text(0.08, 0.95, target_name, color=text_color, fontsize=13, fontweight='bold', ha='left')
-    fig.text(0.08, 0.90, f"Throughput Bandwidth • {time_label} ({len(points)} titik sampel)", color=muted_color, fontsize=9, ha='left')
-    fig.text(0.92, 0.94, "NetMon Network Monitor", color="#38bdf8", fontsize=9, fontweight='semibold', ha='right')
+    fig.text(0.08, 0.90, f"Traffic Throughput & Bandwidth Usage • {time_label} ({len(points)} titik sampel)", color=muted_color, fontsize=9, ha='left')
+    fig.text(0.92, 0.95, f"Kapasitas Uplink: {uplink_str} (Peak: {max_peak_pct:.1f}%)", color="#38bdf8", fontsize=9, fontweight='semibold', ha='right')
+    fig.text(0.92, 0.90, "NetMon Network Monitor", color="#64748b", fontsize=8.5, ha='right')
 
     # Save to in-memory bytes
     buf = io.BytesIO()

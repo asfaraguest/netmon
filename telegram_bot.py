@@ -233,8 +233,14 @@ class TelegramBot:
             res = self._send_request("sendMessage", payload)
         return res
 
+    def delete_message(self, chat_id, message_id):
+        """Delete a message from Telegram chat."""
+        if not self.bot_token or not message_id:
+            return None
+        return self._send_request("deleteMessage", {"chat_id": chat_id, "message_id": message_id}, timeout=5)
+
     def edit_message_text(self, chat_id, message_id, text, parse_mode="HTML", reply_markup=None):
-        """Edit an existing message."""
+        """Edit an existing message. If target was a media message (photo), deletes it and sends fresh text."""
         payload = {
             "chat_id": chat_id,
             "message_id": message_id,
@@ -244,10 +250,32 @@ class TelegramBot:
         }
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
-        return self._send_request("editMessageText", payload)
+        res = self._send_request("editMessageText", payload)
+        if not res or not res.get("ok"):
+            desc = str(res.get("description", "") if res else "").lower()
+            if "there is no text in the message to edit" in desc:
+                # The target was a photo/media message. Clean it up and send fresh text message.
+                try:
+                    self.delete_message(chat_id, message_id)
+                except Exception:
+                    pass
+                return self.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+            elif "not modified" in desc:
+                return res
+            elif "entities" in desc:
+                # Fallback to plain text on HTML entity parsing error
+                payload["parse_mode"] = None
+                payload["text"] = re.sub(r'<[^>]+>', '', text)
+                res2 = self._send_request("editMessageText", payload)
+                if not res2 or not res2.get("ok"):
+                    return self.send_message(chat_id, payload["text"], parse_mode=None, reply_markup=reply_markup)
+                return res2
+        return res
 
     def answer_callback_query(self, callback_query_id, text=None, show_alert=False):
         """Answer an inline button callback query."""
+        if not callback_query_id:
+            return None
         payload = {"callback_query_id": callback_query_id}
         if text:
             payload["text"] = text
@@ -310,6 +338,14 @@ class TelegramBot:
             resp = requests.post(url, data=data, files=files, timeout=30)
             data_res = resp.json()
             if not data_res.get("ok"):
+                desc = str(data_res.get("description", "")).lower()
+                if "entities" in desc and caption:
+                    # Retry with plain text caption on entity parse error
+                    media_obj["parse_mode"] = ""
+                    media_obj["caption"] = re.sub(r'<[^>]+>', '', caption)
+                    data["media"] = json.dumps(media_obj)
+                    resp = requests.post(url, data=data, files={"photo": ("chart.png", photo_bytes, "image/png")}, timeout=30)
+                    data_res = resp.json()
                 logger.warning(f"[Telegram] editMessageMedia note: {data_res.get('description')}")
             return data_res
         except Exception as e:
@@ -428,6 +464,10 @@ class TelegramBot:
             self._cmd_traffic_picker(chat_id)
         elif cmd in ("/chart", "/grafik", "/graph", "/plot"):
             self._cmd_chart(chat_id, args)
+        elif cmd in ("/chart_all", "/chartall"):
+            self._cmd_chart(chat_id, ["all"] + args)
+        elif cmd in ("/chart_select", "/chartselect"):
+            self._cmd_chart_picker(chat_id)
         elif cmd in ("/top", "/toptraffic", "/topbw", "/top_bandwidth"):
             self._cmd_top_bandwidth(chat_id)
         elif cmd in ("/capture", "/torch", "/live"):
@@ -817,53 +857,77 @@ class TelegramBot:
             routers = self.db.get_router_traffic_summary()
             now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
-            total_in = sum(r.get('wan_in') or 0.0 for r in routers)
-            total_out = sum(r.get('wan_out') or 0.0 for r in routers)
+            # Strictly separate routers with include_in_aggregate = 1 for the backbone aggregate calculation
+            agg_routers = [r for r in routers if r.get('include_in_aggregate', 1) == 1]
+
+            total_in = sum(r.get('wan_in') or 0.0 for r in agg_routers)
+            total_out = sum(r.get('wan_out') or 0.0 for r in agg_routers)
             total_all = total_in + total_out
 
+            total_uplink_mbps = sum(r.get('uplink_speed_mbps') or 1000 for r in agg_routers)
+            total_uplink_bps = total_uplink_mbps * 1_000_000.0
+
+            util_in = (total_in / total_uplink_bps * 100.0) if total_uplink_bps > 0 else 0.0
+            util_out = (total_out / total_uplink_bps * 100.0) if total_uplink_bps > 0 else 0.0
+            peak_util = max(util_in, util_out)
+            headroom_mbps = max(0.0, total_uplink_mbps - (max(total_in, total_out) / 1_000_000.0))
+
+            uplink_str = f"{total_uplink_mbps} Mbps" if total_uplink_mbps < 1000 else f"{total_uplink_mbps/1000:.1f} Gbps"
+
             text = (
-                "🌐 <b>Ringkasan Seluruh Traffic Router (All Routers)</b>\n"
+                "🌐 <b>Ringkasan Backbone Traffic & Bandwidth Usage</b>\n"
                 f"<i>Waktu: {now_str} WIB</i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
-                "📊 <b>Total Throughput Backbone:</b>\n"
-                f"  📥 <b>Inbound (WAN IN):</b> {format_speed(total_in)}\n"
-                f"  📤 <b>Outbound (WAN OUT):</b> {format_speed(total_out)}\n"
-                f"  ⚡ <b>Total Agregat:</b> {format_speed(total_all)}\n"
+                f"🌊 <b>THROUGHPUT BACKBONE ({len(agg_routers)} Router Agregasi ON):</b>\n"
+                f"  📥 <b>Inbound (WAN IN):</b>  <b>{format_speed(total_in)}</b>\n"
+                f"  📤 <b>Outbound (WAN OUT):</b> <b>{format_speed(total_out)}</b>\n"
+                f"  ⚡ <b>Total Agregat:</b> <b>{format_speed(total_all)}</b>\n\n"
+                "📈 <b>BANDWIDTH USAGE (Utilisasi Kapasitas):</b>\n"
+                f"  🔌 <b>Kapasitas Backbone:</b> {uplink_str}\n"
+                f"  📥 <b>Inbound Usage:</b>  <code>{format_bar(util_in, 8)}</code> {util_in:.1f}%\n"
+                f"  📤 <b>Outbound Usage:</b> <code>{format_bar(util_out, 8)}</code> {util_out:.1f}%\n"
+                f"  ⚡ <b>Utilisasi Tertinggi:</b> <b>{peak_util:.1f}%</b> (Sisa Headroom: {headroom_mbps:.1f} Mbps)\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
             )
 
             if routers:
-                text += "🛰️ <b>Status Bandwidth Tiap Router:</b>\n\n"
+                text += "🛰️ <b>Rincian Tiap Router:</b>\n\n"
                 for r in routers[:8]:
                     rname = r.get('name') or r.get('ip')
                     rip = r.get('ip')
                     win = r.get('wan_in') or 0.0
                     wout = r.get('wan_out') or 0.0
                     uplink_mbps = r.get('uplink_speed_mbps') or 1000
-                    uplink_bps = uplink_mbps * 1_000_000
+                    uplink_bps = uplink_mbps * 1_000_000.0
 
                     peak_traffic = max(win, wout)
-                    util_pct = (peak_traffic / uplink_bps * 100) if uplink_bps > 0 else 0.0
+                    util_pct = (peak_traffic / uplink_bps * 100.0) if uplink_bps > 0 else 0.0
                     status_icon = "🟢" if r.get('status') == 'up' else "🔴"
-                    warn_tag = " ⚠️ <i>(Saturasi Tinggi)</i>" if util_pct >= 85 else ""
+                    warn_tag = " ⚠️ <i>(Saturasi)</i>" if util_pct >= 85 else ""
+
+                    is_agg = r.get('include_in_aggregate', 1) == 1
+                    is_bgp = 'bgp' in (r.get('name') or '').lower()
+                    badge = "[Agg ON]" if is_agg else "[Agg OFF]"
+                    if is_bgp:
+                        badge = "[BGP / Agg ON]" if is_agg else "[BGP / Agg OFF]"
 
                     text += (
-                        f"🔹 <b>{rname}</b> ({rip}) {status_icon}\n"
+                        f"🔹 <b>{rname}</b> ({rip}) {status_icon} <code>{badge}</code>\n"
                         f"  📥 In: <b>{format_speed(win)}</b> | 📤 Out: <b>{format_speed(wout)}</b>\n"
-                        f"  📊 Utilisasi: <code>{format_bar(util_pct, 8)}</code> ({uplink_mbps} Mbps){warn_tag}\n\n"
+                        f"  📊 Utilisasi: <code>{format_bar(util_pct, 8)}</code> {util_pct:.1f}% ({uplink_mbps}M){warn_tag}\n\n"
                     )
             else:
                 text += "<i>Belum ada router atau perangkat dengan metrik WAN terdeteksi.</i>\n\n"
 
             text += (
-                "💡 <i>Ketik <code>/chart</code> untuk melihat gambar grafik traffic (1h/6h/24h/7d/30d), "
-                "atau klik tombol <b>Grafik</b> di bawah.</i>"
+                "💡 <i>Ketik <code>/chart</code> untuk melihat gambar grafik visual (PNG), "
+                "atau klik tombol <b>Grafik Backbone</b> di bawah.</i>"
             )
 
             markup = {
                 "inline_keyboard": [
                     [
-                        {"text": "📈 Grafik 24 Jam", "callback_data": "chart:all:24h"},
+                        {"text": "📈 Grafik Backbone (24h)", "callback_data": "chart:all:24h"},
                         {"text": "📊 Grafik 7 Hari", "callback_data": "chart:all:7d"}
                     ],
                     [
@@ -897,16 +961,21 @@ class TelegramBot:
                 return
 
             text = (
-                "🔀 <b>Pilih Router untuk Monitoring Traffic:</b>\n\n"
-                "Silakan pilih router di bawah untuk melihat rincian utilisasi link & throughput per-interface:\n"
+                "🔀 <b>Pilih Router untuk Monitoring Traffic & Bandwidth:</b>\n\n"
+                "Pilih router di bawah untuk melihat rincian utilisasi link & throughput per-interface:\n"
             )
 
             buttons = []
             row = []
             for r in routers[:16]:
-                rname = r.get('name') or r.get('ip')
+                rname = (r.get('name') or r.get('ip') or '')[:14]
                 status_icon = "🟢" if r.get('status') == 'up' else "🔴"
-                label = f"{status_icon} {rname[:15]}"
+                is_agg = r.get('include_in_aggregate', 1) == 1
+                is_bgp = 'bgp' in (r.get('name') or '').lower()
+                badge = "[Agg]" if is_agg else ""
+                if is_bgp:
+                    badge = "[BGP]"
+                label = f"{status_icon} {rname} {badge}".strip()
                 row.append({"text": label, "callback_data": f"cmd:traffic_dev:{r['id']}"})
                 if len(row) == 2:
                     buttons.append(row)
@@ -915,7 +984,7 @@ class TelegramBot:
                 buttons.append(row)
 
             buttons.append([
-                {"text": "🌐 Pantau Semua Router (All)", "callback_data": "cmd:traffic_summary"},
+                {"text": "🌐 Pantau Semua Router (Agregasi ON)", "callback_data": "cmd:traffic_summary"},
                 {"text": "🔝 Top Bandwidth", "callback_data": "cmd:top_bandwidth"}
             ])
 
@@ -969,6 +1038,11 @@ class TelegramBot:
         for d in all_devs:
             if t_low in (d.get('name') or '').lower():
                 return d
+        # Helpful match for common router role keywords (e.g. bgp, core, gateway)
+        if t_low in ("bgp", "router bgp", "router_bgp", "edge", "gateway", "core"):
+            for d in all_devs:
+                if d.get('type') == 'router' and d.get('include_in_aggregate', 1) == 1:
+                    return d
         return None
 
     def _cmd_chart(self, chat_id, args):
@@ -1039,16 +1113,22 @@ class TelegramBot:
                 routers = [d for d in all_devs if d.get('snmp_enabled')] or all_devs
 
             text = (
-                "📈 <b>Pilih Router untuk Visualisasi Grafik Traffic:</b>\n\n"
-                f"Silakan pilih router di bawah untuk melihat kurva grafik throughput (rentang waktu: <b>{time_range}</b>):\n"
+                f"📈 <b>Pilih Target Grafik Traffic (Rentang: {time_range}):</b>\n\n"
+                "Pilih <b>Total Backbone</b> untuk agregasi seluruh router (Agregasi ON), "
+                "atau pilih <b>Router Tunggal / BGP</b> di bawah:\n"
             )
 
             buttons = []
             row = []
             for r in routers[:16]:
-                rname = r.get('name') or r.get('ip')
+                rname = (r.get('name') or r.get('ip') or '')[:14]
                 status_icon = "🟢" if r.get('status') == 'up' else "🔴"
-                label = f"{status_icon} {rname[:15]}"
+                is_agg = r.get('include_in_aggregate', 1) == 1
+                is_bgp = 'bgp' in (r.get('name') or '').lower()
+                badge = "[Agg]" if is_agg else ""
+                if is_bgp:
+                    badge = "[BGP]"
+                label = f"{status_icon} {rname} {badge}".strip()
                 row.append({"text": label, "callback_data": f"chart:{r['id']}:{time_range}"})
                 if len(row) == 2:
                     buttons.append(row)
@@ -1057,7 +1137,7 @@ class TelegramBot:
                 buttons.append(row)
 
             buttons.append([
-                {"text": "🌐 Grafik Total Backbone (All)", "callback_data": f"chart:all:{time_range}"},
+                {"text": "🌐 Total Backbone (Agregasi ON)", "callback_data": f"chart:all:{time_range}"},
                 {"text": "📋 Teks Traffic", "callback_data": "cmd:traffic_summary"}
             ])
 
@@ -1123,6 +1203,7 @@ class TelegramBot:
 
         target_key = "all" if str(target_id).lower() in ('all', 'backbone', 'total', '0') else str(data['target_id'])
         target_name = data.get('target_name', 'Backbone Traffic')
+        safe_target_name = html.escape(target_name)
         time_label = data.get('time_label', '24 Jam')
         cur_code = data.get('time_range', '24h')
         peak_rx = data.get('peak_rx', 0.0)
@@ -1131,21 +1212,49 @@ class TelegramBot:
         avg_tx = data.get('avg_tx', 0.0)
         cur_rx = data.get('cur_rx', 0.0)
         cur_tx = data.get('cur_tx', 0.0)
+        uplink_mbps = float(data.get('uplink_mbps') or 1000.0)
         sample_count = len(data.get('points', []))
         now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
+        # Bandwidth utilization metrics
+        cur_rx_util = (cur_rx / uplink_mbps * 100.0) if uplink_mbps > 0 else 0.0
+        cur_tx_util = (cur_tx / uplink_mbps * 100.0) if uplink_mbps > 0 else 0.0
+        peak_rx_util = (peak_rx / uplink_mbps * 100.0) if uplink_mbps > 0 else 0.0
+        peak_tx_util = (peak_tx / uplink_mbps * 100.0) if uplink_mbps > 0 else 0.0
+        cur_peak_rate = max(cur_rx, cur_tx)
+        cur_max_util = max(cur_rx_util, cur_tx_util)
+        peak_max_util = max(peak_rx_util, peak_tx_util)
+        headroom_mbps = max(0.0, uplink_mbps - cur_peak_rate)
+
+        is_agg = data.get('is_aggregate', False)
+        if is_agg:
+            scope_badge = "🌐 <b>Scope:</b> Total Backbone Agregat (Router include_in_aggregate = ON)"
+        else:
+            agg_flag = "ON" if data.get('include_in_aggregate', 1) == 1 else "OFF"
+            scope_badge = f"🛰️ <b>Scope:</b> Router Tunggal (BGP/Core, Agregasi: {agg_flag})"
+
+        uplink_str = f"{int(uplink_mbps)} Mbps" if uplink_mbps < 1000 else f"{uplink_mbps/1000:.1f} Gbps"
+        sat_warn = " ⚠️ <i>(Saturasi Tinggi &gt; 85%)</i>" if cur_max_util >= 85 else ""
+
         caption = (
-            f"📊 <b>Grafik Throughput Traffic — {target_name}</b>\n"
+            f"📊 <b>Grafik Throughput & Bandwidth — {safe_target_name}</b>\n"
+            f"{scope_badge}\n"
             f"⏱️ <b>Rentang Waktu:</b> {time_label} ({sample_count} sampel)\n"
+            f"🔌 <b>Kapasitas Link (Uplink):</b> <b>{uplink_str}</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📥 <b>Download (WAN IN):</b>\n"
-            f"  • Puncak (Peak): <b>{peak_rx:.2f} Mbps</b>\n"
-            f"  • Rata-rata (Avg): <b>{avg_rx:.2f} Mbps</b>\n"
-            f"  • Terkini (Current): <b>{cur_rx:.2f} Mbps</b>\n\n"
-            f"📤 <b>Upload (WAN OUT):</b>\n"
-            f"  • Puncak (Peak): <b>{peak_tx:.2f} Mbps</b>\n"
-            f"  • Rata-rata (Avg): <b>{avg_tx:.2f} Mbps</b>\n"
-            f"  • Terkini (Current): <b>{cur_tx:.2f} Mbps</b>\n"
+            "🌊 <b>TRAFFIC THROUGHPUT (Laju Aliran):</b>\n"
+            f"  📥 <b>WAN IN (Download):</b>\n"
+            f"     • Terkini: <b>{cur_rx:.2f} Mbps</b>\n"
+            f"     • Puncak: <b>{peak_rx:.2f} Mbps</b> | Rata-rata: {avg_rx:.2f} Mbps\n"
+            f"  📤 <b>WAN OUT (Upload):</b>\n"
+            f"     • Terkini: <b>{cur_tx:.2f} Mbps</b>\n"
+            f"     • Puncak: <b>{peak_tx:.2f} Mbps</b> | Rata-rata: {avg_tx:.2f} Mbps\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "📈 <b>BANDWIDTH USAGE (Utilisasi Kapasitas):</b>\n"
+            f"  📥 <b>Inbound:</b>  <code>{format_bar(cur_rx_util, 8)}</code> {cur_rx_util:.1f}%\n"
+            f"  📤 <b>Outbound:</b> <code>{format_bar(cur_tx_util, 8)}</code> {cur_tx_util:.1f}%\n"
+            f"  ⚡ <b>Beban Puncak Terkini:</b> <b>{cur_max_util:.1f}%</b> (Puncak: {peak_max_util:.1f}%){sat_warn}\n"
+            f"  💡 <b>Headroom Bebas:</b> {headroom_mbps:.1f} Mbps ({max(0.0, 100.0 - cur_max_util):.1f}%)\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
             f"<i>Waktu generate: {now_str} WIB</i>"
         )
@@ -1180,6 +1289,15 @@ class TelegramBot:
             res = self.edit_message_media(chat_id, message_id, img_bytes, caption=caption, reply_markup=markup)
             if res and res.get('ok'):
                 return
+            if res and not res.get('ok'):
+                desc = str(res.get('description', '')).lower()
+                if "not modified" in desc:
+                    return
+                if "there is no media in the message to edit" in desc:
+                    try:
+                        self.delete_message(chat_id, message_id)
+                    except Exception:
+                        pass
 
         # Otherwise send fresh photo
         self.send_photo(chat_id, img_bytes, caption=caption, reply_markup=markup)
@@ -1195,7 +1313,7 @@ class TelegramBot:
         if not device:
             self.send_message(
                 chat_id,
-                f"⚠️ Perangkat atau router dengan nama/IP/ID <code>{target}</code> tidak ditemukan.\n\n"
+                f"⚠️ Perangkat atau router dengan nama/IP/ID <code>{html.escape(target)}</code> tidak ditemukan.\n\n"
                 "Ketik <code>/traffic select</code> untuk melihat daftar router yang tersedia."
             )
             return
@@ -1207,26 +1325,40 @@ class TelegramBot:
         status = (device.get('status') or 'unknown').upper()
         status_icon = "🟢" if status == "UP" else ("🔴" if status == "DOWN" else "🟡")
         uplink_mbps = device.get('uplink_speed_mbps') or 1000
-        uplink_bps = uplink_mbps * 1_000_000
+        uplink_bps = uplink_mbps * 1_000_000.0
         win = device.get('wan_in')
         wout = device.get('wan_out')
 
         now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
+        is_agg = device.get('include_in_aggregate', 1) == 1
+        agg_label = "Aktif (ON)" if is_agg else "Non-Aktif (OFF)"
+
         text = (
-            f"📡 <b>Traffic Bandwidth Perangkat: {dname}</b>\n"
+            f"📡 <b>Monitoring Traffic & Bandwidth: {dname}</b>\n"
             f"• <b>IP:</b> <code>{dip}</code> | <b>Tipe:</b> {dtype}\n"
-            f"• <b>Status:</b> {status_icon} <b>{status}</b>\n"
+            f"• <b>Status:</b> {status_icon} <b>{status}</b> | <b>Agregasi:</b> {agg_label}\n"
+            f"• <b>Kapasitas Link:</b> {uplink_mbps} Mbps\n"
         )
 
         if win is not None or wout is not None:
             win_val = win or 0.0
             wout_val = wout or 0.0
+            pct_in = (win_val / uplink_bps * 100.0) if uplink_bps > 0 else 0.0
+            pct_out = (wout_val / uplink_bps * 100.0) if uplink_bps > 0 else 0.0
             peak = max(win_val, wout_val)
-            pct = (peak / uplink_bps * 100) if uplink_bps > 0 else 0.0
+            pct_peak = (peak / uplink_bps * 100.0) if uplink_bps > 0 else 0.0
+            headroom_mbps = max(0.0, uplink_mbps - (peak / 1_000_000.0))
+
             text += (
-                f"• <b>Uplink:</b> {uplink_mbps} Mbps | <b>Utilisasi:</b> <code>{format_bar(pct, 8)}</code>\n"
-                f"• <b>WAN In:</b> <b>{format_speed(win_val)}</b> | <b>WAN Out:</b> <b>{format_speed(wout_val)}</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                "🌊 <b>TRAFFIC THROUGHPUT:</b>\n"
+                f"  📥 <b>WAN IN (Download):</b>  <b>{format_speed(win_val)}</b>\n"
+                f"  📤 <b>WAN OUT (Upload):</b> <b>{format_speed(wout_val)}</b>\n"
+                "📈 <b>BANDWIDTH USAGE:</b>\n"
+                f"  📥 <b>Inbound:</b>  <code>{format_bar(pct_in, 8)}</code> {pct_in:.1f}%\n"
+                f"  📤 <b>Outbound:</b> <code>{format_bar(pct_out, 8)}</code> {pct_out:.1f}%\n"
+                f"  ⚡ <b>Utilisasi Tertinggi:</b> <b>{pct_peak:.1f}%</b> (Sisa Headroom: {headroom_mbps:.1f} Mbps)\n"
             )
 
         text += "━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1260,7 +1392,7 @@ class TelegramBot:
                 ],
                 [
                     {"text": "🔀 Pilih Router Lain", "callback_data": "cmd:traffic_picker"},
-                    {"text": "🌐 Semua Router (All)", "callback_data": "cmd:traffic_summary"}
+                    {"text": "🌐 Semua Router (Agregasi ON)", "callback_data": "cmd:traffic_summary"}
                 ]
             ]
         }
