@@ -3,11 +3,33 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token }}">
   <title>{% block title %}Dashboard{% endblock %} — TIKWatch</title>
   <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
   <link href="/static/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
   <link href="/static/vendor/bootstrap-icons/bootstrap-icons.min.css" rel="stylesheet">
   <link href="/static/css/style.css" rel="stylesheet">
+  <script>
+    (function() {
+      const _origFetch = window.fetch.bind(window);
+      window.fetch = function(input, init) {
+        init = init ? Object.assign({}, init) : {};
+        const method = (init.method || 'GET').toUpperCase();
+        if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+          const urlStr = typeof input === 'string' ? input : (input && input.url) || '';
+          if (!urlStr.startsWith('http') || urlStr.startsWith(window.location.origin)) {
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            if (meta && meta.content) {
+              const headers = new Headers(init.headers || {});
+              if (!headers.has('X-CSRF-Token')) headers.set('X-CSRF-Token', meta.content);
+              init.headers = headers;
+            }
+          }
+        }
+        return _origFetch(input, init);
+      };
+    })();
+  </script>
 </head>
 <body class="theme-{{ theme }}">
 <script>

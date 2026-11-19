@@ -1534,6 +1534,7 @@ class SNMPWorker:
         now_ts = time.time()
         meta_entry = self._if_meta_cache.get(did)
         need_meta = not meta_entry or (now_ts - meta_entry.get('ts', 0)) >= 300
+        cached_64 = True if need_meta else meta_entry.get('is_64bit', True)
 
         async def _fetch_traffic_walks():
             if need_meta:
@@ -1547,9 +1548,11 @@ class SNMPWorker:
                     self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.20', port, version, timeout=1.5),
                     return_exceptions=True
                 )
+            in_oid = '1.3.6.1.2.1.31.1.1.1.6' if cached_64 else '1.3.6.1.2.1.2.2.1.10'
+            out_oid = '1.3.6.1.2.1.31.1.1.1.10' if cached_64 else '1.3.6.1.2.1.2.2.1.16'
             return await asyncio.gather(
-                self._async_walk(ip, community, '1.3.6.1.2.1.31.1.1.1.6', port, version, timeout=1.5),
-                self._async_walk(ip, community, '1.3.6.1.2.1.31.1.1.1.10', port, version, timeout=1.5),
+                self._async_walk(ip, community, in_oid, port, version, timeout=1.5),
+                self._async_walk(ip, community, out_oid, port, version, timeout=1.5),
                 self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.14', port, version, timeout=1.5),
                 self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.20', port, version, timeout=1.5),
                 return_exceptions=True
@@ -1573,11 +1576,29 @@ class SNMPWorker:
             hc_out = _ok_dict(walk_res[4])
             if_in_err = _ok_dict(walk_res[5])
             if_out_err = _ok_dict(walk_res[6])
+            is_64bit = True
+            if not hc_in:
+                async def _fetch_32bit():
+                    return await asyncio.gather(
+                        self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.10', port, version, timeout=1.5),
+                        self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.16', port, version, timeout=1.5),
+                        return_exceptions=True
+                    )
+                try:
+                    fb_res = asyncio.run(_fetch_32bit())
+                    hc_in = _ok_dict(fb_res[0])
+                    hc_out = _ok_dict(fb_res[1])
+                except Exception:
+                    hc_in, hc_out = {}, {}
+                if not hc_in:
+                    return
+                is_64bit = False
             self._if_meta_cache[did] = {
                 'ts': now_ts,
                 'if_desc': if_desc,
                 'if_high_speed': if_high_speed,
                 'if_speed': if_speed,
+                'is_64bit': is_64bit,
             }
         else:
             if_desc = meta_entry['if_desc']
@@ -1589,22 +1610,10 @@ class SNMPWorker:
             hc_out = _ok_dict(walk_res[1])
             if_in_err = _ok_dict(walk_res[2])
             if_out_err = _ok_dict(walk_res[3])
-
-        is_64bit = True
-        if not hc_in:
-            async def _fetch_32bit():
-                return await asyncio.gather(
-                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.10', port, version, timeout=1.5),
-                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.16', port, version, timeout=1.5),
-                    return_exceptions=True
-                )
-            try:
-                fb_res = asyncio.run(_fetch_32bit())
-                hc_in = _ok_dict(fb_res[0])
-                hc_out = _ok_dict(fb_res[1])
-            except Exception:
-                hc_in, hc_out = {}, {}
-            is_64bit = False
+            is_64bit = cached_64
+            # Skip false 32-bit fallback when cached 64-bit device goes RTO/unreachable
+            if not hc_in:
+                return
 
         now_ts = time.time()
         settings = self.db.get_settings()

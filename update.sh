@@ -238,6 +238,14 @@ step "7. Ensuring systemd service units (Gunicorn Web + Dedicated Poller)"
 SERVICE_FILE="/etc/systemd/system/netmon.service"
 POLLER_SERVICE_FILE="/etc/systemd/system/netmon-poller.service"
 if [[ $OS == "Linux" ]] && command -v systemctl &>/dev/null; then
+  BIND_HOST="0.0.0.0"
+  HTTPS_PROXY_ENV="0"
+  if [[ -L /etc/nginx/sites-enabled/netmon ]]; then
+    BIND_HOST="127.0.0.1"
+    HTTPS_PROXY_ENV="1"
+    info "Nginx proxy active: locking Gunicorn bind to ${BIND_HOST}:${PORT} (anti-bypass)"
+  fi
+
   cat > "$SERVICE_FILE" << SVCEOF
 [Unit]
 Description=TIKWatch Web Server (Gunicorn WSGI + SocketIO)
@@ -251,8 +259,9 @@ Group=${SERVICE_USER}
 WorkingDirectory=${INSTALL_DIR}
 Environment="PATH=${INSTALL_DIR}/venv/bin"
 Environment="PORT=${PORT}"
-Environment="HOST=0.0.0.0"
-ExecStart=${INSTALL_DIR}/venv/bin/gunicorn --worker-class gthread --workers 1 --threads 16 --timeout 120 --bind 0.0.0.0:${PORT} app:app
+Environment="HOST=${BIND_HOST}"
+Environment="HTTPS_PROXY_ENABLED=${HTTPS_PROXY_ENV}"
+ExecStart=${INSTALL_DIR}/venv/bin/gunicorn --worker-class gthread --workers 1 --threads 16 --timeout 120 --bind ${BIND_HOST}:${PORT} app:app
 Restart=always
 RestartSec=5
 StandardOutput=journal

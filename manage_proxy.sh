@@ -27,7 +27,38 @@ NGINX_DEFAULT_ENABLED="/etc/nginx/sites-enabled/default"
 SSL_DIR="/etc/ssl/tikwatch"
 SSL_CERT="${SSL_DIR}/tikwatch.crt"
 SSL_KEY="${SSL_DIR}/tikwatch.key"
-ALLOWED_CIDR="${TIKWATCH_ALLOWED_CIDR:-10.122.100.0/24}"
+SYSTEMD_WEB="/etc/systemd/system/netmon.service"
+# Nginx hanya membatasi ke jaringan private/lokal; granular subnet (10.122.100.0/24 + VLAN tambahan)
+# dikelola single-source-of-truth oleh Flask Settings (allowed_cidrs).
+NGINX_PRIVATE_ALLOW="${TIKWATCH_NGINX_ALLOW:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.1 ::1}"
+
+# Sinkronkan bind host Gunicorn agar port 5000 tidak bisa di-bypass saat HTTPS proxy aktif
+sync_gunicorn_bind() {
+    local bind_host="$1"
+    local https_flag="$2"
+    if [[ ! -f "$SYSTEMD_WEB" ]] || ! command -v systemctl &>/dev/null; then
+        return 0
+    fi
+    local changed=0
+    if grep -Eq -- "--bind (0\.0\.0\.0|127\.0\.0\.1):" "$SYSTEMD_WEB" && ! grep -q -- "--bind ${bind_host}:" "$SYSTEMD_WEB"; then
+        sed -i -E "s/--bind (0\.0\.0\.0|127\.0\.0\.1):/--bind ${bind_host}:/" "$SYSTEMD_WEB"
+        changed=1
+    fi
+    if grep -q "HTTPS_PROXY_ENABLED=" "$SYSTEMD_WEB"; then
+        if ! grep -q "HTTPS_PROXY_ENABLED=${https_flag}" "$SYSTEMD_WEB"; then
+            sed -i -E "s/HTTPS_PROXY_ENABLED=[01]/HTTPS_PROXY_ENABLED=${https_flag}/" "$SYSTEMD_WEB"
+            changed=1
+        fi
+    else
+        sed -i "/Environment=\"PORT=/a Environment=\"HTTPS_PROXY_ENABLED=${https_flag}\"" "$SYSTEMD_WEB"
+        changed=1
+    fi
+    if [[ $changed -eq 1 ]]; then
+        systemctl daemon-reload
+        systemctl restart netmon || true
+        echo -e "${GREEN}Gunicorn systemd unit disinkronkan (--bind ${bind_host}, HTTPS_PROXY_ENABLED=${https_flag}).${NC}"
+    fi
+}
 
 # Pastikan dijalankan sebagai root/sudo
 if [[ $EUID -ne 0 ]]; then
@@ -77,16 +108,19 @@ generate_nginx_config() {
 
     ensure_ssl_cert "$ip_addr"
 
-    echo -e "${CYAN}Membuat konfigurasi Nginx HTTPS + IP Lock (${ALLOWED_CIDR}) di ${NGINX_AVAILABLE}...${NC}"
+    local allow_block=""
+    for cidr in $NGINX_PRIVATE_ALLOW; do
+        allow_block+="    allow ${cidr};"$'\n'
+    done
+
+    echo -e "${CYAN}Membuat konfigurasi Nginx HTTPS (Single-Source IP Lock oleh TIKWatch) di ${NGINX_AVAILABLE}...${NC}"
     cat << EOF > "$NGINX_AVAILABLE"
 server {
     listen 80;
     server_name $ip_addr _;
 
-    # IP Allowlist kampus
-    allow $ALLOWED_CIDR;
-    allow 127.0.0.1;
-    deny all;
+    # Tolak IP publik di layer Nginx; granular subnet dikelola Flask Settings (allowed_cidrs)
+${allow_block}    deny all;
 
     return 301 https://\$host\$request_uri;
 }
@@ -100,10 +134,8 @@ server {
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
-    # IP Allowlist kampus
-    allow $ALLOWED_CIDR;
-    allow 127.0.0.1;
-    deny all;
+    # Tolak IP publik di layer Nginx; granular subnet dikelola Flask Settings (allowed_cidrs)
+${allow_block}    deny all;
 
     client_max_body_size 32M;
 
@@ -124,14 +156,14 @@ server {
     }
 }
 EOF
-    echo -e "${GREEN}Konfigurasi Nginx berhasil dibuat (HTTPS 443 + IP Lock ${ALLOWED_CIDR}).${NC}"
+    echo -e "${GREEN}Konfigurasi Nginx berhasil dibuat (HTTPS 443 + RFC1918 LAN guard).${NC}"
 }
 
 # Fungsi untuk mengaktifkan Proxy
 enable_proxy() {
     echo -e "${CYAN}Mengaktifkan Nginx Reverse Proxy HTTPS untuk TIKWatch...${NC}"
     
-    # 1. Generate/perbarui konfigurasi Nginx agar selalu sinkron dengan HTTPS & IP Lock
+    # 1. Generate/perbarui konfigurasi Nginx agar selalu sinkron dengan HTTPS & ProxyFix
     generate_nginx_config
     
     # 2. Buat symlink di sites-enabled
@@ -148,14 +180,15 @@ enable_proxy() {
         echo -e "${GREEN}Situs default Nginx dinonaktifkan.${NC}"
     fi
 
-    # 4. Uji dan muat ulang Nginx
+    # 4. Uji, muat ulang Nginx, lalu kunci Gunicorn ke localhost:5000
     if nginx -t &>/dev/null; then
         systemctl restart nginx
+        sync_gunicorn_bind "127.0.0.1" "1"
         local srv_ip
         srv_ip=$(hostname -I | awk '{print $1}')
         echo -e "${GREEN}${BOLD}======================================================${NC}"
         echo -e "${GREEN}${BOLD}   BERHASIL: TIKWatch aktif via HTTPS (Port 443)!     ${NC}"
-        echo -e "${GREEN}${BOLD}   IP Lock : ${ALLOWED_CIDR}                          ${NC}"
+        echo -e "${GREEN}${BOLD}   Port 5000 dikunci ke localhost (anti-bypass).      ${NC}"
         echo -e "${GREEN}${BOLD}   Akses   : https://${srv_ip}/                       ${NC}"
         echo -e "${GREEN}${BOLD}======================================================${NC}"
     else
@@ -188,12 +221,13 @@ disable_proxy() {
         echo -e "${GREEN}Situs default Nginx diaktifkan kembali.${NC}"
     fi
 
-    # 3. Muat ulang Nginx
+    # 3. Muat ulang Nginx & buka kembali port 5000 ke LAN
     if nginx -t &>/dev/null; then
         systemctl restart nginx
+        sync_gunicorn_bind "0.0.0.0" "0"
         echo -e "${GREEN}${BOLD}======================================================${NC}"
         echo -e "${GREEN}${BOLD}   BERHASIL: Proxy dinonaktifkan.                    ${NC}"
-        echo -e "${GREEN}${BOLD}   NetMon dikembalikan hanya bisa diakses di Port 5000.${NC}"
+        echo -e "${GREEN}${BOLD}   TIKWatch dikembalikan ke akses langsung Port 5000. ${NC}"
         echo -e "${GREEN}${BOLD}======================================================${NC}"
     else
         echo -e "${RED}[ERROR] Konfigurasi default Nginx tidak valid setelah penonaktifan!${NC}" >&2

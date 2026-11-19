@@ -11,6 +11,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import hmac
 import ipaddress
 import logging
+import secrets
 import threading
 import json
 import os
@@ -39,7 +40,39 @@ db = Database()
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or db.get_settings().get('app_secret_key') or os.urandom(32).hex()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('HTTPS_PROXY_ENABLED', '').strip().lower() in ('1', 'true', 'yes')
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
+
+ALLOWED_SETTING_KEYS = {
+    'poll_interval', 'traffic_poll_interval', 'allowed_cidrs',
+    'default_community', 'default_snmp_version',
+    'alert_retention_days', 'log_retention_days', 'traffic_retention_hours',
+    'report_metrics_retention_hours', 'interface_chart_retention_hours',
+    'anomaly_cap_multiplier', 'anomaly_cap_gbps', 'campus_total_bandwidth_mbps',
+    'alert_on_down', 'alert_on_up', 'anomaly_alert_enabled',
+    'traffic_spike_multiplier', 'traffic_spike_min_mbps', 'traffic_drop_min_mbps',
+    'cpu_spike_threshold', 'cpu_jump_threshold', 'memory_spike_threshold',
+    'groq_api_key', 'groq_model', 'groq_redact_ips',
+    'telegram_enabled', 'telegram_bot_token', 'telegram_chat_ids',
+    'telegram_notify_down', 'telegram_notify_up',
+    'telegram_daily_digest_enabled', 'telegram_daily_digest_time',
+    'unifi_host', 'unifi_port', 'unifi_site', 'unifi_user', 'unifi_pass',
+    'theme', 'app_name', 'global_maintenance_until',
+}
+
+
+def _get_csrf_token():
+    """Return per-session CSRF token, generating one on first visit."""
+    tok = session.get('_csrf_token')
+    if not tok:
+        tok = secrets.token_hex(24)
+        session['_csrf_token'] = tok
+    return tok
+
+
+def _verify_csrf_token(supplied):
+    expected = session.get('_csrf_token') or ''
+    return bool(expected and supplied and hmac.compare_digest(str(expected), str(supplied)))
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False)
 
@@ -142,6 +175,13 @@ def enforce_auth_and_rbac():
             return jsonify({'status': 'error', 'message': 'Authentication required'}), 401
         return redirect(url_for('login_page', next=path))
 
+    # CSRF check for all authenticated mutating requests (exempt Socket.IO polling & internal IPC)
+    if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+        supplied_csrf = request.headers.get('X-CSRF-Token') or request.form.get('csrf_token') or ''
+        if not _verify_csrf_token(supplied_csrf):
+            logger.warning(f"[CSRF] Blocked {request.method} {path} from {request.remote_addr}")
+            return jsonify({'status': 'error', 'message': 'CSRF token tidak valid. Muat ulang halaman lalu coba lagi.'}), 403
+
     # Admin RBAC enforcement for mutating & sensitive endpoints
     if request.method in ('POST', 'PUT', 'DELETE'):
         admin_prefixes = (
@@ -163,9 +203,13 @@ def enforce_auth_and_rbac():
 def inject_theme():
     try:
         settings = db.get_settings()
-        return {'theme': settings.get('theme', 'default'), 'current_user': _get_current_user()}
+        return {
+            'theme': settings.get('theme', 'default'),
+            'current_user': _get_current_user(),
+            'csrf_token': _get_csrf_token(),
+        }
     except Exception:
-        return {'theme': 'default', 'current_user': None}
+        return {'theme': 'default', 'current_user': None, 'csrf_token': _get_csrf_token()}
 
 
 # ============================================================
@@ -181,6 +225,8 @@ def login_page():
     if not str(next_url).startswith('/') or str(next_url).startswith('//'):
         next_url = '/'
     if request.method == 'POST':
+        if not _verify_csrf_token(request.form.get('csrf_token') or ''):
+            return render_template('login.html', error='Sesi login kadaluarsa (CSRF). Muat ulang halaman lalu coba lagi.', next_url=next_url), 403
         username = (request.form.get('username') or '').strip()
         password = request.form.get('password') or ''
         user = db.authenticate_user(username, password)
@@ -189,6 +235,7 @@ def login_page():
             session['user_id'] = user['id']
             session['username'] = user['username']
             session['role'] = user['role']
+            session['_csrf_token'] = secrets.token_hex(24)
             db.add_access_log({'source': request.remote_addr, 'message': f"User '{user['username']}' logged in", 'type': 'auth'})
             return redirect(next_url)
         error = 'Username atau password salah.'
@@ -1281,10 +1328,11 @@ def get_settings():
 
 @app.route('/api/settings', methods=['POST'])
 def save_settings():
-    data = request.json or {}
-    # Protect internal cryptographic keys and masked secrets
-    data.pop('app_secret_key', None)
-    data.pop('internal_emit_token', None)
+    raw_data = request.json or {}
+    if not isinstance(raw_data, dict):
+        return jsonify({'status': 'error', 'message': 'Invalid settings payload'}), 400
+    # Strict whitelist prevents mass-assignment of internal/secret keys
+    data = {k: v for k, v in raw_data.items() if k in ALLOWED_SETTING_KEYS}
     if data.get('unifi_pass') == '***':
         data.pop('unifi_pass')
     if data.get('groq_api_key') == '***':
