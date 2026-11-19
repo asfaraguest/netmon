@@ -146,17 +146,13 @@
         <div class="col-12">
           <label class="nm-label">UI Theme</label>
           <select class="nm-select w-100" id="s-theme">
-            <option value="default">Default Dark</option>
-            <option value="brutalism">Neo-Brutalism</option>
-            <option value="minimalism">Minimalism</option>
-            <option value="morphism">Glassmorphism</option>
-            <option value="win7">3D Windows 7 (Aero)</option>
-            <option value="realism">3D Realism</option>
-            <option value="winxp">WinXP Classic</option>
-            <option value="forest">Warm Earthy Forest</option>
-            <option value="adminlte">AdminLTE 4 — Polije</option>
+            <option value="default">Modern Slate NOC (Default)</option>
+            <option value="adminlte">AdminLTE 4 — Polije (Bondi Blue)</option>
+            <option value="cyber">Cyber Midnight (NOC Telemetry)</option>
+            <option value="minimalism">Minimalist (Nordic Slate)</option>
+            <option value="forest">Warm Forest (Night Shift)</option>
           </select>
-          <small class="text-muted">Pilih gaya visual antarmuka sistem.</small>
+          <small class="text-muted">Pilih gaya visual antarmuka berstandar NOC enterprise.</small>
         </div>
       </div>
     </div>
@@ -406,7 +402,11 @@ function loadSettings() {
     setVal('s-uf-port',    s.unifi_port || 8443);
     setVal('s-uf-site',    s.unifi_site || 'default');
     setVal('s-uf-user',    s.unifi_user || '');
-    setVal('s-theme',      s.theme || 'default');
+    let curTheme = s.theme || 'default';
+    if (['win7', 'morphism'].includes(curTheme)) curTheme = 'cyber';
+    else if (['winxp', 'realism'].includes(curTheme)) curTheme = 'default';
+    else if (curTheme === 'brutalism') curTheme = 'minimalism';
+    setVal('s-theme', curTheme);
     
     // Live Telegram status badge
     fetch('/api/telegram/status')
