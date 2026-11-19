@@ -153,6 +153,8 @@ class TelegramBot:
             return
         commands = [
             {"command": "status", "description": "Ringkasan kesehatan jaringan"},
+            {"command": "ai", "description": "Tanya AI NOC tentang kondisi jaringan live"},
+            {"command": "diagnosa", "description": "Diagnosa mendalam router dengan AI"},
             {"command": "traffic", "description": "Traffic: All router / Selected router"},
             {"command": "resource", "description": "Resource usage: Server / All router / Selected"},
             {"command": "server", "description": "Resource usage server TIKWatch (CPU/RAM/Disk)"},
@@ -509,6 +511,10 @@ class TelegramBot:
             self._cmd_mute(chat_id, args)
         elif cmd in ("/unmute", "/unmaint"):
             self._cmd_unmute(chat_id, args)
+        elif cmd in ("/ai", "/tanya", "/ask"):
+            self._cmd_ai(chat_id, args)
+        elif cmd in ("/diagnosa", "/analisa", "/diagnose"):
+            self._cmd_diagnosa(chat_id, args)
         elif cmd == "/devices":
             self._cmd_devices(chat_id)
         elif cmd in ("/ack", "/resolve"):
@@ -652,6 +658,14 @@ class TelegramBot:
                 else:
                     self.answer_callback_query(cq_id, text="🔔 Maintenance mode dimatikan")
                     self.send_message(chat_id, f"🔔 <b>Maintenance Mode Dimatikan</b> untuk ID/Target <code>{m_target}</code>.")
+            elif action.startswith("ai_alert:"):
+                aid = action.split(":", 1)[1]
+                self.answer_callback_query(cq_id, text="🤖 Menganalisa alert dengan Groq AI...")
+                threading.Thread(target=self._run_ai_alert_analysis, args=(chat_id, aid), daemon=True).start()
+            elif action.startswith("ai_dev:"):
+                did = action.split(":", 1)[1]
+                self.answer_callback_query(cq_id, text="🤖 Menganalisa perangkat dengan Groq AI...")
+                self._cmd_diagnosa(chat_id, [did])
 
     def _run_poll_and_notify(self, chat_id, device):
         """Poll device and reply with updated status."""
@@ -691,6 +705,9 @@ class TelegramBot:
             "• <code>/chart [1h|6h|24h|7d|30d]</code> — Grafik throughput dengan rentang waktu TIKWatch\n"
             "• <code>/chart &lt;nama/ip/id&gt;</code> — Grafik traffic router tertentu (contoh: <code>/chart core 7d</code>)\n"
             "• <code>/chart select</code> — Menu interaktif memilih router untuk digambar grafiknya\n\n"
+            "<b>🤖 AI NOC Assistant (Groq LLM):</b>\n"
+            "• <code>/ai &lt;pertanyaan&gt;</code> — Tanya AI tentang kondisi jaringan, bottleneck 6 Gbps, atau alert aktif\n"
+            "• <code>/diagnosa &lt;nama/ip/id&gt;</code> — Diagnosa AI kesehatan perangkat & rekomendasi RouterOS\n\n"
             "<b>🖥️ Status Jaringan, Resource & Kontrol:</b>\n"
             "• <code>/server</code> atau <code>/resource server</code> — Resource usage server TIKWatch (CPU, RAM, Disk, Uptime)\n"
             "• <code>/resource all</code> — Resource usage (CPU, RAM, Temp) seluruh router\n"
@@ -960,7 +977,7 @@ class TelegramBot:
             total_out = sum(r.get('wan_out') or 0.0 for r in agg_routers)
             total_all = total_in + total_out
 
-            total_uplink_mbps = sum(r.get('uplink_speed_mbps') or 1000 for r in agg_routers)
+            total_uplink_mbps = self.db.get_campus_total_bandwidth_mbps()
             total_uplink_bps = total_uplink_mbps * 1_000_000.0
 
             util_in = (total_in / total_uplink_bps * 100.0) if total_uplink_bps > 0 else 0.0
@@ -968,7 +985,7 @@ class TelegramBot:
             peak_util = max(util_in, util_out)
             headroom_mbps = max(0.0, total_uplink_mbps - (max(total_in, total_out) / 1_000_000.0))
 
-            uplink_str = f"{total_uplink_mbps} Mbps" if total_uplink_mbps < 1000 else f"{total_uplink_mbps/1000:.1f} Gbps"
+            uplink_str = f"{int(total_uplink_mbps)} Mbps" if total_uplink_mbps < 1000 else f"{total_uplink_mbps/1000:.1f} Gbps"
 
             header = (
                 "🌐 <b>Ringkasan Backbone TIKWatch (Hanya Uplink WAN)</b>\n"
@@ -978,8 +995,8 @@ class TelegramBot:
                 f"  📥 <b>Inbound (WAN IN):</b>  <b>{format_speed(total_in)}</b>\n"
                 f"  📤 <b>Outbound (WAN OUT):</b> <b>{format_speed(total_out)}</b>\n"
                 f"  ⚡ <b>Total Agregat:</b> <b>{format_speed(total_all)}</b>\n\n"
-                "📈 <b>BANDWIDTH USAGE (Utilisasi Kapasitas Uplink):</b>\n"
-                f"  🔌 <b>Kapasitas Backbone:</b> {uplink_str}\n"
+                "📈 <b>BANDWIDTH USAGE (Kapasitas Total ISP Kampus):</b>\n"
+                f"  🔌 <b>Kapasitas ISP Kampus:</b> {uplink_str}\n"
                 f"  📥 <b>Inbound Usage:</b>  <code>{format_bar(util_in, 8)}</code> {util_in:.1f}%\n"
                 f"  📤 <b>Outbound Usage:</b> <code>{format_bar(util_out, 8)}</code> {util_out:.1f}%\n"
                 f"  ⚡ <b>Utilisasi Tertinggi:</b> <b>{peak_util:.1f}%</b> (Sisa Headroom: {headroom_mbps:.1f} Mbps)\n"
@@ -1582,7 +1599,10 @@ class TelegramBot:
                     {"text": "📈 Grafik 24h", "callback_data": f"chart:{device['id']}:24h"}
                 ],
                 [
-                    {"text": "🔀 Pilih Router Lain", "callback_data": "cmd:resource_picker"},
+                    {"text": "🤖 Diagnosa AI", "callback_data": f"cmd:ai_dev:{device['id']}"},
+                    {"text": "🔀 Pilih Router Lain", "callback_data": "cmd:resource_picker"}
+                ],
+                [
                     {"text": "🛰️ Semua Router", "callback_data": "cmd:resource_all"}
                 ]
             ]
@@ -2241,6 +2261,135 @@ class TelegramBot:
 
         self._cmd_traffic_device(chat_id, [str(device['id'])])
 
+    # ─── Groq AI NOC Assistant Commands ─────────────────────────────
+
+    @staticmethod
+    def _format_ai_html(raw_text):
+        """Safely convert basic Markdown from LLM output to Telegram HTML."""
+        escaped = html.escape(str(raw_text or "").strip())
+        escaped = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', escaped)
+        escaped = re.sub(r'`([^`]+)`', r'<code>\1</code>', escaped)
+        return escaped
+
+    def _cmd_ai(self, chat_id, args):
+        """Handle /ai <question> using Groq LLM with live TIKWatch telemetry."""
+        question = " ".join(args).strip() if args else ""
+        if not question:
+            self.send_message(
+                chat_id,
+                "🤖 <b>AI NOC Assistant (Groq LLM)</b>\n\n"
+                "Ajukan pertanyaan apa saja seputar kondisi jaringan kampus (kapasitas ISP 6 Gbps, alert aktif, atau troubleshooting).\n\n"
+                "<b>Contoh penggunaan:</b>\n"
+                "• <code>/ai bagaimana kondisi jaringan dan utilisasi 6 Gbps saat ini?</code>\n"
+                "• <code>/ai analisa alert aktif dan cara perbaikannya</code>\n"
+                "• <code>/ai router mana yang CPU atau trafiknya paling tinggi?</code>\n"
+                "• <code>/diagnosa &lt;nama/ip&gt;</code> — Diagnosa mendalam 1 perangkat"
+            )
+            return
+
+        def _worker():
+            try:
+                import ai_detector
+                ok, answer = ai_detector.ask_groq_noc(self.db, question)
+                if not ok:
+                    self.send_message(chat_id, answer)
+                    return
+                formatted = self._format_ai_html(answer)
+                _, model_name = ai_detector.get_groq_config(self.db)
+                reply = (
+                    f"🤖 <b>TIKWatch AI NOC Assistant</b> (<code>{html.escape(model_name)}</code>)\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{formatted}"
+                )
+                if len(reply) > 3950:
+                    reply = reply[:3940] + "\n<i>…(terpotong)</i>"
+                self.send_message(chat_id, reply)
+            except Exception as e:
+                logger.error(f"[Telegram AI] /ai error: {e}")
+                self.send_message(chat_id, f"⚠️ Gagal memproses AI: {e}")
+
+        self.send_message(chat_id, "🤖 <i>Menganalisa telemetri live TIKWatch…</i>")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _cmd_diagnosa(self, chat_id, args):
+        """Handle /diagnosa <nama/ip/id> for deep AI analysis of a specific device."""
+        if not args:
+            self.send_message(chat_id, "ℹ️ Masukkan nama, IP, atau ID router. Contoh: <code>/diagnosa core</code>")
+            return
+        target = " ".join(args).strip()
+        device = self._find_device_by_target(target)
+        if not device:
+            self.send_message(chat_id, f"⚠️ Perangkat <code>{html.escape(target)}</code> tidak ditemukan.")
+            return
+
+        def _worker():
+            try:
+                import ai_detector
+                question = (
+                    f"Lakukan diagnosa kesehatan dan performa mendalam untuk perangkat target "
+                    f"{device.get('name')} ({device.get('ip')}). Sertakan analisa CPU/RAM/suhu/latency/uptime, "
+                    f"trafik port aktif, riwayat downtime/reboot, dan rekomendasi konkret (termasuk perintah RouterOS jika perlu)."
+                )
+                ok, answer = ai_detector.ask_groq_noc(self.db, question, device=device)
+                if not ok:
+                    self.send_message(chat_id, answer)
+                    return
+                formatted = self._format_ai_html(answer)
+                _, model_name = ai_detector.get_groq_config(self.db)
+                dname = html.escape(str(device.get('name') or device.get('ip')))
+                reply = (
+                    f"🩺 <b>AI Diagnosa: {dname}</b> (<code>{device.get('ip')}</code>)\n"
+                    f"<i>Model: {html.escape(model_name)}</i>\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{formatted}"
+                )
+                if len(reply) > 3950:
+                    reply = reply[:3940] + "\n<i>…(terpotong)</i>"
+                self.send_message(chat_id, reply)
+            except Exception as e:
+                logger.error(f"[Telegram AI] /diagnosa error: {e}")
+                self.send_message(chat_id, f"⚠️ Gagal diagnosa AI: {e}")
+
+        self.send_message(chat_id, f"🩺 <i>Menjalankan AI diagnosa untuk <b>{html.escape(str(device.get('name') or device.get('ip')))}</b>…</i>")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _run_ai_alert_analysis(self, chat_id, alert_id):
+        """Run AI root-cause analysis when the user clicks 'Analisa AI' on an alert message."""
+        try:
+            import ai_detector
+            alert_row = None
+            device = None
+            with self.db.conn() as c:
+                row = c.execute("SELECT * FROM alerts WHERE id = ?", (int(alert_id),)).fetchone()
+                if row:
+                    alert_row = dict(row)
+                    if alert_row.get('device_id'):
+                        device = self.db.get_device(alert_row['device_id'])
+            if not alert_row:
+                self.send_message(chat_id, f"⚠️ Alert #{alert_id} tidak ditemukan.")
+                return
+            question = (
+                f"Analisa insiden alert #{alert_id}: '{alert_row.get('message')}'. "
+                f"Jelaskan kemungkinan root cause, dampak ke jaringan kampus, dan langkah verifikasi/perbaikan cepat untuk teknisi NOC."
+            )
+            ok, answer = ai_detector.ask_groq_noc(self.db, question, device=device, alert=alert_row)
+            if not ok:
+                self.send_message(chat_id, answer)
+                return
+            formatted = self._format_ai_html(answer)
+            reply = (
+                f"🤖 <b>Analisa AI — Alert #{alert_id}</b>\n"
+                f"🛰️ <b>{html.escape(str(alert_row.get('device_name') or '-'))}</b> (<code>{alert_row.get('device_ip') or '-'}</code>)\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{formatted}"
+            )
+            if len(reply) > 3950:
+                reply = reply[:3940] + "\n<i>…(terpotong)</i>"
+            self.send_message(chat_id, reply)
+        except Exception as e:
+            logger.error(f"[Telegram AI] alert analysis error: {e}")
+            self.send_message(chat_id, f"⚠️ Gagal analisa alert AI: {e}")
+
     # ─── Alert Push Notification ─────────────────────────────────────
 
     def send_alert(self, alert_data, device=None, is_recovery=False):
@@ -2315,10 +2464,18 @@ class TelegramBot:
             btn_row.append({"text": "✅ Acknowledge", "callback_data": f"ack:{alert_id}"})
         if dev_id:
             btn_row.append({"text": "🔄 Re-check", "callback_data": f"poll:{dev_id}"})
-            if not is_recovery:
-                btn_row.append({"text": "🔕 Mute 1h", "callback_data": f"cmd:mute:{dev_id}:60"})
         if btn_row:
             keyboard.append(btn_row)
+
+        btn_row2 = []
+        if alert_id and not is_recovery:
+            btn_row2.append({"text": "🤖 Analisa AI", "callback_data": f"cmd:ai_alert:{alert_id}"})
+        elif dev_id and not is_recovery:
+            btn_row2.append({"text": "🤖 Analisa AI", "callback_data": f"cmd:ai_dev:{dev_id}"})
+        if dev_id and not is_recovery:
+            btn_row2.append({"text": "🔕 Mute 1h", "callback_data": f"cmd:mute:{dev_id}:60"})
+        if btn_row2:
+            keyboard.append(btn_row2)
 
         reply_markup = {"inline_keyboard": keyboard} if keyboard else None
 
@@ -2351,6 +2508,22 @@ class TelegramBot:
 
             status_headline = "🟢 Kondisi Jaringan Normal" if down == 0 else f"🔴 Perhatian: {down} Perangkat Offline"
 
+            campus_gbps = self.db.get_campus_total_bandwidth_mbps() / 1000.0
+            ai_insight_block = ""
+            try:
+                import ai_detector
+                api_key, _ = ai_detector.get_groq_config(self.db)
+                if api_key:
+                    ok, ai_summary = ai_detector.ask_groq_noc(
+                        self.db,
+                        "Berikan ringkasan eksekutif NOC harian singkat (maksimal 3 kalimat) mengenai kesehatan router, alert terbuka, dan utilisasi terhadap kapasitas ISP 6 Gbps.",
+                        max_tokens=260
+                    )
+                    if ok and ai_summary:
+                        ai_insight_block = f"\n🤖 <b>AI Daily Insight:</b>\n{self._format_ai_html(ai_summary)}\n"
+            except Exception as aie:
+                logger.debug(f"[Telegram Digest AI] skipped: {aie}")
+
             text = (
                 "📊 <b>TIKWatch DAILY DIGEST</b>\n"
                 f"🗓 <i>{today_str} WIB</i>\n"
@@ -2361,9 +2534,11 @@ class TelegramBot:
                 f"🔴 <b>Offline (DOWN):</b> {down}\n"
                 f"🟡 <b>Warning:</b> {warn}\n"
                 f"⚡ <b>Rata-rata Latensi:</b> {avg_lat} ms\n"
+                f"🌐 <b>Kapasitas ISP Kampus:</b> {campus_gbps:.1f} Gbps\n"
                 f"🚨 <b>Alert Terbuka:</b> {unacked} (Kritis: {crit})\n"
+                f"{ai_insight_block}"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
-                "<i>Gunakan /status atau buka Web Dashboard TIKWatch untuk detail lengkap.</i>"
+                "<i>Gunakan /status, /ai, atau buka Web Dashboard TIKWatch untuk detail lengkap.</i>"
             )
 
             targets = [target_chat_id] if target_chat_id else self.chat_ids

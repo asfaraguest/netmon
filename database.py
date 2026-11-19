@@ -251,6 +251,8 @@ class Database:
             defaults = {
                 'poll_interval': '30',
                 'groq_api_key': '',
+                'groq_model': 'llama-3.3-70b-versatile',
+                'campus_total_bandwidth_mbps': '6000',
                 'alert_on_down': 'true',
                 'alert_on_up': 'true',
                 'default_community': 'public',
@@ -574,6 +576,14 @@ class Database:
         with self.conn() as c:
             c.execute('UPDATE devices SET maintenance_until = ? WHERE id = ?', (until_str, int(target)))
         return until_str
+
+    def get_campus_total_bandwidth_mbps(self):
+        """Return configured total campus ISP bandwidth capacity in Mbps (default 6000 = 6 Gbps)."""
+        try:
+            val = float(self.get_settings().get('campus_total_bandwidth_mbps', 6000) or 6000)
+            return val if val > 0 else 6000.0
+        except Exception:
+            return 6000.0
 
     @staticmethod
     def calc_percentile(values, pct=95):
@@ -1082,13 +1092,8 @@ class Database:
                 is_aggregate = True
                 device_agg_status = 1
 
-                # Calculate total aggregate uplink speed from routers with include_in_aggregate = 1
-                tot_uplink = c.execute("""
-                    SELECT COALESCE(SUM(uplink_speed_mbps), 0)
-                    FROM devices
-                    WHERE type = 'router' AND COALESCE(include_in_aggregate, 1) = 1
-                """).fetchone()[0]
-                uplink_mbps = int(tot_uplink) if tot_uplink and tot_uplink > 0 else 1000
+                # Use configured total campus ISP bandwidth capacity (default 6000 Mbps = 6 Gbps)
+                uplink_mbps = int(self.get_campus_total_bandwidth_mbps())
 
                 rows = c.execute(f'''
                     WITH per_device_bucket AS (
@@ -1398,7 +1403,8 @@ class Database:
                 'total': total, 'up': up, 'down': down, 'warning': warning,
                 'unknown': unknown, 'snmp_enabled': snmp_en,
                 'unacked_alerts': unacked, 'critical_alerts': critical, 'zones': zones,
-                'avg_latency': avg_latency, 'online_rate': online_rate
+                'avg_latency': avg_latency, 'online_rate': online_rate,
+                'campus_total_bandwidth_mbps': self.get_campus_total_bandwidth_mbps()
             }
 
     def get_device_latency_history(self, device_id, hours=24):
@@ -1666,7 +1672,7 @@ class Database:
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                     }
                     payload = {
-                        "model": "llama-3.3-70b-versatile",
+                        "model": (settings.get('groq_model') or "llama-3.3-70b-versatile").strip(),
                         "response_format": {"type": "json_object"},
                         "messages": [
                             {
@@ -1975,6 +1981,7 @@ class Database:
         report['backbone']['avg_out_mbps'] = round(total_backbone_tx_bps_sum / 1e6, 2)
         report['backbone']['p95_in_mbps'] = self.calc_percentile([pt['rx'] for pt in bb_1m_pts], 95) if bb_1m_pts else round(sum(r.get('p95_rx_mbps', 0.0) for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)
         report['backbone']['p95_out_mbps'] = self.calc_percentile([pt['tx'] for pt in bb_1m_pts], 95) if bb_1m_pts else round(sum(r.get('p95_tx_mbps', 0.0) for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)
+        report['backbone']['campus_capacity_mbps'] = int(self.get_campus_total_bandwidth_mbps())
         report['backbone']['peak_in_mbps'] = round(max(backbone_peaks_rx) / 1e6, 2) if backbone_peaks_rx else 0.0
         report['backbone']['peak_out_mbps'] = round(max(backbone_peaks_tx) / 1e6, 2) if backbone_peaks_tx else 0.0
         report['backbone']['total_in_gb'] = round(sum(r['total_rx_gb'] for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)

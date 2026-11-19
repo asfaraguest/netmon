@@ -188,13 +188,15 @@ def _refine_with_groq(db, socketio, alert, device, alert_id, initial_is_false, i
             )
         
         url = "https://api.groq.com/openai/v1/chat/completions"
+        settings = db.get_settings()
+        model_name = (settings.get('groq_model') or 'llama-3.3-70b-versatile').strip()
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         payload = {
-            "model": "llama-3.3-70b-versatile",
+            "model": model_name,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -288,3 +290,180 @@ def analyze_alert(db, socketio, alert_id):
 
     except Exception as e:
         print(f"[AI Detector] analyze_alert failed: {e}")
+
+
+def get_groq_config(db):
+    """Return (api_key, model_name) from database settings."""
+    try:
+        s = db.get_settings()
+        api_key = (s.get('groq_api_key') or '').strip()
+        model = (s.get('groq_model') or 'llama-3.3-70b-versatile').strip()
+        return api_key, model
+    except Exception:
+        return '', 'llama-3.3-70b-versatile'
+
+
+def build_noc_telemetry_context(db, device=None, alert=None):
+    """Build compact live telemetry snapshot of TIKWatch for LLM NOC analysis."""
+    ctx = {}
+    try:
+        stats = db.get_dashboard_stats()
+        campus_bw_mbps = db.get_campus_total_bandwidth_mbps()
+        routers = db.get_router_traffic_summary()
+        agg_routers = [r for r in routers if r.get('include_in_aggregate', 1) == 1]
+        tot_in_mbps = round(sum((r.get('wan_in') or 0.0) for r in agg_routers) / 1e6, 2)
+        tot_out_mbps = round(sum((r.get('wan_out') or 0.0) for r in agg_routers) / 1e6, 2)
+        peak_util_pct = round((max(tot_in_mbps, tot_out_mbps) / campus_bw_mbps * 100.0), 1) if campus_bw_mbps > 0 else 0.0
+
+        ctx['campus_summary'] = {
+            'total_devices': stats.get('total', 0),
+            'up': stats.get('up', 0),
+            'down': stats.get('down', 0),
+            'warning': stats.get('warning', 0),
+            'online_rate_pct': stats.get('online_rate', 100.0),
+            'avg_latency_ms': stats.get('avg_latency'),
+            'unacked_alerts': stats.get('unacked_alerts', 0),
+            'campus_total_isp_bandwidth_mbps': campus_bw_mbps,
+            'backbone_wan_in_mbps': tot_in_mbps,
+            'backbone_wan_out_mbps': tot_out_mbps,
+            'backbone_utilization_pct': peak_util_pct,
+        }
+
+        all_devs = db.get_all_devices()
+        ctx['down_or_warning_devices'] = [
+            {
+                'id': d['id'], 'name': d.get('name'), 'ip': d.get('ip'),
+                'type': d.get('type'), 'status': d.get('status'),
+                'latency_ms': d.get('latency_ms'), 'last_seen': d.get('last_seen')
+            }
+            for d in all_devs if d.get('status') in ('down', 'warning')
+        ][:15]
+
+        router_devs = [d for d in all_devs if d.get('type') == 'router']
+        ctx['top_routers_by_traffic'] = [
+            {
+                'name': r.get('name'), 'ip': r.get('ip'),
+                'wan_in_mbps': round((r.get('wan_in') or 0.0) / 1e6, 2),
+                'wan_out_mbps': round((r.get('wan_out') or 0.0) / 1e6, 2),
+                'uplink_mbps': r.get('uplink_speed_mbps'),
+                'agg': r.get('include_in_aggregate', 1)
+            }
+            for r in routers[:8]
+        ]
+        ctx['top_routers_by_cpu'] = [
+            {
+                'name': d.get('name'), 'ip': d.get('ip'),
+                'cpu_pct': d.get('cpu_usage'), 'ram_pct': d.get('memory_usage'),
+                'temp_c': d.get('temperature'), 'uptime': d.get('uptime')
+            }
+            for d in sorted(router_devs, key=lambda x: float(x.get('cpu_usage') or 0), reverse=True)[:6]
+        ]
+
+        active_alerts = db.get_alerts(limit=10, unacked_only=True)
+        ctx['recent_unacked_alerts'] = [
+            {
+                'id': a.get('id'), 'device': a.get('device_name'), 'ip': a.get('device_ip'),
+                'severity': a.get('severity'), 'message': a.get('message'),
+                'created_at': a.get('created_at'), 'is_false_alarm': a.get('is_false_alarm')
+            }
+            for a in active_alerts
+        ]
+
+        with db.conn() as c:
+            reboots = c.execute('''
+                SELECT d.name, d.ip, da.up_time, da.duration_sec, da.justification
+                FROM downtime_analysis da
+                JOIN devices d ON da.device_id = d.id
+                WHERE da.reboot_detected = 1
+                ORDER BY da.id DESC LIMIT 5
+            ''').fetchall()
+            ctx['recent_reboots'] = [dict(r) for r in reboots]
+
+        if device:
+            ctx['target_device'] = {
+                'id': device.get('id'), 'name': device.get('name'), 'ip': device.get('ip'),
+                'type': device.get('type'), 'vendor': device.get('vendor'), 'model': device.get('model'),
+                'status': device.get('status'), 'uptime': device.get('uptime'),
+                'cpu_usage': device.get('cpu_usage'), 'memory_usage': device.get('memory_usage'),
+                'temperature': device.get('temperature'), 'latency_ms': device.get('latency_ms'),
+                'packet_loss': device.get('packet_loss'),
+                'wan_in_mbps': round((device.get('wan_in') or 0.0) / 1e6, 2),
+                'wan_out_mbps': round((device.get('wan_out') or 0.0) / 1e6, 2),
+                'uplink_speed_mbps': device.get('uplink_speed_mbps'),
+                'parent_device_id': device.get('parent_device_id'),
+                'maintenance_until': device.get('maintenance_until'),
+            }
+            ctx['target_device_ifaces'] = db.get_latest_device_interface_traffic(device['id'], limit=10, active_only=True)
+            with db.conn() as c:
+                dt_hist = c.execute(
+                    'SELECT down_time, up_time, duration_sec, reboot_detected, justification FROM downtime_analysis WHERE device_id = ? ORDER BY id DESC LIMIT 5',
+                    (device['id'],)
+                ).fetchall()
+                ctx['target_device_downtime_history'] = [dict(r) for r in dt_hist]
+
+        if alert:
+            ctx['target_alert'] = {
+                'id': alert.get('id'), 'severity': alert.get('severity'),
+                'message': alert.get('message'), 'created_at': alert.get('created_at'),
+                'ai_analysis': alert.get('ai_analysis'), 'is_false_alarm': alert.get('is_false_alarm')
+            }
+    except Exception as e:
+        ctx['context_error'] = str(e)
+    return ctx
+
+
+def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
+    """Query Groq LLM with live TIKWatch telemetry context. Returns (ok: bool, answer: str)."""
+    api_key, model_name = get_groq_config(db)
+    if not api_key:
+        return False, (
+            "⚠️ Groq API Key belum dikonfigurasi. "
+            "Masukkan API Key di Web Dashboard: <b>Settings &gt; AI False Warning Detector &gt; Groq API Key</b>."
+        )
+
+    ctx = build_noc_telemetry_context(db, device=device, alert=alert)
+    system_prompt = (
+        "Kamu adalah asisten AI NOC senior untuk sistem monitoring jaringan TIKWatch "
+        "di UPT TIK Politeknik Negeri Jember (POLIJE). "
+        "Kapasitas total seluruh ISP kampus utama adalah 6 Gbps (6000 Mbps). "
+        "Jawablah dalam bahasa Indonesia yang ringkas, teknis, terstruktur, dan akurat. "
+        "HANYA gunakan angka, IP, nama router, dan metrik dari JSON telemetri live yang diberikan; "
+        "jika suatu data tidak tersedia di JSON, katakan tidak tersedia (jangan mengarang). "
+        "Berikan langkah troubleshooting nyata (termasuk perintah MikroTik RouterOS jika relevan)."
+    )
+    user_prompt = (
+        f"Permintaan/Pertanyaan Operator NOC:\n{user_question}\n\n"
+        f"Data Telemetri Live TIKWatch (JSON):\n{json.dumps(ctx, ensure_ascii=False)}"
+    )
+
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.25,
+            "max_tokens": max_tokens
+        }
+        import urllib.error
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+        with urllib.request.urlopen(req, timeout=18) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            answer = res_data['choices'][0]['message']['content'].strip()
+            return True, answer
+    except urllib.error.HTTPError as he:
+        try:
+            err_body = he.read().decode('utf-8')
+            msg = json.loads(err_body).get('error', {}).get('message', he.reason)
+        except Exception:
+            msg = str(he)
+        return False, f"⚠️ Groq API Error ({model_name}): {msg}"
+    except Exception as e:
+        return False, f"⚠️ Gagal menghubungi Groq AI: {e}"

@@ -72,9 +72,14 @@
           <small class="text-muted">Toleransi lonjakan di atas kapasitas link (default 1.05x / buffer 5%).</small>
         </div>
         <div class="col-12">
+          <label class="nm-label">Total Kapasitas ISP Kampus Utama (Mbps)</label>
+          <input type="number" class="nm-input" id="s-campus-bw" min="100" max="400000" step="100" value="6000">
+          <small class="text-muted">Total kapasitas seluruh ISP yang mengaliri kampus utama (default <b>6000 Mbps = 6.0 Gbps</b>). Digunakan untuk menghitung persentase utilisasi &amp; sisa headroom pada Dashboard, <code>/traffic all</code>, dan grafik <code>/chart</code>.</small>
+        </div>
+        <div class="col-12">
           <label class="nm-label">Anomaly Absolute Cap (Gbps)</label>
           <input type="number" class="nm-input" id="s-anom-cap" min="0.1" max="400" step="0.1" value="5.0">
-          <small class="text-muted">Plafon mutlak maksimum (Gbps). Default 5.0 Gbps (sesuai batas ISP pada link SFP 10G).</small>
+          <small class="text-muted">Plafon mutlak maksimum per-port (Gbps). Default 5.0 Gbps.</small>
         </div>
         <div class="col-12 pt-2 border-top">
           <label class="nm-label">Bersihkan Data Anomali Lama</label>
@@ -166,10 +171,20 @@
     </div>
     <div class="panel-body">
       <div class="row g-3">
-        <div class="col-md-12">
+        <div class="col-md-7">
           <label class="nm-label">Groq API Key</label>
           <input type="password" class="nm-input" id="s-groq-key" placeholder="Leave blank or enter Groq API Key">
-          <small class="text-muted">TIKWatch utilizes Groq (openai/gpt-oss-120b) to automatically detect false alarms (e.g. SNMP timeouts on pingable hosts). If not configured, it will fall back to local rule-based heuristics.</small>
+          <small class="text-muted">TIKWatch menggunakan Groq LLM untuk deteksi false alarm, forensik downtime, serta asisten AI NOC di Bot Telegram (<code>/ai</code>, <code>/diagnosa</code>, dan tombol <b>Analisa AI</b>).</small>
+        </div>
+        <div class="col-md-5">
+          <label class="nm-label">Groq AI Model</label>
+          <select class="nm-select w-100" id="s-groq-model">
+            <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Recommended)</option>
+            <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
+            <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Ultra Fast)</option>
+            <option value="qwen/qwen3-32b">qwen/qwen3-32b</option>
+          </select>
+          <small class="text-muted">Model AI yang dipakai Web Dashboard &amp; Bot Telegram.</small>
         </div>
       </div>
       <div id="groq-test-result" class="mt-2"></div>
@@ -383,6 +398,7 @@ function loadSettings() {
     setVal('s-chart-ret',  s.interface_chart_retention_hours || 168);
     setVal('s-anom-mult',  s.anomaly_cap_multiplier || 1.05);
     setVal('s-anom-cap',   s.anomaly_cap_gbps || 5.0);
+    setVal('s-campus-bw',  s.campus_total_bandwidth_mbps || 6000);
     setChk('s-alert-down', s.alert_on_down !== 'false');
     setChk('s-alert-up',   s.alert_on_up   !== 'false');
     setChk('s-anom-alert', s.anomaly_alert_enabled !== 'false');
@@ -391,6 +407,7 @@ function loadSettings() {
     setVal('s-cpu-thresh', s.cpu_spike_threshold || 92);
     setVal('s-mem-thresh', s.memory_spike_threshold || 95);
     setVal('s-groq-key',   s.groq_api_key || '');
+    setVal('s-groq-model', s.groq_model || 'llama-3.3-70b-versatile');
     setChk('s-tg-enabled', s.telegram_enabled === 'true');
     setVal('s-tg-token',   s.telegram_bot_token || '');
     setVal('s-tg-chats',   s.telegram_chat_ids || '');
@@ -504,6 +521,8 @@ function saveAll() {
     interface_chart_retention_hours: getVal('s-chart-ret'),
     anomaly_cap_multiplier: getVal('s-anom-mult'),
     anomaly_cap_gbps: getVal('s-anom-cap'),
+    campus_total_bandwidth_mbps: getVal('s-campus-bw') || '6000',
+    groq_model: getVal('s-groq-model') || 'llama-3.3-70b-versatile',
     alert_on_down:        document.getElementById('s-alert-down').checked ? 'true' : 'false',
     alert_on_up:          document.getElementById('s-alert-up').checked   ? 'true' : 'false',
     anomaly_alert_enabled: document.getElementById('s-anom-alert').checked ? 'true' : 'false',
@@ -595,7 +614,8 @@ function testGroq() {
   const res = document.getElementById('groq-test-result');
   res.innerHTML = '<div class="text-muted text-sm"><i class="bi bi-arrow-repeat spin me-1"></i>Testing Groq API connection…</div>';
   const data = {
-    groq_api_key: getVal('s-groq-key')
+    groq_api_key: getVal('s-groq-key'),
+    groq_model: getVal('s-groq-model')
   };
   fetch('/api/ai/test', {
     method: 'POST',

@@ -768,7 +768,7 @@ def get_device_downtime_forensics(device_id):
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
             payload = {
-                "model": "llama-3.3-70b-versatile",
+                "model": (settings.get('groq_model') or "llama-3.3-70b-versatile").strip(),
                 "response_format": {"type": "json_object"},
                 "messages": [
                     {
@@ -1135,10 +1135,11 @@ def cleanup_traffic_anomalies():
 def test_groq():
     import urllib.request
     data = request.json or {}
+    settings = db.get_settings()
     api_key = data.get('groq_api_key')
     if not api_key or api_key == '***':
-        settings = db.get_settings()
         api_key = settings.get('groq_api_key', '')
+    model_name = (data.get('groq_model') or settings.get('groq_model') or 'llama-3.3-70b-versatile').strip()
         
     if not api_key:
         return jsonify({'status': 'error', 'message': 'API Key is empty'}), 400
@@ -1151,7 +1152,7 @@ def test_groq():
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         payload = {
-            "model": "llama-3.3-70b-versatile",
+            "model": model_name,
             "messages": [
                 {"role": "user", "content": "Say 'OK' and nothing else."}
             ],
@@ -1162,7 +1163,7 @@ def test_groq():
         with urllib.request.urlopen(req, timeout=5) as response:
             res_data = json.loads(response.read().decode('utf-8'))
             text = res_data['choices'][0]['message']['content'].strip()
-            return jsonify({'status': 'success', 'message': f"Connected successfully! Response: {text}"})
+            return jsonify({'status': 'success', 'message': f"Connected ({model_name})! Response: {text}"})
     except urllib.error.HTTPError as he:
         try:
             err_body = he.read().decode('utf-8')
