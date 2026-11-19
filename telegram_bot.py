@@ -7,7 +7,11 @@ Uses standard requests library (lightweight, zero dependency conflicts).
 import html
 import json
 import logging
+import os
+import platform
 import re
+import shutil
+import socket
 import threading
 import time
 from datetime import datetime
@@ -150,6 +154,8 @@ class TelegramBot:
         commands = [
             {"command": "status", "description": "Ringkasan kesehatan jaringan"},
             {"command": "traffic", "description": "Traffic: All router / Selected router"},
+            {"command": "resource", "description": "Resource usage: Server / All router / Selected"},
+            {"command": "server", "description": "Resource usage server TIKWatch (CPU/RAM/Disk)"},
             {"command": "chart", "description": "Grafik gambar traffic (1h, 6h, 24h, 7d, 30d)"},
             {"command": "top", "description": "Top 10 bandwidth interface tertinggi"},
             {"command": "capture", "description": "Live capture traffic real-time via SNMP"},
@@ -462,6 +468,22 @@ class TelegramBot:
             self._cmd_traffic_summary(chat_id)
         elif cmd in ("/traffic_select", "/traffict_select"):
             self._cmd_traffic_picker(chat_id)
+        elif cmd in ("/server", "/server_resource", "/host"):
+            self._cmd_resource_server(chat_id)
+        elif cmd in ("/resource", "/resources", "/res"):
+            sub = args[0].lower().strip() if args else ""
+            if not sub or sub in ("all", "semua", "router", "routers"):
+                self._cmd_resource_all(chat_id)
+            elif sub in ("server", "host", "netmon", "tikwatch"):
+                self._cmd_resource_server(chat_id)
+            elif sub in ("select", "pilih", "list", "daftar"):
+                self._cmd_resource_picker(chat_id)
+            else:
+                self._cmd_resource_device(chat_id, args)
+        elif cmd in ("/resource_all", "/res_all"):
+            self._cmd_resource_all(chat_id)
+        elif cmd in ("/resource_select", "/res_select"):
+            self._cmd_resource_picker(chat_id)
         elif cmd in ("/chart", "/grafik", "/graph", "/plot"):
             self._cmd_chart(chat_id, args)
         elif cmd in ("/chart_all", "/chartall"):
@@ -596,6 +618,19 @@ class TelegramBot:
                 dev_id = action.split(":", 1)[1]
                 self.answer_callback_query(cq_id, text="⏱️ Memulai live traffic capture (3s)...")
                 self._cmd_capture(chat_id, [dev_id])
+            elif action == "resource_server":
+                self.answer_callback_query(cq_id, text="🔄 Memperbarui resource server...")
+                self._cmd_resource_server(chat_id, edit_msg_id=message_id)
+            elif action == "resource_all":
+                self.answer_callback_query(cq_id, text="🔄 Memperbarui resource semua router...")
+                self._cmd_resource_all(chat_id, edit_msg_id=message_id)
+            elif action == "resource_picker":
+                self.answer_callback_query(cq_id, text="🔀 Memuat daftar router...")
+                self._cmd_resource_picker(chat_id, edit_msg_id=message_id)
+            elif action.startswith("resource_dev:"):
+                dev_id = action.split(":", 1)[1]
+                self.answer_callback_query(cq_id, text="🔄 Memuat resource router...")
+                self._cmd_resource_device(chat_id, [dev_id], edit_msg_id=message_id)
 
     def _run_poll_and_notify(self, chat_id, device):
         """Poll device and reply with updated status."""
@@ -635,7 +670,11 @@ class TelegramBot:
             "• <code>/chart [1h|6h|24h|7d|30d]</code> — Grafik throughput dengan rentang waktu TIKWatch\n"
             "• <code>/chart &lt;nama/ip/id&gt;</code> — Grafik traffic router tertentu (contoh: <code>/chart core 7d</code>)\n"
             "• <code>/chart select</code> — Menu interaktif memilih router untuk digambar grafiknya\n\n"
-            "<b>🖥️ Status Jaringan & Kontrol:</b>\n"
+            "<b>🖥️ Status Jaringan, Resource & Kontrol:</b>\n"
+            "• <code>/server</code> atau <code>/resource server</code> — Resource usage server TIKWatch (CPU, RAM, Disk, Uptime)\n"
+            "• <code>/resource all</code> — Resource usage (CPU, RAM, Temp) seluruh router\n"
+            "• <code>/resource select</code> — Menu interaktif memilih router untuk cek resource\n"
+            "• <code>/resource &lt;nama/ip/id&gt;</code> — Detail resource usage router spesifik\n"
             "• <code>/status</code> atau <code>/summary</code> — Ringkasan kesehatan sistem & metrik perangkat\n"
             "• <code>/down</code> — Menampilkan seluruh perangkat yang sedang offline (DOWN)\n"
             "• <code>/alerts</code> — Daftar peringatan aktif yang belum di-acknowledge\n"
@@ -1068,6 +1107,434 @@ class TelegramBot:
                 if d.get('type') == 'router' and d.get('include_in_aggregate', 1) == 1:
                     return d
         return None
+
+    # ─── Server & Router Resource Usage Commands ────────────────────
+
+    def _get_server_resource_metrics(self):
+        """Collect Linux host CPU, RAM, Swap, Disk, Load Average, Uptime, and DB size."""
+        metrics = {
+            "hostname": socket.gethostname(),
+            "os": f"{platform.system()} {platform.release()}",
+            "cpu_cores": os.cpu_count() or 1,
+            "cpu_pct": None,
+            "load_avg": None,
+            "mem_total_mb": None,
+            "mem_used_mb": None,
+            "mem_pct": None,
+            "swap_total_mb": 0.0,
+            "swap_used_mb": 0.0,
+            "swap_pct": 0.0,
+            "disk_total_gb": None,
+            "disk_used_gb": None,
+            "disk_pct": None,
+            "uptime_str": "-",
+            "proc_rss_mb": None,
+            "db_size_mb": None,
+        }
+
+        # CPU % via /proc/stat (200ms delta)
+        try:
+            def _read_proc_stat():
+                with open("/proc/stat", "r") as f:
+                    parts = f.readline().split()
+                vals = [int(x) for x in parts[1:]]
+                idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+                total = sum(vals)
+                return idle, total
+
+            idle1, total1 = _read_proc_stat()
+            time.sleep(0.2)
+            idle2, total2 = _read_proc_stat()
+            total_delta = total2 - total1
+            idle_delta = idle2 - idle1
+            if total_delta > 0:
+                metrics["cpu_pct"] = max(0.0, min(100.0, (1.0 - idle_delta / total_delta) * 100.0))
+        except Exception:
+            pass
+
+        # Load average
+        try:
+            l1, l5, l15 = os.getloadavg()
+            metrics["load_avg"] = f"{l1:.2f}, {l5:.2f}, {l15:.2f}"
+        except Exception:
+            pass
+
+        # RAM & Swap via /proc/meminfo
+        try:
+            meminfo = {}
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        meminfo[k.strip()] = int(v.strip().split()[0])  # kB
+            if "MemTotal" in meminfo:
+                tot_kb = meminfo["MemTotal"]
+                avail_kb = meminfo.get("MemAvailable", meminfo.get("MemFree", 0))
+                used_kb = max(0, tot_kb - avail_kb)
+                metrics["mem_total_mb"] = tot_kb / 1024.0
+                metrics["mem_used_mb"] = used_kb / 1024.0
+                metrics["mem_pct"] = (used_kb / tot_kb * 100.0) if tot_kb > 0 else 0.0
+            if meminfo.get("SwapTotal", 0) > 0:
+                st_kb = meminfo["SwapTotal"]
+                sf_kb = meminfo.get("SwapFree", 0)
+                su_kb = max(0, st_kb - sf_kb)
+                metrics["swap_total_mb"] = st_kb / 1024.0
+                metrics["swap_used_mb"] = su_kb / 1024.0
+                metrics["swap_pct"] = (su_kb / st_kb * 100.0) if st_kb > 0 else 0.0
+        except Exception:
+            pass
+
+        # Disk usage (root / or app dir)
+        try:
+            disk_path = os.path.dirname(os.path.abspath(__file__)) or "/"
+            du = shutil.disk_usage(disk_path)
+            metrics["disk_total_gb"] = du.total / (1024 ** 3)
+            metrics["disk_used_gb"] = du.used / (1024 ** 3)
+            metrics["disk_pct"] = (du.used / du.total * 100.0) if du.total > 0 else 0.0
+        except Exception:
+            pass
+
+        # Uptime via /proc/uptime
+        try:
+            with open("/proc/uptime", "r") as f:
+                secs = int(float(f.read().split()[0]))
+            days, rem = divmod(secs, 86400)
+            hours, rem = divmod(rem, 3600)
+            mins, _ = divmod(rem, 60)
+            metrics["uptime_str"] = f"{days}d {hours}h {mins}m" if days > 0 else f"{hours}h {mins}m"
+        except Exception:
+            pass
+
+        # Current Python process RSS
+        try:
+            with open("/proc/self/status", "r") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        rss_kb = int(line.split()[1])
+                        metrics["proc_rss_mb"] = rss_kb / 1024.0
+                        break
+        except Exception:
+            pass
+
+        # SQLite database size (main + wal)
+        try:
+            db_path = getattr(self.db, "db_path", None)
+            if db_path and os.path.exists(db_path):
+                total_bytes = os.path.getsize(db_path)
+                for ext in ("-wal", "-shm"):
+                    if os.path.exists(db_path + ext):
+                        total_bytes += os.path.getsize(db_path + ext)
+                metrics["db_size_mb"] = total_bytes / (1024 ** 2)
+        except Exception:
+            pass
+
+        return metrics
+
+    @staticmethod
+    def _fmt_mem_mb(mb):
+        if mb is None:
+            return "-"
+        if mb >= 1024:
+            return f"{mb / 1024:.2f} GB"
+        return f"{mb:.0f} MB"
+
+    def _cmd_resource_server(self, chat_id, edit_msg_id=None):
+        """Show TIKWatch Linux host server resource usage."""
+        try:
+            m = self._get_server_resource_metrics()
+            now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+
+            cpu_str = (
+                f"<code>{format_bar(m['cpu_pct'], 10)}</code> <b>{m['cpu_pct']:.1f}%</b>"
+                if m["cpu_pct"] is not None else "<i>N/A</i>"
+            )
+            mem_str = (
+                f"<code>{format_bar(m['mem_pct'], 10)}</code> <b>{m['mem_pct']:.1f}%</b> "
+                f"({self._fmt_mem_mb(m['mem_used_mb'])} / {self._fmt_mem_mb(m['mem_total_mb'])})"
+                if m["mem_pct"] is not None else "<i>N/A</i>"
+            )
+            disk_str = (
+                f"<code>{format_bar(m['disk_pct'], 10)}</code> <b>{m['disk_pct']:.1f}%</b> "
+                f"({m['disk_used_gb']:.1f} GB / {m['disk_total_gb']:.1f} GB)"
+                if m["disk_pct"] is not None else "<i>N/A</i>"
+            )
+
+            swap_line = ""
+            if m["swap_total_mb"] > 0:
+                swap_line = (
+                    f"🔁 <b>Swap:</b> <code>{format_bar(m['swap_pct'], 10)}</code> <b>{m['swap_pct']:.1f}%</b> "
+                    f"({self._fmt_mem_mb(m['swap_used_mb'])} / {self._fmt_mem_mb(m['swap_total_mb'])})\n"
+                )
+
+            proc_line = f"🐍 <b>Proses TIKWatch (RAM):</b> {self._fmt_mem_mb(m['proc_rss_mb'])}\n" if m["proc_rss_mb"] is not None else ""
+            db_line = f"🗄️ <b>Ukuran Database:</b> {m['db_size_mb']:.2f} MB\n" if m["db_size_mb"] is not None else ""
+            load_line = f"📈 <b>Load Average (1m/5m/15m):</b> <code>{m['load_avg']}</code>\n" if m["load_avg"] else ""
+
+            text = (
+                "🖥️ <b>Resource Usage Server TIKWatch</b>\n"
+                f"<i>Waktu: {now_str} WIB</i>\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🏷️ <b>Hostname:</b> <code>{html.escape(str(m['hostname']))}</code>\n"
+                f"🐧 <b>OS:</b> <code>{html.escape(str(m['os']))}</code>\n"
+                f"⏱️ <b>Uptime Server:</b> <b>{m['uptime_str']}</b>\n\n"
+                f"⚙️ <b>CPU ({m['cpu_cores']} Core):</b>\n  {cpu_str}\n"
+                f"{load_line}\n"
+                f"🧠 <b>RAM Memory:</b>\n  {mem_str}\n"
+                f"{swap_line}\n"
+                f"💾 <b>Disk Storage (/):</b>\n  {disk_str}\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{proc_line}{db_line}"
+            )
+
+            markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🔄 Refresh Server", "callback_data": "cmd:resource_server"},
+                        {"text": "🛰️ Resource All Router", "callback_data": "cmd:resource_all"}
+                    ],
+                    [
+                        {"text": "🔀 Pilih Router (Detail)", "callback_data": "cmd:resource_picker"}
+                    ]
+                ]
+            }
+
+            if edit_msg_id:
+                self.edit_message_text(chat_id, edit_msg_id, text, reply_markup=markup)
+            else:
+                self.send_message(chat_id, text, reply_markup=markup)
+        except Exception as e:
+            logger.error(f"[Telegram] Error in resource server: {e}")
+            self.send_message(chat_id, f"⚠️ Gagal mengambil resource server: {e}")
+
+    def _get_router_devices(self):
+        """Return all router devices (matching /traffic all router set)."""
+        routers = self.db.get_router_traffic_summary()
+        if not routers:
+            all_devs = self.db.get_all_devices()
+            routers = [d for d in all_devs if d.get('type') == 'router' or d.get('snmp_enabled')]
+        return routers
+
+    def _cmd_resource_all(self, chat_id, edit_msg_id=None):
+        """Show CPU, RAM, Temperature, and Uptime for all routers (with auto-split)."""
+        try:
+            routers = self._get_router_devices()
+            # Enrich with full device fields (cpu_usage, memory_usage, temperature, uptime, latency_ms)
+            all_devs_map = {d['id']: d for d in self.db.get_all_devices()}
+            enriched = [all_devs_map.get(r['id'], r) for r in routers]
+
+            now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+            online_cnt = sum(1 for d in enriched if d.get('status') == 'up')
+            cpus = [float(d['cpu_usage']) for d in enriched if d.get('cpu_usage') is not None]
+            mems = [float(d['memory_usage']) for d in enriched if d.get('memory_usage') is not None]
+            avg_cpu = (sum(cpus) / len(cpus)) if cpus else 0.0
+            avg_mem = (sum(mems) / len(mems)) if mems else 0.0
+            high_cpu = sum(1 for c in cpus if c >= 80.0)
+            high_mem = sum(1 for m in mems if m >= 80.0)
+
+            header = (
+                "🛰️ <b>Resource Usage Semua Router (TIKWatch)</b>\n"
+                f"<i>Waktu: {now_str} WIB</i>\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 <b>Ringkasan ({len(enriched)} Router | {online_cnt} Online):</b>\n"
+                f"  ⚙️ <b>Rata-rata CPU:</b> <b>{avg_cpu:.1f}%</b> (≥80%: {high_cpu})\n"
+                f"  🧠 <b>Rata-rata RAM:</b> <b>{avg_mem:.1f}%</b> (≥80%: {high_mem})\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+            footer = (
+                "💡 <i>Pilih router spesifik via tombol di bawah untuk melihat detail lengkap "
+                "(CPU, RAM, Suhu, Latensi, Packet Loss, Uptime).</i>"
+            )
+
+            messages = []
+            if enriched:
+                current_msg = header
+                for idx, d in enumerate(enriched, start=1):
+                    rname = html.escape(str(d.get('name') or d.get('ip') or '-'))
+                    rip = d.get('ip') or '-'
+                    status_icon = "🟢" if d.get('status') == 'up' else ("🔴" if d.get('status') == 'down' else "🟡")
+
+                    cpu_val = d.get('cpu_usage')
+                    mem_val = d.get('memory_usage')
+                    temp_val = d.get('temperature')
+                    lat_val = d.get('latency_ms')
+
+                    cpu_txt = f"<code>{format_bar(cpu_val, 6)}</code> <b>{float(cpu_val):.0f}%</b>" if cpu_val is not None else "<i>-</i>"
+                    mem_txt = f"<code>{format_bar(mem_val, 6)}</code> <b>{float(mem_val):.0f}%</b>" if mem_val is not None else "<i>-</i>"
+                    warn_flag = " ⚠️" if ((cpu_val is not None and float(cpu_val) >= 85) or (mem_val is not None and float(mem_val) >= 85)) else ""
+
+                    extras = []
+                    if temp_val is not None:
+                        extras.append(f"🌡️{float(temp_val):.0f}°C")
+                    if lat_val is not None:
+                        extras.append(f"⚡{float(lat_val):.1f}ms")
+                    if d.get('uptime'):
+                        extras.append(f"⏱️{html.escape(str(d.get('uptime'))[:18])}")
+                    extra_line = f"\n  {' | '.join(extras)}" if extras else ""
+
+                    block = (
+                        f"{idx}. 🔹 <b>{rname}</b> ({rip}) {status_icon}{warn_flag}\n"
+                        f"  ⚙️ CPU: {cpu_txt} | 🧠 RAM: {mem_txt}{extra_line}\n\n"
+                    )
+                    if len(current_msg) + len(block) > 3600:
+                        messages.append(current_msg)
+                        current_msg = f"🛰️ <b>Lanjutan Resource Router ({idx}-{len(enriched)}):</b>\n\n"
+                    current_msg += block
+
+                if len(current_msg) + len(footer) > 3950:
+                    messages.append(current_msg)
+                    messages.append(footer)
+                else:
+                    messages.append(current_msg + footer)
+            else:
+                messages.append(header + "<i>Belum ada router yang terdaftar di database.</i>\n\n" + footer)
+
+            markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🔄 Refresh All", "callback_data": "cmd:resource_all"},
+                        {"text": "🖥️ Resource Server", "callback_data": "cmd:resource_server"}
+                    ],
+                    [
+                        {"text": "🔀 Pilih Router (Detail)", "callback_data": "cmd:resource_picker"}
+                    ]
+                ]
+            }
+
+            for i, msg_text in enumerate(messages):
+                is_last = (i == len(messages) - 1)
+                rm = markup if is_last else None
+                if i == 0 and edit_msg_id:
+                    self.edit_message_text(chat_id, edit_msg_id, msg_text, reply_markup=rm)
+                else:
+                    self.send_message(chat_id, msg_text, reply_markup=rm)
+        except Exception as e:
+            logger.error(f"[Telegram] Error in resource all: {e}")
+            self.send_message(chat_id, f"⚠️ Gagal mengambil resource semua router: {e}")
+
+    def _cmd_resource_picker(self, chat_id, edit_msg_id=None):
+        """Interactive router selector menu for resource usage."""
+        try:
+            routers = self._get_router_devices()
+            if not routers:
+                self.send_message(chat_id, "ℹ️ Belum ada router atau perangkat yang terdaftar di database.")
+                return
+
+            text = (
+                "🔀 <b>Pilih Router untuk Melihat Resource Usage:</b>\n\n"
+                "Pilih router spesifik di bawah untuk melihat detail CPU, RAM, Suhu, Latensi, dan Uptime:\n"
+            )
+
+            buttons = []
+            row = []
+            for r in routers[:90]:
+                rname = (r.get('name') or r.get('ip') or '')[:16]
+                status_icon = "🟢" if r.get('status') == 'up' else "🔴"
+                row.append({"text": f"{status_icon} {rname}", "callback_data": f"cmd:resource_dev:{r['id']}"})
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+
+            buttons.append([
+                {"text": "🛰️ Semua Router (All)", "callback_data": "cmd:resource_all"},
+                {"text": "🖥️ Resource Server", "callback_data": "cmd:resource_server"}
+            ])
+
+            markup = {"inline_keyboard": buttons}
+            if edit_msg_id:
+                self.edit_message_text(chat_id, edit_msg_id, text, reply_markup=markup)
+            else:
+                self.send_message(chat_id, text, reply_markup=markup)
+        except Exception as e:
+            logger.error(f"[Telegram] Error in resource picker: {e}")
+            self.send_message(chat_id, f"⚠️ Gagal memuat daftar router: {e}")
+
+    def _cmd_resource_device(self, chat_id, args, edit_msg_id=None):
+        """Show detailed resource usage for a specific selected router/device."""
+        if not args:
+            self._cmd_resource_picker(chat_id, edit_msg_id=edit_msg_id)
+            return
+
+        target = " ".join(args).strip()
+        device = self._find_device_by_target(target)
+        if not device:
+            self.send_message(
+                chat_id,
+                f"⚠️ Router/perangkat <code>{html.escape(target)}</code> tidak ditemukan.\n"
+                "Gunakan <code>/resource select</code> untuk memilih dari daftar."
+            )
+            return
+
+        now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+        dname = html.escape(str(device.get('name') or device.get('ip')))
+        dip = device.get('ip') or '-'
+        status = (device.get('status') or 'unknown').upper()
+        status_icon = "🟢" if status == "UP" else ("🔴" if status == "DOWN" else "🟡")
+
+        cpu = device.get('cpu_usage')
+        mem = device.get('memory_usage')
+        temp = device.get('temperature')
+        lat = device.get('latency_ms')
+        loss = device.get('packet_loss')
+        uptime = device.get('uptime') or '-'
+        last_polled = device.get('last_polled') or '-'
+        vendor = device.get('vendor') or ''
+        model = device.get('model') or ''
+        hw_info = " ".join(x for x in (vendor, model) if x).strip()
+
+        cpu_line = (
+            f"⚙️ <b>CPU Usage:</b>  <code>{format_bar(cpu, 10)}</code> <b>{float(cpu):.1f}%</b>"
+            + (" ⚠️ <i>(Tinggi)</i>" if float(cpu) >= 80 else "")
+            if cpu is not None else "⚙️ <b>CPU Usage:</b> <i>Tidak tersedia</i>"
+        )
+        mem_line = (
+            f"🧠 <b>RAM Usage:</b>  <code>{format_bar(mem, 10)}</code> <b>{float(mem):.1f}%</b>"
+            + (" ⚠️ <i>(Tinggi)</i>" if float(mem) >= 80 else "")
+            if mem is not None else "🧠 <b>RAM Usage:</b> <i>Tidak tersedia</i>"
+        )
+        temp_line = f"🌡️ <b>Temperature:</b> <b>{float(temp):.1f} °C</b>" if temp is not None else "🌡️ <b>Temperature:</b> <i>-</i>"
+        lat_line = f"⚡ <b>Latency:</b> <b>{float(lat):.2f} ms</b>" if lat is not None else "⚡ <b>Latency:</b> <i>-</i>"
+        loss_line = f"📉 <b>Packet Loss:</b> <b>{float(loss):.1f}%</b>" if loss is not None else "📉 <b>Packet Loss:</b> <i>-</i>"
+        hw_line = f"🏷️ <b>Perangkat:</b> {html.escape(hw_info)}\n" if hw_info else ""
+
+        text = (
+            f"🖥️ <b>Detail Resource Router: {dname}</b>\n"
+            f"<i>Waktu: {now_str} WIB</i>\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🌐 <b>IP Address:</b> <code>{dip}</code>\n"
+            f"{hw_line}"
+            f"📡 <b>Status:</b> {status_icon} <b>{status}</b>\n"
+            f"⏱️ <b>Uptime:</b> {html.escape(str(uptime))}\n\n"
+            f"{cpu_line}\n"
+            f"{mem_line}\n"
+            f"{temp_line}\n"
+            f"{lat_line} | {loss_line}\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🕒 <i>Last Polled: {last_polled}</i>"
+        )
+
+        markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "🔄 Refresh", "callback_data": f"cmd:resource_dev:{device['id']}"},
+                    {"text": "📡 Poll Sekarang", "callback_data": f"poll:{device['id']}"}
+                ],
+                [
+                    {"text": "📊 Traffic Port", "callback_data": f"cmd:traffic_dev:{device['id']}"},
+                    {"text": "📈 Grafik 24h", "callback_data": f"chart:{device['id']}:24h"}
+                ],
+                [
+                    {"text": "🔀 Pilih Router Lain", "callback_data": "cmd:resource_picker"},
+                    {"text": "🛰️ Semua Router", "callback_data": "cmd:resource_all"}
+                ]
+            ]
+        }
+
+        if edit_msg_id:
+            self.edit_message_text(chat_id, edit_msg_id, text, reply_markup=markup)
+        else:
+            self.send_message(chat_id, text, reply_markup=markup)
 
     def _cmd_chart(self, chat_id, args):
         """Handle /chart command for generating traffic PNG images."""
