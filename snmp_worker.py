@@ -850,16 +850,22 @@ class SNMPWorker:
                 # Run live anomaly detection for traffic surges and sudden resource spikes
                 self._analyze_metric_anomalies(device, metrics, traffic_data)
 
+                new_uptime = upd.get('uptime')
+                uptime_rebooted = self._detect_uptime_reboot(device, new_uptime)
+
                 if old_st == 'down':
                     upd['last_seen'] = now
-                    self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE")
-                    self.analyze_downtime_event(device, device.get('last_seen') or now, now, upd.get('uptime'))
+                    reboot_info = self._format_recovery_reboot_info(device, device.get('last_seen') or now, now, new_uptime, uptime_rebooted)
+                    self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE{reboot_info}")
+                    self.analyze_downtime_event(device, device.get('last_seen') or now, now, new_uptime)
                     self._pending_analysis.pop(ip, None)
                 elif ip in self._pending_analysis:
                     down_time = self._pending_analysis.pop(ip)
-                    self.analyze_downtime_event(device, down_time, now, upd.get('uptime'))
+                    self.analyze_downtime_event(device, down_time, now, new_uptime)
                 elif old_st == 'unknown':
                     upd['last_seen'] = now
+                elif uptime_rebooted:
+                    self._handle_fast_reboot(device, now, new_uptime)
 
                 self._snmp_failing.discard(ip)
                 self._consecutive_snmp_fails[ip] = 0
@@ -891,10 +897,15 @@ class SNMPWorker:
                     upd = {'status': 'up', 'last_polled': now}
                     if verify_snmp.get('1.3.6.1.2.1.1.3.0'):
                         upd['uptime'] = verify_snmp['1.3.6.1.2.1.1.3.0']
+                    new_uptime = upd.get('uptime')
+                    uptime_rebooted = self._detect_uptime_reboot(device, new_uptime)
                     if old_st == 'down':
                         upd['last_seen'] = now
-                        self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE")
-                        self.analyze_downtime_event(device, device.get('last_seen') or now, now, upd.get('uptime'))
+                        reboot_info = self._format_recovery_reboot_info(device, device.get('last_seen') or now, now, new_uptime, uptime_rebooted)
+                        self._alert(device, 'info', f"{device.get('name',ip)} ({ip}) is back ONLINE{reboot_info}")
+                        self.analyze_downtime_event(device, device.get('last_seen') or now, now, new_uptime)
+                    elif uptime_rebooted and old_st != 'unknown':
+                        self._handle_fast_reboot(device, now, new_uptime)
                     self._snmp_failing.discard(ip)
                     self._consecutive_snmp_fails[ip] = 0
                     self._consecutive_ping_fails[ip] = 0
@@ -2127,6 +2138,56 @@ class SNMPWorker:
         t = self._guess_type(d, vendor=vendor)
         return {'switch':'switch','router':'router','server':'server',
                 'access_point':'wifi','firewall':'shield','printer':'printer'}.get(t,'device')
+
+    def _detect_uptime_reboot(self, device, new_uptime_str):
+        """Return True if SNMP sysUpTime dropped significantly, indicating a reboot."""
+        if not new_uptime_str:
+            return False
+        prev_sec = parse_uptime_to_seconds(device.get('uptime'))
+        new_sec = parse_uptime_to_seconds(new_uptime_str)
+        # Guard against brand-new/0-uptime devices and 32-bit TimeTicks 497-day wraparound
+        if prev_sec > 120 and prev_sec < 42900000 and 0 < new_sec < (prev_sec - 60):
+            return True
+        return False
+
+    def _format_recovery_reboot_info(self, device, down_time_str, up_time_str, new_uptime_str, uptime_rebooted):
+        """Build reboot status suffix for recovery alerts."""
+        if not new_uptime_str:
+            return ""
+        is_reboot = bool(uptime_rebooted)
+        if not is_reboot:
+            try:
+                t_down = datetime.fromisoformat(down_time_str)
+                t_up = datetime.fromisoformat(up_time_str)
+                dur_sec = max(0, (t_up - t_down).total_seconds())
+                up_sec = parse_uptime_to_seconds(new_uptime_str)
+                if 0 < up_sec < (dur_sec + 60):
+                    is_reboot = True
+            except Exception:
+                pass
+        if is_reboot:
+            return f" | 🔄 Reboot: YA (Uptime baru: {new_uptime_str})"
+        return f" | 🔌 Reboot: TIDAK (Uptime tetap: {new_uptime_str})"
+
+    def _handle_fast_reboot(self, device, now, new_uptime_str):
+        """Alert and log a fast reboot that occurred between polling intervals."""
+        did = device['id']
+        ip = device['ip']
+        prev_up = device.get('uptime') or '-'
+        self._alert(
+            device,
+            'warning',
+            f"{device.get('name', ip)} ({ip}) terdeteksi REBOOT (Uptime: {prev_up} → {new_uptime_str})"
+        )
+        try:
+            with self.db_write_lock:
+                self.db.save_downtime_analysis(
+                    did, now, now, 0,
+                    'fast_reboot', 'uptime_reset', 1,
+                    'Reboot Cepat Terdeteksi (Uptime SNMP reset di antara interval polling)', 95.0
+                )
+        except Exception as e:
+            print(f"[BlackBox] Failed to save fast reboot for {ip}: {e}")
 
     def analyze_downtime_event(self, device, down_time_str, up_time_str, current_uptime_str=None):
         try:

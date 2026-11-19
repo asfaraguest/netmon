@@ -160,6 +160,7 @@ class TelegramBot:
             {"command": "top", "description": "Top 10 bandwidth interface tertinggi"},
             {"command": "capture", "description": "Live capture traffic real-time via SNMP"},
             {"command": "down", "description": "Daftar perangkat offline"},
+            {"command": "reboots", "description": "Riwayat perangkat yang mengalami reboot"},
             {"command": "alerts", "description": "Alert aktif yang belum di-ack"},
             {"command": "poll", "description": "Poll ulang perangkat SNMP sekarang"},
             {"command": "digest", "description": "Kirim rekap harian sekarang"},
@@ -500,6 +501,8 @@ class TelegramBot:
             self._cmd_alerts(chat_id)
         elif cmd == "/down":
             self._cmd_down(chat_id)
+        elif cmd in ("/reboots", "/reboot"):
+            self._cmd_reboots(chat_id)
         elif cmd == "/devices":
             self._cmd_devices(chat_id)
         elif cmd in ("/ack", "/resolve"):
@@ -677,6 +680,7 @@ class TelegramBot:
             "• <code>/resource &lt;nama/ip/id&gt;</code> — Detail resource usage router spesifik\n"
             "• <code>/status</code> atau <code>/summary</code> — Ringkasan kesehatan sistem & metrik perangkat\n"
             "• <code>/down</code> — Menampilkan seluruh perangkat yang sedang offline (DOWN)\n"
+            "• <code>/reboots</code> — Riwayat perangkat yang terdeteksi reboot\n"
             "• <code>/alerts</code> — Daftar peringatan aktif yang belum di-acknowledge\n"
             "• <code>/devices</code> — Ringkasan jumlah perangkat per tipe dan zona\n"
             "• <code>/poll [all|ip]</code> — Polling ulang status perangkat sekarang\n"
@@ -774,6 +778,39 @@ class TelegramBot:
             self.send_message(chat_id, text)
         except Exception as e:
             self.send_message(chat_id, f"⚠️ Gagal mengambil alert: {e}")
+
+    def _cmd_reboots(self, chat_id):
+        """Show recent device reboot events from downtime_analysis."""
+        try:
+            with self.db.conn() as c:
+                rows = c.execute('''
+                    SELECT d.name, d.ip, da.down_time, da.up_time, da.duration_sec, da.justification
+                    FROM downtime_analysis da
+                    JOIN devices d ON da.device_id = d.id
+                    WHERE da.reboot_detected = 1
+                    ORDER BY da.id DESC
+                    LIMIT 15
+                ''').fetchall()
+            if not rows:
+                self.send_message(chat_id, "✅ Belum ada riwayat perangkat yang terdeteksi reboot.")
+                return
+            lines = [f"🔄 <b>Riwayat Perangkat Reboot ({len(rows)} Terbaru):</b>\n"]
+            for i, r in enumerate(rows, start=1):
+                name = html.escape(str(r['name'] or r['ip']))
+                ip = r['ip'] or '-'
+                ts = (r['up_time'] or r['down_time'] or '-')[:19].replace('T', ' ')
+                dur = int(r['duration_sec'] or 0)
+                dur_str = f"{dur}s" if dur < 60 else f"{dur // 60}m {dur % 60}s"
+                just = html.escape(str(r['justification'] or '-'))
+                lines.append(
+                    f"{i}. <b>{name}</b> (<code>{ip}</code>)\n"
+                    f"   🕒 {ts} (Durasi: {dur_str})\n"
+                    f"   📝 <i>{just}</i>\n"
+                )
+            self.send_message(chat_id, "\n".join(lines))
+        except Exception as e:
+            logger.error(f"[Telegram] Error in _cmd_reboots: {e}")
+            self.send_message(chat_id, f"⚠️ Gagal mengambil riwayat reboot: {e}")
 
     def _cmd_down(self, chat_id):
         try:
