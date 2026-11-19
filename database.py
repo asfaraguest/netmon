@@ -272,6 +272,8 @@ class Database:
             # Default settings
             defaults = {
                 'poll_interval': '30',
+                'traffic_poll_interval': '15',
+                'allowed_cidrs': '10.122.100.0/24',
                 'groq_api_key': '',
                 'groq_model': 'llama-3.3-70b-versatile',
                 'groq_redact_ips': 'true',
@@ -1019,9 +1021,9 @@ class Database:
 
     def get_interface_traffic(self, device_id, iface_name=None, hours=1):
         try:
-            poll_interval = max(5, int(self.get_settings().get('traffic_poll_interval', 10)))
+            poll_interval = max(5, int(self.get_settings().get('traffic_poll_interval', 15)))
         except Exception:
-            poll_interval = 10
+            poll_interval = 15
         # Limit utk baris mentah (single iface) harus ngikutin traffic_poll_interval AKTUAL,
         # bukan asumsi tetap 30 detik/sample -- kalau tidak, view rentang lebar bisa kepotong
         # dan kehilangan data TERBARU (LIMIT ambil yg paling lama dulu krn ORDER BY ASC).

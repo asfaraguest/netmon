@@ -96,6 +96,7 @@ class SNMPWorker:
         self._status = {'running':False,'progress':0,'total':0,'found':0,
                         'current_ip':'','message':'Idle','percent':0}
         self._interfaces_cache = {}
+        self._if_meta_cache = {}
         self._if_prev = {}
         self.db_write_lock = threading.RLock()
         self._ping_history = {}
@@ -1530,26 +1531,84 @@ class SNMPWorker:
             port = 161
         version   = device.get('snmp_version', '2c') or '2c'
 
-        if_desc = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.2', port, version, timeout=2)
-        if not if_desc:
+        now_ts = time.time()
+        meta_entry = self._if_meta_cache.get(did)
+        need_meta = not meta_entry or (now_ts - meta_entry.get('ts', 0)) >= 300
+
+        async def _fetch_traffic_walks():
+            if need_meta:
+                return await asyncio.gather(
+                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.2', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.31.1.1.1.15', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.5', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.31.1.1.1.6', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.31.1.1.1.10', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.14', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.20', port, version, timeout=1.5),
+                    return_exceptions=True
+                )
+            return await asyncio.gather(
+                self._async_walk(ip, community, '1.3.6.1.2.1.31.1.1.1.6', port, version, timeout=1.5),
+                self._async_walk(ip, community, '1.3.6.1.2.1.31.1.1.1.10', port, version, timeout=1.5),
+                self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.14', port, version, timeout=1.5),
+                self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.20', port, version, timeout=1.5),
+                return_exceptions=True
+            )
+
+        def _ok_dict(val):
+            return val if isinstance(val, dict) else {}
+
+        try:
+            walk_res = asyncio.run(_fetch_traffic_walks())
+        except Exception:
             return
 
-        hc_in  = self._walk(ip, community, '1.3.6.1.2.1.31.1.1.1.6',  port, version, timeout=2)
-        hc_out = self._walk(ip, community, '1.3.6.1.2.1.31.1.1.1.10', port, version, timeout=2)
+        if need_meta:
+            if_desc = _ok_dict(walk_res[0])
+            if not if_desc:
+                return
+            if_high_speed = _ok_dict(walk_res[1])
+            if_speed = _ok_dict(walk_res[2])
+            hc_in = _ok_dict(walk_res[3])
+            hc_out = _ok_dict(walk_res[4])
+            if_in_err = _ok_dict(walk_res[5])
+            if_out_err = _ok_dict(walk_res[6])
+            self._if_meta_cache[did] = {
+                'ts': now_ts,
+                'if_desc': if_desc,
+                'if_high_speed': if_high_speed,
+                'if_speed': if_speed,
+            }
+        else:
+            if_desc = meta_entry['if_desc']
+            if not if_desc:
+                return
+            if_high_speed = meta_entry['if_high_speed']
+            if_speed = meta_entry['if_speed']
+            hc_in = _ok_dict(walk_res[0])
+            hc_out = _ok_dict(walk_res[1])
+            if_in_err = _ok_dict(walk_res[2])
+            if_out_err = _ok_dict(walk_res[3])
+
         is_64bit = True
         if not hc_in:
-            hc_in  = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.10', port, version, timeout=2)
-            hc_out = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.16', port, version, timeout=2)
+            async def _fetch_32bit():
+                return await asyncio.gather(
+                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.10', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.16', port, version, timeout=1.5),
+                    return_exceptions=True
+                )
+            try:
+                fb_res = asyncio.run(_fetch_32bit())
+                hc_in = _ok_dict(fb_res[0])
+                hc_out = _ok_dict(fb_res[1])
+            except Exception:
+                hc_in, hc_out = {}, {}
             is_64bit = False
-
-        if_high_speed = self._walk(ip, community, '1.3.6.1.2.1.31.1.1.1.15', port, version, timeout=2)
-        if_speed = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.5', port, version, timeout=2)
-        if_in_err = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.14', port, version, timeout=2) or {}
-        if_out_err = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.20', port, version, timeout=2) or {}
 
         now_ts = time.time()
         settings = self.db.get_settings()
-        traffic_interval = max(5, int(settings.get('traffic_poll_interval', 10)))
+        traffic_interval = max(5, int(settings.get('traffic_poll_interval', 15)))
         logged_gap = False
 
         for oid, name in if_desc.items():

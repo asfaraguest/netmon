@@ -304,6 +304,10 @@ if [[ $OS == "Linux" ]] && command -v systemctl &>/dev/null; then
 
   if systemctl is-active --quiet netmon && systemctl is-active --quiet netmon-poller; then
     success "TIKWatch Web (Gunicorn) & Poller services are RUNNING and active!"
+    if [[ -L /etc/nginx/sites-enabled/netmon && -f "$INSTALL_DIR/manage_proxy.sh" ]]; then
+      info "Refreshing active Nginx Reverse Proxy configuration (HTTPS + IP Lock)..."
+      bash "$INSTALL_DIR/manage_proxy.sh" enable || warn "Nginx proxy refresh failed; check /etc/nginx/sites-available/netmon"
+    fi
   else
     warn "One or more services failed to start. Journal log preview:"
     journalctl -u netmon -n 20 --no-pager || true

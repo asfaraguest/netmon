@@ -7,7 +7,9 @@ Automatic SNMP capture, floor plan alerting, zone management, real-time dashboar
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for
 from flask_socketio import SocketIO, emit
 from apscheduler.schedulers.background import BackgroundScheduler
+from werkzeug.middleware.proxy_fix import ProxyFix
 import hmac
+import ipaddress
 import logging
 import threading
 import json
@@ -21,6 +23,18 @@ from telegram_bot import TelegramBot
 logger = logging.getLogger('netmon.web')
 
 app = Flask(__name__)
+_proxy_fix_mw = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+_raw_wsgi_app = app.wsgi_app
+
+
+def _trusted_proxy_wsgi(environ, start_response):
+    """Apply ProxyFix only when connection originates from local Nginx reverse proxy."""
+    if environ.get('REMOTE_ADDR') in ('127.0.0.1', '::1', '::ffff:127.0.0.1'):
+        return _proxy_fix_mw(environ, start_response)
+    return _raw_wsgi_app(environ, start_response)
+
+
+app.wsgi_app = _trusted_proxy_wsgi
 db = Database()
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or db.get_settings().get('app_secret_key') or os.urandom(32).hex()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -56,9 +70,65 @@ def _get_current_user():
         return None
 
 
+def _parse_allowed_networks(cidr_str):
+    """Parse comma-separated CIDR strings into ip_network objects; defaults safely to campus subnet."""
+    raw = (cidr_str if cidr_str is not None else '10.122.100.0/24').strip()
+    if not raw:
+        raw = '10.122.100.0/24'
+    nets = []
+    for part in raw.split(','):
+        tok = part.strip()
+        if not tok:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(tok, strict=False))
+        except ValueError:
+            continue
+    return nets or [ipaddress.ip_network('10.122.100.0/24', strict=False)]
+
+
+def _is_client_ip_allowed(remote_ip, cidr_str=None):
+    """Enforce internal LAN subnet allowlist (always permits localhost & emergency env override)."""
+    if os.environ.get('NETMON_DISABLE_IP_LOCK', '').strip().lower() in ('1', 'true', 'yes'):
+        return True
+    if not remote_ip:
+        return False
+    ip_str = str(remote_ip).split(',')[0].strip()
+    try:
+        ip_obj = ipaddress.ip_address(ip_str)
+        if getattr(ip_obj, 'ipv4_mapped', None) is not None:
+            ip_obj = ip_obj.ipv4_mapped
+    except ValueError:
+        return False
+    if ip_obj.is_loopback:
+        return True
+    if cidr_str is None:
+        try:
+            cidr_str = db.get_settings().get('allowed_cidrs', '10.122.100.0/24')
+        except Exception:
+            cidr_str = '10.122.100.0/24'
+    return any(ip_obj in net for net in _parse_allowed_networks(cidr_str))
+
+
 @app.before_request
 def enforce_auth_and_rbac():
     path = request.path or '/'
+    if path not in ('/health', '/internal/emit') and not _is_client_ip_allowed(request.remote_addr):
+        logger.warning(f"[IP Lock] Blocked request from {request.remote_addr} to {path}")
+        if path.startswith('/api/'):
+            return jsonify({
+                'status': 'error',
+                'message': f'Akses ditolak: IP {request.remote_addr} berada di luar subnet yang diizinkan.'
+            }), 403
+        return (
+            '<!doctype html><html><head><meta charset="utf-8"><title>403 Forbidden - TIKWatch</title></head>'
+            '<body style="font-family:sans-serif;background:#0d1117;color:#e6edf3;padding:48px;text-align:center;">'
+            '<h2>403 — Akses Ditolak</h2>'
+            f'<p>Alamat IP Anda (<code>{request.remote_addr}</code>) tidak termasuk dalam subnet jaringan yang diizinkan.</p>'
+            '</body></html>',
+            403
+        )
+
     if (
         path.startswith('/static/')
         or path.startswith('/socket.io/')
@@ -1221,6 +1291,29 @@ def save_settings():
         data.pop('groq_api_key')
     if data.get('telegram_bot_token') == '***':
         data.pop('telegram_bot_token')
+    if 'allowed_cidrs' in data:
+        raw_cidrs = str(data.get('allowed_cidrs') or '').strip()
+        if not raw_cidrs:
+            raw_cidrs = '10.122.100.0/24'
+        cleaned = []
+        for part in raw_cidrs.split(','):
+            tok = part.strip()
+            if not tok:
+                continue
+            try:
+                net = ipaddress.ip_network(tok, strict=False)
+                cleaned.append(str(net))
+            except ValueError:
+                return jsonify({'status': 'error', 'message': f'Format CIDR tidak valid: {tok}'}), 400
+        if not cleaned:
+            cleaned = ['10.122.100.0/24']
+        normalized_cidrs = ', '.join(cleaned)
+        if not _is_client_ip_allowed(request.remote_addr, cidr_str=normalized_cidrs):
+            return jsonify({
+                'status': 'error',
+                'message': f'Ditolak untuk mencegah lock-out: IP Anda ({request.remote_addr}) harus masuk di dalam daftar CIDR baru.'
+            }), 400
+        data['allowed_cidrs'] = normalized_cidrs
     db.save_settings(data)
     if 'poll_interval' in data:
         try:
@@ -1429,6 +1522,8 @@ def get_network_traffic_history():
 
 @socketio.on('connect')
 def handle_connect():
+    if not _is_client_ip_allowed(request.remote_addr):
+        return False
     if not session.get('user_id'):
         return False
     emit('init_data', {
@@ -1577,7 +1672,7 @@ def run_telegram_daily_digest():
 if __name__ == '__main__':
     settings = db.get_settings()
     poll_interval = max(10, int(settings.get('poll_interval', 30)))
-    traffic_poll_interval = max(5, int(settings.get('traffic_poll_interval', 10)))
+    traffic_poll_interval = max(5, int(settings.get('traffic_poll_interval', 15)))
     scheduler.add_job(poll_device_status, 'interval', seconds=poll_interval, id='snmp_poll', max_instances=1)
     scheduler.add_job(poll_traffic, 'interval', seconds=traffic_poll_interval, id='traffic_poll', max_instances=1)
     scheduler.add_job(run_hourly_cleanup, 'interval', minutes=60, id='hourly_cleanup', max_instances=1)

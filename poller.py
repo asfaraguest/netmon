@@ -206,7 +206,7 @@ def sync_dynamic_settings():
         s = db.get_settings()
         sig = (
             s.get('poll_interval', '30'),
-            s.get('traffic_poll_interval', '10'),
+            s.get('traffic_poll_interval', '15'),
             s.get('telegram_enabled', 'false'),
             s.get('telegram_bot_token', ''),
             s.get('telegram_chat_ids', ''),
@@ -242,7 +242,7 @@ def sync_dynamic_settings():
 def main():
     settings = db.get_settings()
     poll_interval = max(10, int(settings.get('poll_interval', 30)))
-    traffic_poll_interval = max(5, int(settings.get('traffic_poll_interval', 10)))
+    traffic_poll_interval = max(5, int(settings.get('traffic_poll_interval', 15)))
     digest_time = (settings.get('telegram_daily_digest_time') or '08:00').strip()
     try:
         d_hour, d_min = [int(x) for x in digest_time.split(':')]
