@@ -107,9 +107,9 @@
             <!-- Peak Throughput -->
             <div class="col-sm-6 col-lg-3">
               <div class="p-3 rounded bg-hover" style="border: 1px solid var(--border-lt);">
-                <div class="text-muted text-xs font-semibold mb-1">Puncak Throughput</div>
+                <div class="text-muted text-xs font-semibold mb-1">Puncak &amp; P95 Throughput</div>
                 <div class="fs-5 fw-700 text-warning" id="bb-peak-rates">—</div>
-                <div class="text-xs text-muted mt-1">Down / Up (Mbps)</div>
+                <div class="text-xs text-muted mt-1" id="bb-p95-sub">Down / Up (Mbps)</div>
               </div>
             </div>
           </div>
@@ -166,6 +166,7 @@
                   <th style="font-weight:600; padding: 12px;">Total Download</th>
                   <th style="font-weight:600; padding: 12px;">Total Upload</th>
                   <th style="font-weight:600; padding: 12px; text-align: center;">Rata-Rata (Down/Up)</th>
+                  <th style="font-weight:600; padding: 12px; text-align: center;">95th Percentile (P95)</th>
                   <th style="font-weight:600; padding: 12px; text-align: center;">Puncak (Down/Up)</th>
                 </tr>
               </thead>
@@ -347,11 +348,19 @@ function selectReport(id) {
   document.getElementById('bb-total-tx').textContent = `${data.backbone.total_out_gb.toLocaleString('id-ID')} GB`;
   document.getElementById('bb-avg-rates').innerHTML = `<i class="bi bi-arrow-down text-success me-1"></i>${formatMbps(data.backbone.avg_in_mbps)} <i class="bi bi-arrow-up text-primary ms-2 me-1"></i>${formatMbps(data.backbone.avg_out_mbps)}`;
   document.getElementById('bb-peak-rates').innerHTML = `<i class="bi bi-arrow-down text-warning me-1"></i>${formatMbps(data.backbone.peak_in_mbps)} <i class="bi bi-arrow-up text-primary ms-2 me-1"></i>${formatMbps(data.backbone.peak_out_mbps)}`;
+  const p95Sub = document.getElementById('bb-p95-sub');
+  if (p95Sub) {
+    if (data.backbone.p95_in_mbps !== undefined) {
+      p95Sub.innerHTML = `Cacti P95: <b>${formatMbps(data.backbone.p95_in_mbps)}</b> / <b>${formatMbps(data.backbone.p95_out_mbps)}</b>`;
+    } else {
+      p95Sub.textContent = 'Down / Up (Mbps)';
+    }
+  }
 
   // Render routers rows
   const tbody = document.getElementById('router-uplink-rows');
   if (!data.routers || data.routers.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-4">Tidak ada data router pada laporan ini</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-4">Tidak ada data router pada laporan ini</td></tr>`;
     return;
   }
 
@@ -360,6 +369,9 @@ function selectReport(id) {
     const aggregateBadge = isExcluded 
       ? `<span class="badge bg-danger-lt text-danger ms-2 text-xxs" style="font-size: 9px; padding: 1px 3px;" title="Dikecualikan dari grafik backbone agregat">EXCL AGGR</span>` 
       : `<span class="badge bg-success-lt text-success ms-2 text-xxs" style="font-size: 9px; padding: 1px 3px;" title="Disertakan dalam grafik backbone agregat">INCL AGGR</span>`;
+    const p95Cell = (router.p95_rx_mbps !== undefined)
+      ? `<span class="text-info"><i class="bi bi-arrow-down me-0.5"></i>${formatMbps(router.p95_rx_mbps)}</span><span class="text-primary ms-2"><i class="bi bi-arrow-up me-0.5"></i>${formatMbps(router.p95_tx_mbps)}</span>`
+      : `<span class="text-muted">—</span>`;
     return `
       <tr>
         <td style="padding: 12px;">
@@ -372,6 +384,7 @@ function selectReport(id) {
           <span class="text-success"><i class="bi bi-arrow-down me-0.5"></i>${formatMbps(router.avg_rx_mbps)}</span>
           <span class="text-primary ms-2"><i class="bi bi-arrow-up me-0.5"></i>${formatMbps(router.avg_tx_mbps)}</span>
         </td>
+        <td style="padding: 12px; text-align: center;">${p95Cell}</td>
         <td style="padding: 12px; text-align: center;">
           <span class="text-warning"><i class="bi bi-arrow-down me-0.5"></i>${formatMbps(router.peak_rx_mbps)}</span>
           <span class="text-primary ms-2"><i class="bi bi-arrow-up me-0.5"></i>${formatMbps(router.peak_tx_mbps)}</span>

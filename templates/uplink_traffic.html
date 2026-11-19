@@ -102,6 +102,10 @@ function initPage() {
                     <span class="text-muted">Peak Rx: </span>
                     <span class="fw-bold" style="color: #007aff;" id="peak-rx-${router.id}">0 bps</span>
                   </div>
+                  <div>
+                    <span class="text-muted">P95 Rx: </span>
+                    <span class="fw-bold" style="color: #f43f5e;" id="p95-rx-${router.id}">0 bps</span>
+                  </div>
                 </div>
                 <div class="col-6 text-end">
                   <div>
@@ -111,6 +115,10 @@ function initPage() {
                   <div>
                     <span class="text-muted">Peak Tx: </span>
                     <span class="fw-bold" style="color: #34c759;" id="peak-tx-${router.id}">0 bps</span>
+                  </div>
+                  <div>
+                    <span class="text-muted">P95 Tx: </span>
+                    <span class="fw-bold" style="color: #f43f5e;" id="p95-tx-${router.id}">0 bps</span>
                   </div>
                 </div>
               </div>
@@ -253,9 +261,17 @@ function loadAllRouterData() {
         const latestRx = rxData.length > 0 ? rxData[rxData.length - 1] : 0;
         const latestTx = txData.length > 0 ? txData[txData.length - 1] : 0;
         
-        // Calculate peaks
+        // Calculate peaks & Cacti 95th percentile (P95)
+        const calcP95 = (arr) => {
+          if (!arr || arr.length === 0) return 0;
+          const sorted = arr.slice().sort((a, b) => a - b);
+          const idx = Math.min(sorted.length - 1, Math.max(0, Math.round(0.95 * (sorted.length - 1))));
+          return sorted[idx];
+        };
         const peakRx = rxData.length > 0 ? Math.max(...rxData) : 0;
         const peakTx = txData.length > 0 ? Math.max(...txData) : 0;
+        const p95Rx = calcP95(rxData);
+        const p95Tx = calcP95(txData);
         
         const curRxEl = document.getElementById(`cur-rx-${router.id}`);
         const curTxEl = document.getElementById(`cur-tx-${router.id}`);
@@ -266,6 +282,11 @@ function loadAllRouterData() {
         const peakTxEl = document.getElementById(`peak-tx-${router.id}`);
         if (peakRxEl) peakRxEl.textContent = formatSpeed(peakRx);
         if (peakTxEl) peakTxEl.textContent = formatSpeed(peakTx);
+
+        const p95RxEl = document.getElementById(`p95-rx-${router.id}`);
+        const p95TxEl = document.getElementById(`p95-tx-${router.id}`);
+        if (p95RxEl) p95RxEl.textContent = formatSpeed(p95Rx);
+        if (p95TxEl) p95TxEl.textContent = formatSpeed(p95Tx);
         
         // Update chart
         const chart = charts[router.id];

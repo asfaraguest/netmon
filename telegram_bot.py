@@ -161,6 +161,8 @@ class TelegramBot:
             {"command": "capture", "description": "Live capture traffic real-time via SNMP"},
             {"command": "down", "description": "Daftar perangkat offline"},
             {"command": "reboots", "description": "Riwayat perangkat yang mengalami reboot"},
+            {"command": "mute", "description": "Maintenance mode: bisukan alert (/mute <target> <menit>)"},
+            {"command": "unmute", "description": "Matikan maintenance mode (/unmute <target>)"},
             {"command": "alerts", "description": "Alert aktif yang belum di-ack"},
             {"command": "poll", "description": "Poll ulang perangkat SNMP sekarang"},
             {"command": "digest", "description": "Kirim rekap harian sekarang"},
@@ -503,6 +505,10 @@ class TelegramBot:
             self._cmd_down(chat_id)
         elif cmd in ("/reboots", "/reboot"):
             self._cmd_reboots(chat_id)
+        elif cmd in ("/mute", "/maintenance", "/maint"):
+            self._cmd_mute(chat_id, args)
+        elif cmd in ("/unmute", "/unmaint"):
+            self._cmd_unmute(chat_id, args)
         elif cmd == "/devices":
             self._cmd_devices(chat_id)
         elif cmd in ("/ack", "/resolve"):
@@ -634,6 +640,18 @@ class TelegramBot:
                 dev_id = action.split(":", 1)[1]
                 self.answer_callback_query(cq_id, text="🔄 Memuat resource router...")
                 self._cmd_resource_device(chat_id, [dev_id], edit_msg_id=message_id)
+            elif action.startswith("mute:"):
+                # Format: cmd:mute:<target>:<minutes>
+                parts = action.split(":")
+                m_target = parts[1] if len(parts) > 1 else "all"
+                m_mins = int(parts[2]) if len(parts) > 2 and parts[2].lstrip('-').isdigit() else 60
+                until_str = self.db.set_maintenance_window(m_target, m_mins)
+                if until_str:
+                    self.answer_callback_query(cq_id, text=f"🔕 Maintenance aktif s/d {until_str} WIB")
+                    self.send_message(chat_id, f"🔕 <b>Maintenance Mode Diaktifkan</b> untuk ID/Target <code>{m_target}</code> hingga <b>{until_str} WIB</b>.")
+                else:
+                    self.answer_callback_query(cq_id, text="🔔 Maintenance mode dimatikan")
+                    self.send_message(chat_id, f"🔔 <b>Maintenance Mode Dimatikan</b> untuk ID/Target <code>{m_target}</code>.")
 
     def _run_poll_and_notify(self, chat_id, device):
         """Poll device and reply with updated status."""
@@ -681,6 +699,8 @@ class TelegramBot:
             "• <code>/status</code> atau <code>/summary</code> — Ringkasan kesehatan sistem & metrik perangkat\n"
             "• <code>/down</code> — Menampilkan seluruh perangkat yang sedang offline (DOWN)\n"
             "• <code>/reboots</code> — Riwayat perangkat yang terdeteksi reboot\n"
+            "• <code>/mute &lt;nama/ip/all&gt; [menit]</code> — Maintenance window (bisukan alert sementara, default 60m)\n"
+            "• <code>/unmute [nama/ip/all]</code> — Akhiri maintenance window\n"
             "• <code>/alerts</code> — Daftar peringatan aktif yang belum di-acknowledge\n"
             "• <code>/devices</code> — Ringkasan jumlah perangkat per tipe dan zona\n"
             "• <code>/poll [all|ip]</code> — Polling ulang status perangkat sekarang\n"
@@ -1764,6 +1784,13 @@ class TelegramBot:
         uplink_str = f"{int(uplink_mbps)} Mbps" if uplink_mbps < 1000 else f"{uplink_mbps/1000:.1f} Gbps"
         sat_warn = " ⚠️ <i>(Saturasi Tinggi &gt; 85%)</i>" if cur_max_util >= 85 else ""
 
+        p95_rx = data.get('p95_rx', 0.0)
+        p95_tx = data.get('p95_tx', 0.0)
+        total_rx_gb = data.get('total_rx_gb', 0.0)
+        total_tx_gb = data.get('total_tx_gb', 0.0)
+        p95_max = max(p95_rx, p95_tx)
+        p95_util = (p95_max / uplink_mbps * 100.0) if uplink_mbps > 0 else 0.0
+
         caption = (
             f"📊 <b>Grafik Throughput & Bandwidth — {safe_target_name}</b>\n"
             f"{scope_badge}\n"
@@ -1772,15 +1799,18 @@ class TelegramBot:
             "━━━━━━━━━━━━━━━━━━━━━\n"
             "🌊 <b>TRAFFIC THROUGHPUT (Laju Aliran):</b>\n"
             f"  📥 <b>WAN IN (Download):</b>\n"
-            f"     • Terkini: <b>{cur_rx:.2f} Mbps</b>\n"
-            f"     • Puncak: <b>{peak_rx:.2f} Mbps</b> | Rata-rata: {avg_rx:.2f} Mbps\n"
+            f"     • Terkini: <b>{cur_rx:.2f} Mbps</b> | Avg: {avg_rx:.2f} Mbps\n"
+            f"     • P95: <b>{p95_rx:.2f} Mbps</b> | Peak: <b>{peak_rx:.2f} Mbps</b>\n"
+            f"     • Volume: <b>{total_rx_gb:.2f} GB</b>\n"
             f"  📤 <b>WAN OUT (Upload):</b>\n"
-            f"     • Terkini: <b>{cur_tx:.2f} Mbps</b>\n"
-            f"     • Puncak: <b>{peak_tx:.2f} Mbps</b> | Rata-rata: {avg_tx:.2f} Mbps\n"
+            f"     • Terkini: <b>{cur_tx:.2f} Mbps</b> | Avg: {avg_tx:.2f} Mbps\n"
+            f"     • P95: <b>{p95_tx:.2f} Mbps</b> | Peak: <b>{peak_tx:.2f} Mbps</b>\n"
+            f"     • Volume: <b>{total_tx_gb:.2f} GB</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "📈 <b>BANDWIDTH USAGE (Utilisasi Kapasitas):</b>\n"
+            "📈 <b>BANDWIDTH USAGE & CACTI P95:</b>\n"
             f"  📥 <b>Inbound:</b>  <code>{format_bar(cur_rx_util, 8)}</code> {cur_rx_util:.1f}%\n"
             f"  📤 <b>Outbound:</b> <code>{format_bar(cur_tx_util, 8)}</code> {cur_tx_util:.1f}%\n"
+            f"  🎯 <b>95th Percentile (P95):</b> <b>{p95_max:.2f} Mbps</b> ({p95_util:.1f}% kapasitas)\n"
             f"  ⚡ <b>Beban Puncak Terkini:</b> <b>{cur_max_util:.1f}%</b> (Puncak: {peak_max_util:.1f}%){sat_warn}\n"
             f"  💡 <b>Headroom Bebas:</b> {headroom_mbps:.1f} Mbps ({max(0.0, 100.0 - cur_max_util):.1f}%)\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
@@ -2100,22 +2130,116 @@ class TelegramBot:
 
         threading.Thread(target=_do_capture, daemon=True).start()
 
+    def _cmd_mute(self, chat_id, args):
+        """Set Zabbix-style maintenance window for 'all' or a specific device."""
+        if not args:
+            g_active, g_until = self.db.is_device_in_maintenance(None)
+            with self.db.conn() as c:
+                m_rows = c.execute(
+                    "SELECT id, name, ip, maintenance_until FROM devices WHERE maintenance_until IS NOT NULL AND maintenance_until > datetime('now', 'localtime')"
+                ).fetchall()
+            lines = ["🔕 <b>Status Maintenance Window (Zabbix Mute):</b>\n"]
+            lines.append(f"• <b>Global Mute:</b> {'🟢 Aktif s/d ' + g_until if g_active else '⚪ Tidak aktif'}")
+            if m_rows:
+                lines.append("\n<b>Perangkat dalam Maintenance:</b>")
+                for r in m_rows:
+                    lines.append(f"• <b>{html.escape(str(r['name'] or r['ip']))}</b> (<code>{r['ip']}</code>) s/d <b>{r['maintenance_until']}</b>")
+            else:
+                lines.append("• <i>Tidak ada perangkat spesifik dalam mode maintenance.</i>")
+            lines.append(
+                "\n<b>Cara Penggunaan:</b>\n"
+                "• <code>/mute &lt;nama/ip/id&gt; [menit]</code> — Bisukan alert perangkat (default 60 menit)\n"
+                "• <code>/mute all [menit]</code> — Bisukan seluruh alert global\n"
+                "• <code>/unmute [nama/ip/all]</code> — Aktifkan kembali notifikasi alert"
+            )
+            self.send_message(chat_id, "\n".join(lines))
+            return
+
+        minutes = 60
+        if len(args) >= 2 and args[-1].isdigit():
+            minutes = max(1, min(10080, int(args[-1])))
+            target_str = " ".join(args[:-1]).strip()
+        else:
+            target_str = " ".join(args).strip()
+
+        if target_str.lower() in ("all", "global", "semua"):
+            until_str = self.db.set_maintenance_window("all", minutes)
+            self.send_message(
+                chat_id,
+                f"🔕 <b>Global Maintenance Mode Aktif!</b>\n"
+                f"Seluruh notifikasi alert Telegram dibisukan selama <b>{minutes} menit</b> (hingga <b>{until_str} WIB</b>).\n"
+                f"Ketik <code>/unmute all</code> untuk mengaktifkan kembali lebih awal."
+            )
+            return
+
+        dev = self._find_device_by_target(target_str)
+        if not dev:
+            self.send_message(chat_id, f"⚠️ Perangkat <code>{html.escape(target_str)}</code> tidak ditemukan.")
+            return
+
+        until_str = self.db.set_maintenance_window(dev['id'], minutes)
+        dname = html.escape(str(dev.get('name') or dev.get('ip')))
+        self.send_message(
+            chat_id,
+            f"🔕 <b>Maintenance Mode Aktif: {dname}</b> (<code>{dev.get('ip')}</code>)\n"
+            f"Notifikasi alert Telegram untuk perangkat ini dibisukan selama <b>{minutes} menit</b> (hingga <b>{until_str} WIB</b>).\n"
+            f"Ketik <code>/unmute {dev['id']}</code> untuk mengakhiri maintenance."
+        )
+
+    def _cmd_unmute(self, chat_id, args):
+        """Clear maintenance window for 'all' or a specific device."""
+        target_str = " ".join(args).strip() if args else "all"
+        if target_str.lower() in ("all", "global", "semua"):
+            self.db.set_maintenance_window("all", 0)
+            self.send_message(chat_id, "🔔 <b>Maintenance Mode Dimatikan (Global & Semua Perangkat).</b> Notifikasi alert kembali normal.")
+            return
+        dev = self._find_device_by_target(target_str)
+        if not dev:
+            self.send_message(chat_id, f"⚠️ Perangkat <code>{html.escape(target_str)}</code> tidak ditemukan.")
+            return
+        self.db.set_maintenance_window(dev['id'], 0)
+        dname = html.escape(str(dev.get('name') or dev.get('ip')))
+        self.send_message(chat_id, f"🔔 <b>Maintenance Mode Dimatikan</b> untuk <b>{dname}</b> (<code>{dev.get('ip')}</code>).")
+
     def _cmd_interfaces(self, chat_id, args):
         if not args:
-            self.send_message(chat_id, "ℹ️ Masukkan IP atau ID perangkat. Contoh: <code>/iface 192.168.1.1</code>")
+            self.send_message(chat_id, "ℹ️ Masukkan nama, IP, atau ID perangkat. Contoh: <code>/iface 192.168.1.1</code>")
             return
-        target = str(args[0]).strip()
-        device = None
-        if target.isdigit():
-            device = self.db.get_device(int(target))
+        target = " ".join(args).strip()
+        device = self._find_device_by_target(target)
         if not device:
-            device = self.db.get_device_by_ip(target)
-
-        if not device:
-            self.send_message(chat_id, f"⚠️ Perangkat dengan IP/ID <code>{target}</code> tidak ditemukan.")
+            self.send_message(chat_id, f"⚠️ Perangkat <code>{html.escape(target)}</code> tidak ditemukan.")
             return
 
-        self._cmd_traffic_device(chat_id, [device['id']])
+        if self.snmp_worker and device.get('snmp_enabled'):
+            try:
+                stats = self.snmp_worker.get_detailed_stats(device)
+                ifaces = stats.get('interfaces', []) if stats else []
+                if ifaces:
+                    dname = html.escape(str(device.get('name') or device.get('ip')))
+                    lines = [
+                        f"🔌 <b>Status & Kesehatan Interface (Cacti Diagnostics)</b>",
+                        f"🛰️ <b>{dname}</b> (<code>{device.get('ip')}</code>)\n━━━━━━━━━━━━━━━━━━━━━"
+                    ]
+                    for ifc in ifaces[:25]:
+                        st_icon = "🟢" if ifc.get('status') == 'up' else "⚪"
+                        iname = html.escape(str(ifc.get('name', '-')))
+                        spd = int((ifc.get('speed') or 0) / 1e6)
+                        spd_str = f"{spd}M" if spd < 1000 else f"{spd/1000:.0f}G"
+                        in_err = int(ifc.get('in_errors') or 0)
+                        out_err = int(ifc.get('out_errors') or 0)
+                        in_disc = int(ifc.get('in_discards') or 0)
+                        out_disc = int(ifc.get('out_discards') or 0)
+                        health_tag = "✅ OK"
+                        if (in_err + out_err) > 0 or (in_disc + out_disc) > 0:
+                            health_tag = f"⚠️ Err:{in_err}/{out_err} Disc:{in_disc}/{out_disc}"
+                        lines.append(f"{st_icon} <b>{iname}</b> ({spd_str}) — {health_tag}")
+                    self.send_message(chat_id, "\n".join(lines))
+                    return
+            except Exception as e:
+                logger.warning(f"[Telegram] Detailed iface check fallback: {e}")
+
+        self._cmd_traffic_device(chat_id, [str(device['id'])])
 
     # ─── Alert Push Notification ─────────────────────────────────────
 
@@ -2191,6 +2315,8 @@ class TelegramBot:
             btn_row.append({"text": "✅ Acknowledge", "callback_data": f"ack:{alert_id}"})
         if dev_id:
             btn_row.append({"text": "🔄 Re-check", "callback_data": f"poll:{dev_id}"})
+            if not is_recovery:
+                btn_row.append({"text": "🔕 Mute 1h", "callback_data": f"cmd:mute:{dev_id}:60"})
         if btn_row:
             keyboard.append(btn_row)
 

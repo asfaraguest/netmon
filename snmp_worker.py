@@ -107,6 +107,9 @@ class SNMPWorker:
         self._metric_history = {}
         self._last_anomaly_alert = {}
         self._speed_detected = {}
+        self._iface_flap_history = {}
+        self._iface_err_prev = {}
+        self._last_iface_alert = {}
 
     def get_scan_status(self): return dict(self._status)
     def stop_scan(self):       self._stop.set()
@@ -178,6 +181,8 @@ class SNMPWorker:
 
         # Anomaly Detection Flags
         traffic_spike = False
+        traffic_drop = False
+        drop_pct = 0.0
         spike_ratio = 1.0
         baseline_mbps = 0.0
         cpu_critical = False
@@ -188,10 +193,11 @@ class SNMPWorker:
         uplink_mbps = float(device.get('uplink_speed_mbps') or 1000)
         uplink_bps = uplink_mbps * 1e6
         utilization_pct = (cur_traffic_bps / uplink_bps * 100) if uplink_bps > 0 else 0.0
+        drop_min_mbps = float(settings.get('traffic_drop_min_mbps', 50.0) or 50.0)
 
         # Require at least 4 previous samples (approx 1-2 minutes) to establish reliable baseline
         if len(history) >= 4:
-            # 1. Traffic Spike Analysis
+            # 1. Traffic Spike & Traffic Drop (Cacti THold) Analysis
             prev_traffics = [h['traffic_bps'] for h in history if h.get('traffic_bps') is not None]
             if prev_traffics:
                 avg_prev = sum(prev_traffics) / len(prev_traffics)
@@ -201,6 +207,15 @@ class SNMPWorker:
                     # Must exceed multiplier AND have significant link utilization (>=60%) or high absolute rate (>=300 Mbps)
                     if spike_ratio >= traffic_mult and (utilization_pct >= 60.0 or cur_traffic_mbps >= 300.0):
                         traffic_spike = True
+                # Cacti THold: Sudden Traffic Drop / Blackhole when device is UP
+                if baseline_mbps >= drop_min_mbps and len(prev_traffics) >= 3:
+                    older_avg_mbps = (sum(prev_traffics[:-1]) / len(prev_traffics[:-1])) / 1e6
+                    last_sample_mbps = prev_traffics[-1] / 1e6
+                    if older_avg_mbps >= drop_min_mbps:
+                        if cur_traffic_mbps <= (older_avg_mbps * 0.15) and last_sample_mbps <= (older_avg_mbps * 0.20):
+                            traffic_drop = True
+                            baseline_mbps = older_avg_mbps
+                            drop_pct = max(0.0, (1.0 - (cur_traffic_mbps / older_avg_mbps)) * 100.0)
 
             # 2. CPU Spike Analysis (require sustained critical CPU or extreme jump into heavy load >= 85%)
             prev_cpus = [h['cpu'] for h in history if h.get('cpu') is not None]
@@ -255,6 +270,12 @@ class SNMPWorker:
             severity = 'warning'
             alert_msg = (
                 f"ANOMALI RESOURCE: Penggunaan RAM kritis ({mem:.1f}%) pada {name} ({ip}). Risiko OOM Crash!"
+            )
+        elif traffic_drop:
+            severity = 'warning'
+            alert_msg = (
+                f"ANOMALI TRAFFIC DROP: Trafik uplink {name} ({ip}) anjlok dari baseline {baseline_mbps:.1f} Mbps "
+                f"ke {cur_traffic_mbps:.1f} Mbps (-{drop_pct:.0f}%). Indikasi gangguan jalur upstream ISP / BGP blackhole meski perangkat masih UP!"
             )
 
         if not severity or not alert_msg:
@@ -1255,6 +1276,7 @@ class SNMPWorker:
         # 3. Interfaces info (Parallel SNMP Walks) with cache fallback
         new_desc, new_type, new_speed, new_oper = {}, {}, {}, {}
         new_hc_in, new_hc_out, new_in, new_out, new_high_speed = {}, {}, {}, {}, {}
+        new_in_err, new_out_err, new_in_disc, new_out_disc = {}, {}, {}, {}
         
         try:
             async def fetch_all_walks():
@@ -1267,12 +1289,16 @@ class SNMPWorker:
                     self._async_walk(ip, community, '1.3.6.1.2.1.31.1.1.1.10', port, version, timeout=1.5),
                     self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.10', port, version, timeout=1.5),
                     self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.16', port, version, timeout=1.5),
-                    self._async_walk(ip, community, '1.3.6.1.31.1.1.1.15', port, version, timeout=1.5)
+                    self._async_walk(ip, community, '1.3.6.1.31.1.1.1.15', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.14', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.20', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.13', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.19', port, version, timeout=1.5)
                 ]
                 return await asyncio.gather(*tasks, return_exceptions=True)
                 
             results = asyncio.run(fetch_all_walks())
-            if results and len(results) == 9:
+            if results and len(results) >= 9:
                 def clean_res(val):
                     return val if isinstance(val, dict) else {}
                 new_desc = clean_res(results[0])
@@ -1284,6 +1310,11 @@ class SNMPWorker:
                 new_in = clean_res(results[6])
                 new_out = clean_res(results[7])
                 new_high_speed = clean_res(results[8])
+                if len(results) >= 13:
+                    new_in_err = clean_res(results[9])
+                    new_out_err = clean_res(results[10])
+                    new_in_disc = clean_res(results[11])
+                    new_out_disc = clean_res(results[12])
         except Exception as e:
             print(f"[SNMP Detail] Parallel walks failed: {e}")
 
@@ -1394,13 +1425,26 @@ class SNMPWorker:
                 try: tx_bytes = int(if_out.get(f"1.3.6.1.2.1.2.2.1.16.{idx}", 0))
                 except ValueError: pass
 
+            try: in_err = int(new_in_err.get(f"1.3.6.1.2.1.2.2.1.14.{idx}", 0))
+            except ValueError: in_err = 0
+            try: out_err = int(new_out_err.get(f"1.3.6.1.2.1.2.2.1.20.{idx}", 0))
+            except ValueError: out_err = 0
+            try: in_disc = int(new_in_disc.get(f"1.3.6.1.2.1.2.2.1.13.{idx}", 0))
+            except ValueError: in_disc = 0
+            try: out_disc = int(new_out_disc.get(f"1.3.6.1.2.1.2.2.1.19.{idx}", 0))
+            except ValueError: out_disc = 0
+
             interfaces.append({
                 'index': int(idx),
                 'name': str(name),
                 'status': status,
                 'speed': speed_bps,
                 'rx_bytes': rx_bytes,
-                'tx_bytes': tx_bytes
+                'tx_bytes': tx_bytes,
+                'in_errors': in_err,
+                'out_errors': out_err,
+                'in_discards': in_disc,
+                'out_discards': out_disc
             })
             
         interfaces.sort(key=lambda x: x['index'])
@@ -1446,6 +1490,8 @@ class SNMPWorker:
 
         if_high_speed = self._walk(ip, community, '1.3.6.1.2.1.31.1.1.1.15', port, version, timeout=2)
         if_speed = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.5', port, version, timeout=2)
+        if_in_err = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.14', port, version, timeout=2) or {}
+        if_out_err = self._walk(ip, community, '1.3.6.1.2.1.2.2.1.20', port, version, timeout=2) or {}
 
         now_ts = time.time()
         settings = self.db.get_settings()
@@ -1456,6 +1502,28 @@ class SNMPWorker:
             idx = oid.split('.')[-1]
             if str(name).lower() in ('lo', 'lo0') or 'loopback' in str(name).lower():
                 continue
+
+            # Cacti Interface Error Rate Tracking
+            try:
+                cur_in_err = int(if_in_err.get(f'1.3.6.1.2.1.2.2.1.14.{idx}', 0) or 0)
+                cur_out_err = int(if_out_err.get(f'1.3.6.1.2.1.2.2.1.20.{idx}', 0) or 0)
+                cur_tot_err = cur_in_err + cur_out_err
+                err_key = (did, idx)
+                prev_err = self._iface_err_prev.get(err_key)
+                self._iface_err_prev[err_key] = cur_tot_err
+                if prev_err is not None and cur_tot_err > prev_err:
+                    d_err = cur_tot_err - prev_err
+                    if d_err >= 50:
+                        last_e_ts = self._last_iface_alert.get(('err', did, idx), 0)
+                        if now_ts - last_e_ts >= 900:
+                            self._last_iface_alert[('err', did, idx)] = now_ts
+                            self._alert(
+                                latest or device, 'warning',
+                                f"INTERFACE ERROR: Port {name} pada {(latest or device).get('name', ip)} ({ip}) "
+                                f"mengalami +{d_err} packet errors (IN:{cur_in_err}/OUT:{cur_out_err}). Cek kabel/SFP!"
+                            )
+            except Exception:
+                pass
             rx = next((int(v) for k in [
                 f'1.3.6.1.2.1.31.1.1.1.6.{idx}', f'1.3.6.1.31.1.1.1.6.{idx}',
                 f'1.3.6.1.2.1.2.2.1.10.{idx}']
@@ -1827,14 +1895,41 @@ class SNMPWorker:
     def _check_ifaces(self, device, ip, community, port, version):
         if_st   = self._walk(ip, community, OID['ifOperStatus'], port, version)
         if_desc = self._walk(ip, community, OID['ifDescr'],      port, version)
+        did = device['id']
+        now_ts = time.time()
         down = []
+        flapping = []
         for oid, st in if_st.items():
-            if str(st) in ('2', 'down'):
-                idx  = oid.split('.')[-1]
-                name = if_desc.get(f"{OID['ifDescr']}.{idx}", f'if{idx}')
-                lo   = name.lower()
-                if 'loopback' in lo or lo in ('lo','lo0'): continue
+            idx  = oid.split('.')[-1]
+            name = if_desc.get(f"{OID['ifDescr']}.{idx}", f'if{idx}')
+            lo   = name.lower()
+            if 'loopback' in lo or lo in ('lo','lo0'): continue
+            is_down = str(st) in ('2', 'down')
+            cur_state = 'down' if is_down else 'up'
+
+            # Track state transitions for Port Flapping detection (3+ changes within 15m)
+            fkey = (did, idx)
+            fentry = self._iface_flap_history.get(fkey)
+            if fentry is None:
+                self._iface_flap_history[fkey] = {'state': cur_state, 'changes': []}
+            else:
+                changes = [ts for ts in fentry['changes'] if (now_ts - ts) <= 900]
+                if fentry['state'] != cur_state:
+                    changes.append(now_ts)
+                    fentry['state'] = cur_state
+                    if len(changes) >= 3:
+                        last_f_ts = self._last_iface_alert.get(('flap', did, idx), 0)
+                        if now_ts - last_f_ts >= 900:
+                            self._last_iface_alert[('flap', did, idx)] = now_ts
+                            flapping.append(f"{name} ({len(changes)}x)")
+                fentry['changes'] = changes
+
+            if is_down:
                 down.append(name)
+
+        if flapping:
+            self._alert(device, 'warning',
+                        f"PORT FLAPPING: Interface tidak stabil pada {device.get('name',ip)} ({ip}): {', '.join(flapping[:5])} dalam 15 menit terakhir")
         if down:
             self._alert(device, 'warning',
                         f"Interface(s) DOWN on {device.get('name',ip)}: {', '.join(down[:5])}")
@@ -1845,6 +1940,31 @@ class SNMPWorker:
         # Skip if alerts are muted for this device
         if not device.get('alerts_enabled', 1):
             return
+
+        did = device.get('id')
+        suppress_telegram = False
+
+        # 1. Zabbix Parent-Child Upstream Dependency check (suppress child DOWN alerts if parent is DOWN)
+        if did and (severity == 'critical' or 'device down' in message.lower()):
+            try:
+                p_down, p_dev = self.db.is_upstream_parent_down(did)
+                if p_down and p_dev:
+                    p_label = p_dev.get('name') or p_dev.get('ip') or f"ID#{p_dev.get('id')}"
+                    message = f"{message} [Suppressed: Upstream Parent {p_label} DOWN]"
+                    suppress_telegram = True
+            except Exception as pe:
+                print(f"[Alert Dependency] Parent check error: {pe}")
+
+        # 2. Zabbix Maintenance Window check (suppress Telegram notifications while in maintenance)
+        if did:
+            try:
+                in_maint, maint_until = self.db.is_device_in_maintenance(did)
+                if in_maint:
+                    message = f"[MAINTENANCE s/d {maint_until}] {message}"
+                    suppress_telegram = True
+            except Exception as me:
+                print(f"[Alert Maintenance] Maintenance check error: {me}")
+
         with self.db_write_lock:
             aid = self.db.add_alert({'device_id':device['id'],
                                       'device_name':device.get('name',device.get('ip','')),
@@ -1877,8 +1997,8 @@ class SNMPWorker:
         except Exception:
             pass
 
-        # Send Telegram notification if alert is valid (not a false alarm)
-        if getattr(self, 'telegram_bot', None) and not is_false_alarm:
+        # Send Telegram notification if alert is valid and not suppressed by Parent Dependency or Maintenance Window
+        if getattr(self, 'telegram_bot', None) and not is_false_alarm and not suppress_telegram:
             try:
                 is_recovery = (severity == 'info' and 'online' in message.lower())
                 alert_data = {

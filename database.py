@@ -216,7 +216,9 @@ class Database:
                 'wan_iface_idx': "TEXT DEFAULT ''",
                 'include_in_aggregate': "INTEGER DEFAULT 1",
                 'latency_ms': "REAL DEFAULT NULL",
-                'packet_loss': "REAL DEFAULT 0"
+                'packet_loss': "REAL DEFAULT 0",
+                'parent_device_id': "INTEGER DEFAULT NULL",
+                'maintenance_until': "TEXT DEFAULT NULL"
             }
             for col, defn in columns_definitions.items():
                 try:
@@ -440,13 +442,18 @@ class Database:
 
 
     def add_device(self, data):
+        parent_id = data.get('parent_device_id')
+        try:
+            parent_id = int(parent_id) if parent_id not in (None, '', 0, '0') else None
+        except (ValueError, TypeError):
+            parent_id = None
         with self.conn() as c:
             cur = c.execute('''
                 INSERT INTO devices
                     (name, ip, mac, type, vendor, model, zone_id,
                      snmp_enabled, snmp_community, snmp_version, snmp_port,
-                     icon, pos_x, pos_y, description, status, source, uplink_speed_mbps, alerts_enabled, wan_iface_idx, include_in_aggregate)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     icon, pos_x, pos_y, description, status, source, uplink_speed_mbps, alerts_enabled, wan_iface_idx, include_in_aggregate, parent_device_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ''', (
                 data.get('name') or data.get('ip', 'Unknown'),
                 data.get('ip', ''),
@@ -469,6 +476,7 @@ class Database:
                 1 if data.get('alerts_enabled', True) else 0,
                 data.get('wan_iface_idx', ''),
                 1 if data.get('include_in_aggregate', True) else 0,
+                parent_id,
             ))
             return cur.lastrowid
 
@@ -479,7 +487,15 @@ class Database:
                    'last_seen', 'last_polled', 'uptime', 'sys_name',
                    'cpu_usage', 'memory_usage', 'temperature', 'wan_in', 'wan_out',
                    'uplink_speed_mbps', 'alerts_enabled', 'wan_iface_idx', 'include_in_aggregate',
-                   'latency_ms', 'packet_loss']
+                   'latency_ms', 'packet_loss', 'parent_device_id', 'maintenance_until']
+        if 'parent_device_id' in data:
+            pid = data['parent_device_id']
+            try:
+                pid = int(pid) if pid not in (None, '', 0, '0') and str(pid) != str(device_id) else None
+            except (ValueError, TypeError):
+                pid = None
+            data = dict(data)
+            data['parent_device_id'] = pid
         fields, values = [], []
         for f in allowed:
             if f in data:
@@ -495,7 +511,79 @@ class Database:
 
     def delete_device(self, device_id):
         with self.conn() as c:
+            c.execute('UPDATE devices SET parent_device_id = NULL WHERE parent_device_id = ?', (device_id,))
             c.execute('DELETE FROM devices WHERE id = ?', (device_id,))
+
+    def is_upstream_parent_down(self, device_id):
+        """Return (True, parent_dict) if any upstream parent in chain (up to 5 hops) is currently DOWN."""
+        if not device_id:
+            return False, None
+        visited = {int(device_id)}
+        cur_id = int(device_id)
+        with self.conn() as c:
+            for _ in range(5):
+                row = c.execute('SELECT parent_device_id FROM devices WHERE id = ?', (cur_id,)).fetchone()
+                if not row or not row['parent_device_id']:
+                    break
+                pid = int(row['parent_device_id'])
+                if pid in visited:
+                    break
+                visited.add(pid)
+                prow = c.execute('SELECT id, name, ip, status FROM devices WHERE id = ?', (pid,)).fetchone()
+                if not prow:
+                    break
+                if prow['status'] == 'down':
+                    return True, dict(prow)
+                cur_id = pid
+        return False, None
+
+    def is_device_in_maintenance(self, device_id=None):
+        """Return (True, until_str) if global or per-device maintenance window is currently active."""
+        now_iso = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            settings = self.get_settings()
+            g_until = (settings.get('global_maintenance_until') or '').strip()
+            if g_until and g_until > now_iso:
+                return True, g_until
+        except Exception:
+            pass
+        if device_id:
+            try:
+                with self.conn() as c:
+                    row = c.execute('SELECT maintenance_until FROM devices WHERE id = ?', (device_id,)).fetchone()
+                    if row and row['maintenance_until']:
+                        d_until = str(row['maintenance_until']).strip()
+                        if d_until > now_iso:
+                            return True, d_until
+            except Exception:
+                pass
+        return False, None
+
+    def set_maintenance_window(self, target='all', minutes=0):
+        """Set or clear (minutes <= 0) maintenance window for 'all' or a specific device_id."""
+        until_str = None
+        if minutes and int(minutes) > 0:
+            until_dt = datetime.now() + timedelta(minutes=int(minutes))
+            until_str = until_dt.strftime('%Y-%m-%d %H:%M:%S')
+        if str(target).lower() in ('all', 'global', 'semua'):
+            self.save_settings({'global_maintenance_until': until_str or ''})
+            if not until_str:
+                with self.conn() as c:
+                    c.execute('UPDATE devices SET maintenance_until = NULL')
+            return until_str
+        with self.conn() as c:
+            c.execute('UPDATE devices SET maintenance_until = ? WHERE id = ?', (until_str, int(target)))
+        return until_str
+
+    @staticmethod
+    def calc_percentile(values, pct=95):
+        """Calculate the N-th percentile (Cacti 95th percentile standard) from a list of numeric samples."""
+        clean = sorted(float(v) for v in values if v is not None)
+        if not clean:
+            return 0.0
+        idx = int(round((pct / 100.0) * (len(clean) - 1)))
+        idx = max(0, min(len(clean) - 1, idx))
+        return round(clean[idx], 2)
 
     def add_or_update_unifi_device(self, data, zone_id=1, snmp_community='public', snmp_version='2c', snmp_port=161, snmp_enabled_for_new=False):
         ip = str(data.get('ip', '') or '').strip()
@@ -1069,6 +1157,12 @@ class Database:
         avg_tx = round(sum(tx_vals) / len(tx_vals), 2) if tx_vals else 0.0
         cur_rx = rx_vals[-1] if rx_vals else 0.0
         cur_tx = tx_vals[-1] if tx_vals else 0.0
+        p95_rx = self.calc_percentile(rx_vals, 95)
+        p95_tx = self.calc_percentile(tx_vals, 95)
+        # Estimate total transferred volume over the window (avg_mbps * hours * 3600 / 8 / 1000 -> GB)
+        span_sec = hours * 3600.0
+        total_rx_gb = round((avg_rx * span_sec) / 8000.0, 2) if rx_vals else 0.0
+        total_tx_gb = round((avg_tx * span_sec) / 8000.0, 2) if tx_vals else 0.0
 
         return {
             'target_id': target_id,
@@ -1086,7 +1180,11 @@ class Database:
             'avg_rx': avg_rx,
             'avg_tx': avg_tx,
             'cur_rx': cur_rx,
-            'cur_tx': cur_tx
+            'cur_tx': cur_tx,
+            'p95_rx': p95_rx,
+            'p95_tx': p95_tx,
+            'total_rx_gb': total_rx_gb,
+            'total_tx_gb': total_tx_gb
         }
 
     def get_device_interfaces(self, device_id, hours=24):
@@ -1800,6 +1898,9 @@ class Database:
                 chart_data["1month"] = merge_buckets(b1m_rx, b1m_tx)
                 
 
+            p95_rx_mbps = self.calc_percentile([v / 1e6 for _, v in rx_points], 95) if rx_points else 0.0
+            p95_tx_mbps = self.calc_percentile([v / 1e6 for _, v in tx_points], 95) if tx_points else 0.0
+
             router_stats = {
                 'id': rid,
                 'name': router['name'],
@@ -1809,6 +1910,8 @@ class Database:
                 'total_tx_gb': round(total_tx_bytes / 1e9, 2),
                 'avg_rx_mbps': round(avg_rx_bps / 1e6, 2),
                 'avg_tx_mbps': round(avg_tx_bps / 1e6, 2),
+                'p95_rx_mbps': p95_rx_mbps,
+                'p95_tx_mbps': p95_tx_mbps,
                 'peak_rx_mbps': round(max_rx_bps / 1e6, 2),
                 'peak_tx_mbps': round(max_tx_bps / 1e6, 2),
                 
@@ -1867,8 +1970,11 @@ class Database:
             ]
             for time_range, buckets in backbone_raw_buckets.items()
         }
+        bb_1m_pts = report['backbone']['chart_data'].get('1month', [])
         report['backbone']['avg_in_mbps'] = round(total_backbone_rx_bps_sum / 1e6, 2)
         report['backbone']['avg_out_mbps'] = round(total_backbone_tx_bps_sum / 1e6, 2)
+        report['backbone']['p95_in_mbps'] = self.calc_percentile([pt['rx'] for pt in bb_1m_pts], 95) if bb_1m_pts else round(sum(r.get('p95_rx_mbps', 0.0) for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)
+        report['backbone']['p95_out_mbps'] = self.calc_percentile([pt['tx'] for pt in bb_1m_pts], 95) if bb_1m_pts else round(sum(r.get('p95_tx_mbps', 0.0) for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)
         report['backbone']['peak_in_mbps'] = round(max(backbone_peaks_rx) / 1e6, 2) if backbone_peaks_rx else 0.0
         report['backbone']['peak_out_mbps'] = round(max(backbone_peaks_tx) / 1e6, 2) if backbone_peaks_tx else 0.0
         report['backbone']['total_in_gb'] = round(sum(r['total_rx_gb'] for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)

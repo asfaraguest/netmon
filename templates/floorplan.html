@@ -141,6 +141,11 @@
   <span class="fp-leg-item"><span class="fp-dot warn"></span>Warning</span>
   <span class="fp-leg-item"><span class="fp-dot unknown"></span>No Devices</span>
   <span class="fp-leg-sep"></span>
+  <span class="fp-leg-item" title="Cacti Weathermap Link Utilization"><span style="display:inline-block;width:14px;height:3px;background:#10b981;border-radius:2px;margin-right:4px;"></span>&lt;40%</span>
+  <span class="fp-leg-item"><span style="display:inline-block;width:14px;height:3px;background:#f59e0b;border-radius:2px;margin-right:4px;"></span>40-70%</span>
+  <span class="fp-leg-item"><span style="display:inline-block;width:14px;height:3px;background:#f97316;border-radius:2px;margin-right:4px;"></span>70-85%</span>
+  <span class="fp-leg-item"><span style="display:inline-block;width:14px;height:3px;background:#ef4444;border-radius:2px;margin-right:4px;"></span>&gt;85%</span>
+  <span class="fp-leg-sep"></span>
   <span class="fp-leg-tip" id="fp-mode-tip"><i class="bi bi-eye"></i> View mode — click zone to view details, drag background to pan, scroll to zoom</span>
 </div>
 
@@ -294,18 +299,115 @@ const FP = (() => {
 
   function drawConnections() {
     if (zones.length < 2) return;
-    ctx.beginPath();
+    const zoneMap = {};
+    zones.forEach(z => { zoneMap[z.id] = z; });
+    const devMap = {};
+    rawDevices.forEach(d => { devMap[d.id] = d; });
+
+    // Build links from explicit parent_device_id across zones, fallback to hub-and-spoke from zones[0]
+    const linkPairs = {};
+    const linkedChildZones = new Set();
+    rawDevices.forEach(d => {
+      if (!d.parent_device_id) return;
+      const p = devMap[d.parent_device_id];
+      if (!p || !p.zone_id || !d.zone_id || p.zone_id === d.zone_id) return;
+      if (!zoneMap[p.zone_id] || !zoneMap[d.zone_id]) return;
+      const key = `${p.zone_id}->${d.zone_id}`;
+      if (!linkPairs[key]) {
+        linkPairs[key] = { from: zoneMap[p.zone_id], to: zoneMap[d.zone_id], devs: [] };
+      }
+      linkPairs[key].devs.push(d);
+      linkedChildZones.add(d.zone_id);
+    });
+
     const centralZone = zones[0];
-    for (let i = 1; i < zones.length; i++) {
-      const z = zones[i];
-      ctx.moveTo(centralZone.pos_x, centralZone.pos_y);
-      ctx.lineTo(z.pos_x, z.pos_y);
-    }
-    ctx.strokeStyle = 'rgba(0, 212, 255, 0.15)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 8]);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    zones.slice(1).forEach(z => {
+      if (!linkedChildZones.has(z.id)) {
+        const key = `${centralZone.id}->${z.id}`;
+        if (!linkPairs[key]) {
+          linkPairs[key] = { from: centralZone, to: z, devs: z.devices || [] };
+        }
+      }
+    });
+
+    Object.values(linkPairs).forEach(link => {
+      const fz = link.from, tz = link.to;
+      const x1 = fz.pos_x, y1 = fz.pos_y;
+      const x2 = tz.pos_x, y2 = tz.pos_y;
+
+      // Aggregate link throughput & capacity for Cacti Weathermap color scale
+      const targetDevs = (link.devs && link.devs.length > 0) ? link.devs : (tz.devices || []);
+      let peakBps = 0;
+      let capBps = 0;
+      targetDevs.forEach(d => {
+        const rx = Number(d.wan_in || 0);
+        const tx = Number(d.wan_out || 0);
+        if (rx > 0 || tx > 0 || d.type === 'router') {
+          peakBps += Math.max(rx, tx);
+          capBps += (Number(d.uplink_speed_mbps) || 1000) * 1e6;
+        }
+      });
+      const utilPct = capBps > 0 ? Math.min(100, (peakBps / capBps) * 100) : 0;
+      const isDown = tz.status === 'down' || fz.status === 'down';
+
+      let strokeCol = '#10b981';
+      let lineW = 2.5;
+      if (isDown) {
+        strokeCol = '#64748b';
+        lineW = 2;
+      } else if (utilPct >= 85) {
+        strokeCol = '#ef4444';
+        lineW = 4;
+      } else if (utilPct >= 70) {
+        strokeCol = '#f97316';
+        lineW = 3.5;
+      } else if (utilPct >= 40) {
+        strokeCol = '#f59e0b';
+        lineW = 3;
+      }
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.strokeStyle = strokeCol;
+      ctx.globalAlpha = isDown ? 0.55 : 0.85;
+      ctx.lineWidth = lineW;
+      if (isDown) ctx.setLineDash([6, 6]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Draw midpoint throughput pill badge
+      if (capBps > 0 || isDown) {
+        const mx = (x1 + x2) / 2;
+        const my = (y1 + y2) / 2;
+        let spdTxt = '0M';
+        if (peakBps >= 1e9) spdTxt = `${(peakBps / 1e9).toFixed(1)}G`;
+        else if (peakBps >= 1e6) spdTxt = `${(peakBps / 1e6).toFixed(0)}M`;
+        else if (peakBps >= 1e3) spdTxt = `${(peakBps / 1e3).toFixed(0)}K`;
+        const pillText = isDown ? 'DOWN' : `${spdTxt} (${utilPct.toFixed(0)}%)`;
+
+        ctx.globalAlpha = 0.95;
+        ctx.font = '600 10px IBM Plex Mono, monospace';
+        const tw = ctx.measureText(pillText).width + 10;
+        ctx.fillStyle = '#0f172a';
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(mx - tw / 2, my - 9, tw, 18, 4);
+        } else {
+          ctx.rect(mx - tw / 2, my - 9, tw, 18);
+        }
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = isDown ? '#f87171' : '#f8fafc';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(pillText, mx, my);
+      }
+      ctx.restore();
+    });
   }
 
   function drawZone(z) {

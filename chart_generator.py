@@ -51,6 +51,10 @@ def render_traffic_chart_image(data):
     avg_tx = data.get('avg_tx', 0.0)
     cur_rx = data.get('cur_rx', 0.0)
     cur_tx = data.get('cur_tx', 0.0)
+    p95_rx = data.get('p95_rx', 0.0)
+    p95_tx = data.get('p95_tx', 0.0)
+    total_rx_gb = data.get('total_rx_gb', 0.0)
+    total_tx_gb = data.get('total_tx_gb', 0.0)
     uplink_mbps = float(data.get('uplink_mbps') or 1000.0)
 
     # Bandwidth utilization percentages
@@ -97,6 +101,11 @@ def render_traffic_chart_image(data):
         ax.plot(dts, tx_vals, color=tx_color, linewidth=2.0, label='WAN OUT (Upload)', zorder=3)
         ax.fill_between(dts, tx_vals, color=tx_color, alpha=0.18, zorder=2)
 
+        # Plot Cacti-style 95th Percentile horizontal reference line
+        p95_max = max(p95_rx, p95_tx)
+        if p95_max > 0:
+            ax.axhline(y=p95_max, color="#f43f5e", linestyle="--", linewidth=1.4, alpha=0.9, label="95th Percentile", zorder=4)
+
         # Configure X-axis date locators and formatters
         if code == '1h':
             ax.xaxis.set_major_locator(mdates.MinuteLocator(byminute=range(0, 60, 10)))
@@ -130,11 +139,14 @@ def render_traffic_chart_image(data):
 
         ax.yaxis.set_major_formatter(FuncFormatter(y_fmt))
 
-        # Legend with statistics overview (throughput rate & bandwidth usage)
+        # Legend with statistics overview (throughput rate, 95th percentile & volume)
         legend_labels = [
-            f"WAN IN (Download)  • Cur: {cur_rx:.2f} Mbps ({cur_rx_pct:.1f}%) | Peak: {peak_rx:.2f} Mbps ({peak_rx_pct:.1f}%) | Avg: {avg_rx:.2f} Mbps",
-            f"WAN OUT (Upload)   • Cur: {cur_tx:.2f} Mbps ({cur_tx_pct:.1f}%) | Peak: {peak_tx:.2f} Mbps ({peak_tx_pct:.1f}%) | Avg: {avg_tx:.2f} Mbps"
+            f"WAN IN   • Cur: {cur_rx:.1f}M | Avg: {avg_rx:.1f}M | P95: {p95_rx:.1f}M | Peak: {peak_rx:.1f}M ({peak_rx_pct:.0f}%) | Vol: {total_rx_gb:.1f} GB",
+            f"WAN OUT  • Cur: {cur_tx:.1f}M | Avg: {avg_tx:.1f}M | P95: {p95_tx:.1f}M | Peak: {peak_tx:.1f}M ({peak_tx_pct:.0f}%) | Vol: {total_tx_gb:.1f} GB"
         ]
+        if max(p95_rx, p95_tx) > 0:
+            p95_pct = (max(p95_rx, p95_tx) / uplink_mbps * 100.0) if uplink_mbps > 0 else 0.0
+            legend_labels.append(f"95th Percentile (Cacti P95): {max(p95_rx, p95_tx):.2f} Mbps ({p95_pct:.1f}% kapasitas)")
         leg = ax.legend(labels=legend_labels, loc='upper left', frameon=True,
                         facecolor=bg_color, edgecolor=border_color,
                         labelcolor=text_color, fontsize=8.2)

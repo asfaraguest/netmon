@@ -134,6 +134,13 @@
             <label class="nm-label">Model</label>
             <input type="text" class="nm-input" id="dev-model" placeholder="e.g. C9300">
           </div>
+          <div class="col-md-12">
+            <label class="nm-label">Upstream / Parent Device (Zabbix Dependency)</label>
+            <select class="nm-select w-100" id="dev-parent">
+              <option value="">— Tidak ada (Root / Independen) —</option>
+            </select>
+            <small class="text-muted">Jika parent device sedang DOWN, notifikasi DOWN untuk perangkat ini akan ditahan agar grup NOC tidak kebanjiran alert, sekaligus digunakan untuk link peta Weathermap.</small>
+          </div>
           <div class="col-12"><hr class="nm-divider"><span class="nm-section-lbl">SNMP Settings</span></div>
           <div class="col-md-3">
             <label class="nm-label">SNMP Enabled</label>
@@ -538,6 +545,23 @@ function openDeviceModal(device = null) {
   document.getElementById('dev-port').value     = device?.snmp_port || 161;
   document.getElementById('dev-uplink-speed').value = device?.uplink_speed_mbps || 1000;
   document.getElementById('dev-desc').value     = device?.description || '';
+
+  // Populate Parent Device dropdown (exclude self to avoid circular dependency)
+  const parentSel = document.getElementById('dev-parent');
+  if (parentSel) {
+    parentSel.innerHTML = '<option value="">— Tidak ada (Root / Independen) —</option>';
+    const selfId = device?.id ? String(device.id) : null;
+    (allDevices || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).forEach(d => {
+      if (selfId && String(d.id) === selfId) return;
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = `${d.name || d.ip} (${d.ip}) [${d.type || 'unknown'}]`;
+      if (device && device.parent_device_id && String(device.parent_device_id) === String(d.id)) {
+        opt.selected = true;
+      }
+      parentSel.appendChild(opt);
+    });
+  }
   
   // Reset and populate the manual WAN interface dropdown
   const wanSelect = document.getElementById('dev-wan-iface');
@@ -606,7 +630,8 @@ function saveDevice() {
     uplink_speed_mbps: parseInt(document.getElementById('dev-uplink-speed').value) || 1000,
     description:    document.getElementById('dev-desc').value.trim(),
     wan_iface_idx:  document.getElementById('dev-wan-iface').value,
-    include_in_aggregate: document.getElementById('dev-include-aggregate').checked ? 1 : 0
+    include_in_aggregate: document.getElementById('dev-include-aggregate').checked ? 1 : 0,
+    parent_device_id: (document.getElementById('dev-parent')?.value || '') || null
   };
   const url    = id ? `/api/devices/${id}` : '/api/devices';
   const method = 'POST';

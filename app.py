@@ -1097,6 +1097,29 @@ def get_telegram_status():
         'chat_ids': telegram_bot.chat_ids
     })
 
+@app.route('/api/maintenance', methods=['GET', 'POST'])
+def api_maintenance():
+    """Zabbix-style Maintenance Window API (get status or mute/unmute alerts)."""
+    if request.method == 'GET':
+        g_active, g_until = db.is_device_in_maintenance(None)
+        with db.conn() as c:
+            rows = c.execute(
+                "SELECT id, name, ip, maintenance_until FROM devices WHERE maintenance_until IS NOT NULL AND maintenance_until > datetime('now', 'localtime')"
+            ).fetchall()
+        return jsonify({
+            'global_active': g_active,
+            'global_until': g_until,
+            'devices': [dict(r) for r in rows]
+        })
+    data = request.json or {}
+    target = data.get('target', 'all')
+    try:
+        minutes = int(data.get('minutes', 0))
+    except (ValueError, TypeError):
+        minutes = 0
+    until_str = db.set_maintenance_window(target, minutes)
+    return jsonify({'status': 'success', 'target': target, 'maintenance_until': until_str})
+
 @app.route('/api/settings/cleanup-anomalies', methods=['POST'])
 def cleanup_traffic_anomalies():
     """Bersihkan (nolkan) traffic historis di atas cap anomali saat ini.
