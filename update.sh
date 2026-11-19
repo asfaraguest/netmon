@@ -78,7 +78,17 @@ if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" && -f "$SCRIPT_DIR/netmon.db" && ! -f "$IN
   [[ -f "$SCRIPT_DIR/netmon.db-shm" ]] && cp -p "$SCRIPT_DIR/netmon.db-shm" "$INSTALL_DIR/netmon.db-shm" 2>/dev/null || true
 fi
 
-step "2. Database safety backup"
+step "2. Stopping running service before backup & update"
+if [[ $OS == "Linux" ]] && command -v systemctl &>/dev/null; then
+  if systemctl is-active --quiet netmon 2>/dev/null; then
+    info "Stopping NetMon service cleanly so SQLite DB has no active writers..."
+    systemctl stop netmon || true
+    sleep 1
+    success "Service stopped"
+  fi
+fi
+
+step "3. Database safety backup"
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
 
@@ -87,7 +97,7 @@ if [[ -f "$INSTALL_DIR/netmon.db" ]]; then
   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
   BACKUP_FILE="$BACKUP_DIR/netmon.db_${TIMESTAMP}"
   
-  # Checkpoint WAL if python/sqlite is available before copy to flush memory/journal to disk
+  # Checkpoint WAL while service is stopped to flush all transactions cleanly into netmon.db
   PY_CHECKPOINT=""
   if [[ -x "$INSTALL_DIR/venv/bin/python" ]]; then
     PY_CHECKPOINT="$INSTALL_DIR/venv/bin/python"
@@ -136,15 +146,6 @@ if os.path.exists(p):
   ls -tp "$BACKUP_DIR"/netmon.db_* 2>/dev/null | grep -v '/$' | tail -n +11 | xargs -I {} rm -f -- {} 2>/dev/null || true
 else
   info "No existing netmon.db found in $INSTALL_DIR (fresh install will generate one)."
-fi
-
-step "3. Stopping running service"
-if [[ $OS == "Linux" ]] && command -v systemctl &>/dev/null; then
-  if systemctl is-active --quiet netmon 2>/dev/null; then
-    info "Stopping NetMon service before updating application files..."
-    systemctl stop netmon || true
-    success "Service stopped"
-  fi
 fi
 
 step "4. Applying code updates"
