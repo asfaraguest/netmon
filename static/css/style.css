@@ -1,9 +1,7 @@
 ﻿/* ============================================================
-   NetMon â€“ Bauhaus & Retro-Modern Dark Theme
-   Premium Apple / macOS Typography with distinct primary accents.
+   TIKWatch – Enterprise NOC Theme System
+   Zero external font/CDN dependencies (LAN & offline resilient).
    ============================================================ */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;500;600;700&display=swap');
 
 :root {
   --bg-base:       #0b0f17; /* Modern Slate NOC canvas */

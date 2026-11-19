@@ -6,9 +6,14 @@ SQLite-based persistent storage
 
 import sqlite3
 import json
+import logging
 import os
+import secrets
 from datetime import datetime
 from contextlib import contextmanager
+from werkzeug.security import generate_password_hash, check_password_hash
+
+logger = logging.getLogger('netmon.database')
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB = os.path.join(BASE_DIR, 'netmon.db')
@@ -170,6 +175,23 @@ class Database:
                     FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS users (
+                    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username             TEXT UNIQUE NOT NULL,
+                    password_hash        TEXT NOT NULL,
+                    role                 TEXT DEFAULT 'viewer',
+                    display_name         TEXT DEFAULT '',
+                    must_change_password INTEGER DEFAULT 0,
+                    created_at           TEXT DEFAULT (datetime('now')),
+                    last_login           TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS poller_state (
+                    key        TEXT PRIMARY KEY,
+                    value      TEXT,
+                    updated_at TEXT DEFAULT (datetime('now'))
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_alerts_device ON alerts(device_id);
                 CREATE INDEX IF NOT EXISTS idx_access_logs_created ON access_logs(created_at DESC);
@@ -252,6 +274,7 @@ class Database:
                 'poll_interval': '30',
                 'groq_api_key': '',
                 'groq_model': 'llama-3.3-70b-versatile',
+                'groq_redact_ips': 'true',
                 'campus_total_bandwidth_mbps': '6000',
                 'alert_on_down': 'true',
                 'alert_on_up': 'true',
@@ -286,6 +309,22 @@ class Database:
             }
             for k, v in defaults.items():
                 c.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (k, v))
+
+            # Auto-generate strong cryptographic secrets if missing
+            c.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)',
+                      ('app_secret_key', secrets.token_hex(32)))
+            c.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)',
+                      ('internal_emit_token', secrets.token_hex(24)))
+
+            # Seed initial admin account if no users exist yet
+            user_cnt = c.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+            if user_cnt == 0:
+                init_pw = os.environ.get('NETMON_ADMIN_PASS', 'tikwatch2026')
+                c.execute('''
+                    INSERT INTO users (username, password_hash, role, display_name, must_change_password)
+                    VALUES (?, ?, 'admin', 'NOC Administrator', ?)
+                ''', ('admin', generate_password_hash(init_pw), 1 if init_pw == 'tikwatch2026' else 0))
+                print("[Auth] Initialized default admin account (username: admin). Please change password in Settings!")
 
             # Migrate old overly aggressive default settings to conservative non-spam defaults
             old_aggressive_defaults = {
@@ -490,6 +529,9 @@ class Database:
                    'cpu_usage', 'memory_usage', 'temperature', 'wan_in', 'wan_out',
                    'uplink_speed_mbps', 'alerts_enabled', 'wan_iface_idx', 'include_in_aggregate',
                    'latency_ms', 'packet_loss', 'parent_device_id', 'maintenance_until']
+        if 'snmp_community' in data and data['snmp_community'] in ('***', '', None):
+            data = dict(data)
+            data.pop('snmp_community', None)
         if 'parent_device_id' in data:
             pid = data['parent_device_id']
             try:
@@ -584,6 +626,100 @@ class Database:
             return val if val > 0 else 6000.0
         except Exception:
             return 6000.0
+
+    # ============================================================
+    # USER AUTHENTICATION & RBAC
+    # ============================================================
+
+    def authenticate_user(self, username, password):
+        if not username or not password:
+            return None
+        with self.conn() as c:
+            row = c.execute('SELECT * FROM users WHERE username = ?', (username.strip(),)).fetchone()
+            if row and check_password_hash(row['password_hash'], password):
+                c.execute('UPDATE users SET last_login = ? WHERE id = ?', (datetime.now().isoformat(), row['id']))
+                u = dict(row)
+                u.pop('password_hash', None)
+                return u
+        return None
+
+    def get_user(self, user_id):
+        with self.conn() as c:
+            row = c.execute(
+                'SELECT id, username, role, display_name, must_change_password, created_at, last_login FROM users WHERE id = ?',
+                (user_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_all_users(self):
+        with self.conn() as c:
+            rows = c.execute(
+                'SELECT id, username, role, display_name, must_change_password, created_at, last_login FROM users ORDER BY id ASC'
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def create_user(self, username, password, role='viewer', display_name=''):
+        uname = (username or '').strip()
+        if not uname or not password or len(password) < 6:
+            raise ValueError("Username wajib diisi dan password minimal 6 karakter.")
+        role_val = 'admin' if role == 'admin' else 'viewer'
+        with self.conn() as c:
+            cur = c.execute(
+                'INSERT INTO users (username, password_hash, role, display_name, must_change_password) VALUES (?, ?, ?, ?, 0)',
+                (uname, generate_password_hash(password), role_val, (display_name or uname).strip())
+            )
+            return cur.lastrowid
+
+    def update_user_password(self, user_id, new_password):
+        if not new_password or len(new_password) < 6:
+            raise ValueError("Password baru minimal 6 karakter.")
+        with self.conn() as c:
+            c.execute(
+                'UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
+                (generate_password_hash(new_password), int(user_id))
+            )
+
+    def delete_user(self, user_id):
+        with self.conn() as c:
+            admins = c.execute("SELECT COUNT(*) FROM users WHERE role = 'admin' AND id != ?", (int(user_id),)).fetchone()[0]
+            target = c.execute("SELECT role FROM users WHERE id = ?", (int(user_id),)).fetchone()
+            if target and target['role'] == 'admin' and admins == 0:
+                raise ValueError("Tidak dapat menghapus satu-satunya akun Admin.")
+            c.execute('DELETE FROM users WHERE id = ?', (int(user_id),))
+
+    # ============================================================
+    # POLLER STATE PERSISTENCE & LOG RETENTION
+    # ============================================================
+
+    def get_poller_state(self, key, default=None):
+        try:
+            with self.conn() as c:
+                row = c.execute('SELECT value FROM poller_state WHERE key = ?', (key,)).fetchone()
+                return json.loads(row['value']) if row and row['value'] else default
+        except Exception as e:
+            logger.warning(f"[DB] get_poller_state({key}) failed: {e}")
+            return default
+
+    def set_poller_state(self, key, value):
+        try:
+            with self.conn() as c:
+                c.execute(
+                    'INSERT OR REPLACE INTO poller_state (key, value, updated_at) VALUES (?, ?, ?)',
+                    (key, json.dumps(value), datetime.now().isoformat())
+                )
+        except Exception as e:
+            logger.warning(f"[DB] set_poller_state({key}) failed: {e}")
+
+    def cleanup_old_records(self, alert_days=30, log_days=90):
+        """Prune old acknowledged alerts and access logs periodically."""
+        try:
+            with self.conn() as c:
+                c.execute("DELETE FROM alerts WHERE acknowledged = 1 AND created_at < datetime('now', ? || ' days')",
+                          (f'-{int(alert_days)}',))
+                c.execute("DELETE FROM access_logs WHERE created_at < datetime('now', ? || ' days')",
+                          (f'-{int(log_days)}',))
+        except Exception as e:
+            logger.warning(f"[DB] cleanup_old_records failed: {e}")
 
     @staticmethod
     def calc_percentile(values, pct=95):

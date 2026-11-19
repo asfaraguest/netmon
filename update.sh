@@ -78,14 +78,16 @@ if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" && -f "$SCRIPT_DIR/netmon.db" && ! -f "$IN
   [[ -f "$SCRIPT_DIR/netmon.db-shm" ]] && cp -p "$SCRIPT_DIR/netmon.db-shm" "$INSTALL_DIR/netmon.db-shm" 2>/dev/null || true
 fi
 
-step "2. Stopping running service before backup & update"
+step "2. Stopping running services before backup & update"
 if [[ $OS == "Linux" ]] && command -v systemctl &>/dev/null; then
-  if systemctl is-active --quiet netmon 2>/dev/null; then
-    info "Stopping NetMon service cleanly so SQLite DB has no active writers..."
-    systemctl stop netmon || true
-    sleep 1
-    success "Service stopped"
-  fi
+  for svc in netmon-poller netmon; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+      info "Stopping $svc cleanly so SQLite DB has no active writers..."
+      systemctl stop "$svc" || true
+      success "$svc stopped"
+    fi
+  done
+  sleep 1
 fi
 
 step "3. Database safety backup"
@@ -232,13 +234,13 @@ if [[ $OS == "Linux" ]]; then
   success "Permissions configured for $SERVICE_USER"
 fi
 
-step "7. Ensuring systemd service unit"
+step "7. Ensuring systemd service units (Gunicorn Web + Dedicated Poller)"
 SERVICE_FILE="/etc/systemd/system/netmon.service"
+POLLER_SERVICE_FILE="/etc/systemd/system/netmon-poller.service"
 if [[ $OS == "Linux" ]] && command -v systemctl &>/dev/null; then
-  # Re-create / verify service file to prevent missing service issues
   cat > "$SERVICE_FILE" << SVCEOF
 [Unit]
-Description=NetMon Network Monitoring Application
+Description=TIKWatch Web Server (Gunicorn WSGI + SocketIO)
 After=network.target
 Wants=network-online.target
 
@@ -250,7 +252,7 @@ WorkingDirectory=${INSTALL_DIR}
 Environment="PATH=${INSTALL_DIR}/venv/bin"
 Environment="PORT=${PORT}"
 Environment="HOST=0.0.0.0"
-ExecStart=${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/app.py
+ExecStart=${INSTALL_DIR}/venv/bin/gunicorn --worker-class gthread --workers 1 --threads 16 --timeout 120 --bind 0.0.0.0:${PORT} app:app
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -263,25 +265,53 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 SVCEOF
 
+  cat > "$POLLER_SERVICE_FILE" << POLLEREOF
+[Unit]
+Description=TIKWatch Background SNMP Poller & Telegram Bot
+After=network.target netmon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
+WorkingDirectory=${INSTALL_DIR}
+Environment="PATH=${INSTALL_DIR}/venv/bin"
+Environment="PORT=${PORT}"
+ExecStart=${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/poller.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=netmon-poller
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+POLLEREOF
+
   systemctl daemon-reload
-  systemctl enable netmon 2>/dev/null || true
-  success "Service unit verified and enabled ($SERVICE_FILE)"
+  systemctl enable netmon netmon-poller 2>/dev/null || true
+  success "Service units verified and enabled ($SERVICE_FILE & $POLLER_SERVICE_FILE)"
 fi
 
-step "8. Restarting and verifying service"
+step "8. Restarting and verifying services"
 if [[ $OS == "Linux" ]] && command -v systemctl &>/dev/null; then
   systemctl restart netmon
+  systemctl restart netmon-poller
   sleep 2
 
-  if systemctl is-active --quiet netmon; then
-    success "NetMon service is RUNNING and active!"
+  if systemctl is-active --quiet netmon && systemctl is-active --quiet netmon-poller; then
+    success "TIKWatch Web (Gunicorn) & Poller services are RUNNING and active!"
   else
-    warn "NetMon service failed to start. Journal log preview:"
-    journalctl -u netmon -n 25 --no-pager || true
+    warn "One or more services failed to start. Journal log preview:"
+    journalctl -u netmon -n 20 --no-pager || true
+    journalctl -u netmon-poller -n 20 --no-pager || true
     echo ""
     if [[ -n "$BACKUP_FILE" && -f "$BACKUP_FILE" ]]; then
       warn "Pre-update database backup is safely available at: $BACKUP_FILE"
-      warn "To restore: sudo cp '$BACKUP_FILE' '$INSTALL_DIR/netmon.db' && sudo systemctl restart netmon"
+      warn "To restore: sudo cp '$BACKUP_FILE' '$INSTALL_DIR/netmon.db' && sudo systemctl restart netmon netmon-poller"
     fi
     error "Service restart failed. Check logs above."
   fi

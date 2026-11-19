@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — TIKWatch</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
+  <link href="/static/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+  <link href="/static/vendor/bootstrap-icons/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="/static/css/style.css" rel="stylesheet">
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+      background: var(--bg-base);
+    }
+    .login-card {
+      width: 100%;
+      max-width: 400px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px 28px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+    }
+    .login-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+  </style>
+</head>
+<body class="theme-{{ theme }}">
+<script>
+  if (localStorage.getItem('theme') !== 'dark') {
+    document.body.classList.add('light-theme');
+  }
+</script>
+<div class="login-card">
+  <div class="login-brand">
+    <img src="/static/img/polije-logo.svg" alt="Polije Logo" width="40" height="40">
+    <div>
+      <div style="font-size: 20px; font-weight: 800; letter-spacing: -0.4px; color: var(--text-primary);">
+        TIK<span class="text-accent">Watch</span>
+      </div>
+      <div style="font-size: 11px; color: var(--text-muted); font-weight: 500;">
+        Network Operations Center • UPT TIK Polije
+      </div>
+    </div>
+  </div>
+
+  {% if error %}
+  <div class="alert alert-danger py-2 px-3 text-xs mb-3" style="border-radius: var(--radius-sm);">
+    <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ error }}
+  </div>
+  {% endif %}
+
+  <form method="POST" action="/login">
+    <input type="hidden" name="next" value="{{ next_url or '/' }}">
+    <div class="mb-3">
+      <label class="nm-label" for="username">Username</label>
+      <input type="text" class="nm-input" id="username" name="username" required autofocus autocomplete="username" placeholder="Masukkan username">
+    </div>
+    <div class="mb-4">
+      <label class="nm-label" for="password">Password</label>
+      <input type="password" class="nm-input" id="password" name="password" required autocomplete="current-password" placeholder="Masukkan password">
+    </div>
+    <button type="submit" class="btn-nm btn-primary w-100 justify-content-center py-2 fw-600" style="font-size: 13.5px;">
+      <i class="bi bi-shield-lock-fill me-1"></i> Masuk ke Dashboard
+    </button>
+  </form>
+</div>
+</body>
+</html>

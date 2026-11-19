@@ -54,10 +54,11 @@ def format_bar(pct, length=10):
 class TelegramBot:
     """Manages Telegram Bot notifications and 2-way interactive polling."""
 
-    def __init__(self, db, socketio=None, snmp_worker=None):
+    def __init__(self, db, socketio=None, snmp_worker=None, start_polling=True):
         self.db = db
         self.socketio = socketio
         self.snmp_worker = snmp_worker
+        self.start_polling = start_polling
 
         self.bot_token = ""
         self.chat_ids = []
@@ -97,6 +98,8 @@ class TelegramBot:
         self.daily_digest_time = settings.get('telegram_daily_digest_time', '08:00').strip() or "08:00"
 
         if self.enabled and self.bot_token:
+            if not self.start_polling:
+                return
             if not self.is_running or not (self._poll_thread and self._poll_thread.is_alive()):
                 self.is_running = False
                 self.start()

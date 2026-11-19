@@ -1,6 +1,19 @@
 /* ============================================================
-   NetMon — main.js  (shared across all pages)
+   TIKWatch — main.js  (shared across all pages)
    ============================================================ */
+
+// Global 401 session-expiration guard for API fetches
+(() => {
+  const origFetch = window.fetch;
+  window.fetch = function(...args) {
+    return origFetch.apply(this, args).then(resp => {
+      if (resp.status === 401 && !window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+      }
+      return resp;
+    });
+  };
+})();
 
 // ---- Socket.IO setup ----
 const socket = io({ transports: ['polling', 'websocket'] });

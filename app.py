@@ -4,35 +4,204 @@ NetMon - Network Monitoring Application
 Automatic SNMP capture, floor plan alerting, zone management, real-time dashboard
 """
 
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect, url_for
 from flask_socketio import SocketIO, emit
 from apscheduler.schedulers.background import BackgroundScheduler
+import hmac
+import logging
 import threading
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import Database
 from snmp_worker import SNMPWorker
 from unifi_client import UniFiClient
 from telegram_bot import TelegramBot
 
+logger = logging.getLogger('netmon.web')
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'netmon-secret-2024-change-me')
+db = Database()
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or db.get_settings().get('app_secret_key') or os.urandom(32).hex()
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
+
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False)
 
-db = Database()
-telegram_bot = TelegramBot(db, socketio)
-snmp_worker = SNMPWorker(db, socketio, telegram_bot=telegram_bot)
+# Web process uses TelegramBot only for test_connection(); polling runs in dedicated poller.py daemon
+telegram_bot = TelegramBot(db, socketio, start_polling=False)
+snmp_worker = SNMPWorker(db, socketio, telegram_bot=None)
 telegram_bot.snmp_worker = snmp_worker
 scheduler = BackgroundScheduler(daemon=True)
+
+
+def _sanitize_device(d):
+    """Never expose SNMP community string in plaintext over HTTP/WebSocket APIs."""
+    if not isinstance(d, dict):
+        return d
+    out = dict(d)
+    if out.get('snmp_community'):
+        out['snmp_community'] = '***'
+    return out
+
+
+def _get_current_user():
+    uid = session.get('user_id')
+    if not uid:
+        return None
+    try:
+        return db.get_user(uid)
+    except Exception:
+        return None
+
+
+@app.before_request
+def enforce_auth_and_rbac():
+    path = request.path or '/'
+    if (
+        path.startswith('/static/')
+        or path.startswith('/socket.io/')
+        or path in ('/login', '/logout', '/health', '/internal/emit', '/metrics')
+    ):
+        return None
+
+    uid = session.get('user_id')
+    if not uid:
+        if path.startswith('/api/'):
+            return jsonify({'status': 'error', 'message': 'Authentication required'}), 401
+        return redirect(url_for('login_page', next=path))
+
+    # Admin RBAC enforcement for mutating & sensitive endpoints
+    if request.method in ('POST', 'PUT', 'DELETE'):
+        admin_prefixes = (
+            '/api/devices', '/api/zones', '/api/settings', '/api/maintenance',
+            '/api/scan', '/api/unifi', '/api/reports', '/api/users',
+            '/api/ai/test', '/api/telegram/test'
+        )
+        # Allow viewer only for non-destructive acknowledge or allow all admin routes strictly to admin
+        if any(path.startswith(p) for p in admin_prefixes):
+            # Self password change allowed for any authenticated user
+            if path == '/api/users/password':
+                return None
+            if session.get('role') != 'admin':
+                return jsonify({'status': 'error', 'message': 'Akses ditolak: butuh hak akses Admin'}), 403
+    return None
+
 
 @app.context_processor
 def inject_theme():
     try:
         settings = db.get_settings()
-        return {'theme': settings.get('theme', 'default')}
+        return {'theme': settings.get('theme', 'default'), 'current_user': _get_current_user()}
     except Exception:
-        return {'theme': 'default'}
+        return {'theme': 'default', 'current_user': None}
+
+
+# ============================================================
+# AUTHENTICATION, HEALTH & INTERNAL BRIDGE ROUTES
+# ============================================================
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_page():
+    if session.get('user_id'):
+        return redirect('/')
+    error = None
+    next_url = request.args.get('next') or request.form.get('next') or '/'
+    if not str(next_url).startswith('/') or str(next_url).startswith('//'):
+        next_url = '/'
+    if request.method == 'POST':
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password') or ''
+        user = db.authenticate_user(username, password)
+        if user:
+            session.permanent = True
+            session['user_id'] = user['id']
+            session['username'] = user['username']
+            session['role'] = user['role']
+            db.add_access_log({'source': request.remote_addr, 'message': f"User '{user['username']}' logged in", 'type': 'auth'})
+            return redirect(next_url)
+        error = 'Username atau password salah.'
+        db.add_access_log({'source': request.remote_addr, 'message': f"Failed login attempt for '{username}'", 'type': 'auth'})
+    return render_template('login.html', error=error, next_url=next_url)
+
+
+@app.route('/logout')
+def logout_page():
+    uname = session.get('username')
+    if uname:
+        db.add_access_log({'source': request.remote_addr, 'message': f"User '{uname}' logged out", 'type': 'auth'})
+    session.clear()
+    return redirect(url_for('login_page'))
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'ok', 'app': 'TIKWatch'})
+
+
+@app.route('/internal/emit', methods=['POST'])
+def internal_socket_emit():
+    """Local-only IPC endpoint so poller.py can push real-time Socket.IO events to Gunicorn."""
+    remote = request.remote_addr or ''
+    if remote not in ('127.0.0.1', '::1', '::ffff:127.0.0.1'):
+        return jsonify({'status': 'error', 'message': 'Forbidden'}), 403
+    expected = db.get_settings().get('internal_emit_token', '')
+    provided = request.headers.get('X-Internal-Token', '')
+    if not expected or not hmac.compare_digest(expected, provided):
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+    payload = request.json or {}
+    ev = payload.get('event')
+    if ev:
+        socketio.emit(ev, payload.get('data'))
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/users', methods=['GET', 'POST'])
+def api_users():
+    if request.method == 'GET':
+        if session.get('role') != 'admin':
+            u = _get_current_user()
+            return jsonify([u] if u else [])
+        return jsonify(db.get_all_users())
+    data = request.json or {}
+    try:
+        uid = db.create_user(
+            data.get('username'),
+            data.get('password'),
+            role=data.get('role', 'viewer'),
+            display_name=data.get('display_name', '')
+        )
+        return jsonify({'status': 'success', 'id': uid})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+
+@app.route('/api/users/<int:user_id>', methods=['DELETE'])
+def api_delete_user(user_id):
+    if int(user_id) == int(session.get('user_id', 0)):
+        return jsonify({'status': 'error', 'message': 'Tidak dapat menghapus akun yang sedang dipakai login.'}), 400
+    try:
+        db.delete_user(user_id)
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+
+@app.route('/api/users/password', methods=['POST'])
+def api_change_own_password():
+    data = request.json or {}
+    uid = session.get('user_id')
+    cur_pw = data.get('current_password') or ''
+    new_pw = data.get('new_password') or ''
+    user = db.get_user(uid)
+    if not user or not db.authenticate_user(user['username'], cur_pw):
+        return jsonify({'status': 'error', 'message': 'Password saat ini salah.'}), 400
+    try:
+        db.update_user_password(uid, new_pw)
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
 
 # ============================================================
 # PAGE ROUTES
@@ -79,7 +248,7 @@ def settings_page():
 
 @app.route('/api/devices', methods=['GET'])
 def get_devices():
-    return jsonify(db.get_all_devices())
+    return jsonify([_sanitize_device(d) for d in db.get_all_devices()])
 
 @app.route('/api/devices', methods=['POST'])
 def add_device():
@@ -88,7 +257,7 @@ def add_device():
     data['source'] = request.json.get('source', 'manual') if request.json else 'manual'
     try:
         device_id = db.add_device(data)
-        dev = db.get_device(device_id)
+        dev = _sanitize_device(db.get_device(device_id))
         socketio.emit('device_added', dev)
         return jsonify({'id': device_id, 'status': 'success'})
     except sqlite3.IntegrityError:
@@ -103,14 +272,15 @@ def get_device_type_counts():
 
 @app.route('/api/devices/<int:device_id>', methods=['GET'])
 def get_device(device_id):
-    return jsonify(db.get_device(device_id) or {})
+    dev = db.get_device(device_id)
+    return jsonify(_sanitize_device(dev) if dev else {})
 
 @app.route('/api/devices/<int:device_id>', methods=['PUT', 'POST'])
 def update_device(device_id):
     import sqlite3
     try:
         db.update_device(device_id, request.json)
-        dev = db.get_device(device_id)
+        dev = _sanitize_device(db.get_device(device_id))
         socketio.emit('device_updated', dev)
         return jsonify({'status': 'success'})
     except sqlite3.IntegrityError:
@@ -521,7 +691,13 @@ def get_dashboard_sparklines():
 
 @app.route('/metrics', methods=['GET'])
 def prometheus_metrics():
-    """Prometheus / OpenMetrics exporter endpoint for NetMon."""
+    """Prometheus / OpenMetrics exporter endpoint for TIKWatch (protected: localhost, session, or METRICS_TOKEN)."""
+    remote = request.remote_addr or ''
+    metrics_token = os.environ.get('METRICS_TOKEN', '')
+    auth_hdr = request.headers.get('Authorization', '')
+    has_bearer = bool(metrics_token and hmac.compare_digest(auth_hdr, f'Bearer {metrics_token}'))
+    if not session.get('user_id') and remote not in ('127.0.0.1', '::1', '::ffff:127.0.0.1') and not has_bearer:
+        return jsonify({'status': 'error', 'message': 'Authentication required for /metrics'}), 401
     devices = db.get_all_devices()
     zones = {z['id']: z['name'] for z in db.get_all_zones()}
     lines = []
@@ -1022,7 +1198,9 @@ def sync_unifi():
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
     s = db.get_settings()
-    # Never return password/key in plaintext
+    # Never expose internal cryptographic secrets or plaintext tokens
+    s.pop('app_secret_key', None)
+    s.pop('internal_emit_token', None)
     if 'unifi_pass' in s:
         s['unifi_pass'] = '***' if s['unifi_pass'] else ''
     if 'groq_api_key' in s:
@@ -1034,7 +1212,9 @@ def get_settings():
 @app.route('/api/settings', methods=['POST'])
 def save_settings():
     data = request.json or {}
-    # Don't save masked password/key
+    # Protect internal cryptographic keys and masked secrets
+    data.pop('app_secret_key', None)
+    data.pop('internal_emit_token', None)
     if data.get('unifi_pass') == '***':
         data.pop('unifi_pass')
     if data.get('groq_api_key') == '***':
@@ -1088,13 +1268,21 @@ def test_telegram():
 
 @app.route('/api/telegram/status', methods=['GET'])
 def get_telegram_status():
+    live = db.get_poller_state('telegram_status')
+    if isinstance(live, dict) and live:
+        return jsonify({
+            'enabled': live.get('enabled', False),
+            'running': live.get('running', False),
+            'bot_username': live.get('bot_username'),
+            'bot_name': live.get('bot_name'),
+            'chat_count': live.get('chat_count', 0),
+        })
     return jsonify({
         'enabled': telegram_bot.enabled,
         'running': telegram_bot.is_running,
         'bot_username': telegram_bot.bot_info.get('username'),
         'bot_name': telegram_bot.bot_info.get('first_name'),
         'chat_count': len(telegram_bot.chat_ids),
-        'chat_ids': telegram_bot.chat_ids
     })
 
 @app.route('/api/maintenance', methods=['GET', 'POST'])
@@ -1241,8 +1429,10 @@ def get_network_traffic_history():
 
 @socketio.on('connect')
 def handle_connect():
+    if not session.get('user_id'):
+        return False
     emit('init_data', {
-        'devices': db.get_all_devices(),
+        'devices': [_sanitize_device(d) for d in db.get_all_devices()],
         'zones': db.get_all_zones(),
         'stats': db.get_dashboard_stats(),
         'alerts': db.get_alerts(limit=25),
@@ -1337,12 +1527,16 @@ def poll_traffic():
                 except Exception as e:
                     print(f"[Traffic] Parallel traffic collection failed: {e}")
 
-    # Cleanup data lama (simpan 30 hari = 720 jam terakhir secara default)
+def run_hourly_cleanup():
     try:
         settings = db.get_settings()
         db.cleanup_interface_traffic(
             interface_retention_hours=int(settings.get('interface_chart_retention_hours', 168)),
             metrics_retention_hours=int(settings.get('report_metrics_retention_hours', 1440))
+        )
+        db.cleanup_old_records(
+            alert_days=int(settings.get('alert_retention_days', 30)),
+            log_days=int(settings.get('log_retention_days', 90))
         )
     except Exception as e:
         print(f"[Cleanup] {e}")
@@ -1386,6 +1580,7 @@ if __name__ == '__main__':
     traffic_poll_interval = max(5, int(settings.get('traffic_poll_interval', 10)))
     scheduler.add_job(poll_device_status, 'interval', seconds=poll_interval, id='snmp_poll', max_instances=1)
     scheduler.add_job(poll_traffic, 'interval', seconds=traffic_poll_interval, id='traffic_poll', max_instances=1)
+    scheduler.add_job(run_hourly_cleanup, 'interval', minutes=60, id='hourly_cleanup', max_instances=1)
     # Automatically generate monthly report at 23:50 on the last day of the month before oldest data prunes
     scheduler.add_job(run_monthly_report_cron, 'cron', day='last', hour=23, minute=50, id='monthly_report_cron')
     scheduler.add_job(run_weekly_vacuum, 'cron', day_of_week='sun', hour=3, minute=0, id='weekly_vacuum')

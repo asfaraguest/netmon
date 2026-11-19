@@ -110,6 +110,60 @@ class SNMPWorker:
         self._iface_flap_history = {}
         self._iface_err_prev = {}
         self._last_iface_alert = {}
+        self._restore_poller_state()
+
+    def _restore_poller_state(self):
+        """Warm up rolling metric baselines from recent DB records so restarts don't wipe anomaly state."""
+        try:
+            with self.db.conn() as c:
+                rows = c.execute('''
+                    SELECT device_id, metric_name, metric_value, timestamp
+                    FROM snmp_metrics
+                    WHERE metric_name IN ('cpu_usage', 'memory_usage', 'wan_in', 'wan_out')
+                      AND timestamp >= datetime('now', '-10 minutes')
+                    ORDER BY timestamp ASC
+                ''').fetchall()
+            from collections import defaultdict
+            by_dev = defaultdict(list)
+            for r in rows:
+                by_dev[r['device_id']].append(r)
+            for did, mrows in by_dev.items():
+                buckets = {}
+                for mr in mrows:
+                    ts_key = str(mr['timestamp'])[:17]
+                    b = buckets.setdefault(ts_key, {'ts': time.time(), 'cpu': None, 'mem': None, 'traffic_bps': 0.0})
+                    try:
+                        val = float(mr['metric_value'])
+                    except (ValueError, TypeError):
+                        continue
+                    if mr['metric_name'] == 'cpu_usage':
+                        b['cpu'] = val
+                    elif mr['metric_name'] == 'memory_usage':
+                        b['mem'] = val
+                    elif mr['metric_name'] in ('wan_in', 'wan_out'):
+                        b['traffic_bps'] = max(b['traffic_bps'], val)
+                self._metric_history[did] = list(buckets.values())[-8:]
+
+            saved_flap = self.db.get_poller_state('iface_flap_history')
+            if isinstance(saved_flap, dict):
+                now_ts = time.time()
+                for k_str, v in saved_flap.items():
+                    parts = k_str.split(':', 1)
+                    if len(parts) == 2 and isinstance(v, dict):
+                        changes = [ts for ts in v.get('changes', []) if (now_ts - ts) <= 900]
+                        self._iface_flap_history[(int(parts[0]), parts[1])] = {
+                            'state': v.get('state', 'up'),
+                            'changes': changes
+                        }
+        except Exception as e:
+            print(f"[SNMPWorker] State warmup skipped: {e}")
+
+    def _persist_flap_state(self):
+        try:
+            serializable = {f"{k[0]}:{k[1]}": v for k, v in self._iface_flap_history.items() if v.get('changes')}
+            self.db.set_poller_state('iface_flap_history', serializable)
+        except Exception as e:
+            print(f"[SNMPWorker] Persist flap state error: {e}")
 
     def get_scan_status(self): return dict(self._status)
     def stop_scan(self):       self._stop.set()
@@ -1917,12 +1971,15 @@ class SNMPWorker:
                 if fentry['state'] != cur_state:
                     changes.append(now_ts)
                     fentry['state'] = cur_state
+                    fentry['changes'] = changes
+                    self._persist_flap_state()
                     if len(changes) >= 3:
                         last_f_ts = self._last_iface_alert.get(('flap', did, idx), 0)
                         if now_ts - last_f_ts >= 900:
                             self._last_iface_alert[('flap', did, idx)] = now_ts
                             flapping.append(f"{name} ({len(changes)}x)")
-                fentry['changes'] = changes
+                else:
+                    fentry['changes'] = changes
 
             if is_down:
                 down.append(name)

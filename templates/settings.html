@@ -186,6 +186,13 @@
           </select>
           <small class="text-muted">Model AI yang dipakai Web Dashboard &amp; Bot Telegram.</small>
         </div>
+        <div class="col-12">
+          <label class="nm-label">Privasi Telemetri Cloud AI</label>
+          <div class="nm-toggle-wrap">
+            <label class="nm-toggle"><input type="checkbox" id="s-groq-redact" checked><span class="nm-slider"></span></label>
+            <span>Samarkan IP internal kampus (RFC1918) sebelum dikirim ke Groq Cloud API</span>
+          </div>
+        </div>
       </div>
       <div id="groq-test-result" class="mt-2"></div>
     </div>
@@ -304,6 +311,51 @@
     </div>
   </div>
 
+  <!-- ============ SECURITY & USERS ============ -->
+  <div class="nm-panel">
+    <div class="panel-header"><span><i class="bi bi-shield-lock-fill me-2 text-accent"></i>Security &amp; User Accounts</span></div>
+    <div class="panel-body">
+      <div class="row g-3 mb-3">
+        <div class="col-md-4">
+          <label class="nm-label">Password Saat Ini</label>
+          <input type="password" class="nm-input" id="pw-current" placeholder="Password saat ini">
+        </div>
+        <div class="col-md-4">
+          <label class="nm-label">Password Baru (min. 6 karakter)</label>
+          <input type="password" class="nm-input" id="pw-new" placeholder="Password baru">
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+          <button type="button" class="btn-nm btn-primary w-100 justify-content-center" onclick="changeOwnPassword()">
+            <i class="bi bi-key-fill me-1"></i>Ubah Password Saya
+          </button>
+        </div>
+      </div>
+      {% if current_user and current_user.role == 'admin' %}
+      <hr class="nm-divider">
+      <div class="row g-2 mb-3">
+        <div class="col-md-3">
+          <input type="text" class="nm-input" id="nu-username" placeholder="Username baru">
+        </div>
+        <div class="col-md-3">
+          <input type="password" class="nm-input" id="nu-password" placeholder="Password (min. 6)">
+        </div>
+        <div class="col-md-3">
+          <select class="nm-select w-100" id="nu-role">
+            <option value="viewer">Viewer (Read-Only)</option>
+            <option value="admin">Admin (Full Access)</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <button type="button" class="btn-nm btn-success w-100 justify-content-center" onclick="createUserAccount()">
+            <i class="bi bi-person-plus-fill me-1"></i>Tambah Akun
+          </button>
+        </div>
+      </div>
+      <div id="users-list" class="text-xs">Loading…</div>
+      {% endif %}
+    </div>
+  </div>
+
   <!-- ============ APP INFO ============ -->
   <div class="nm-panel about-panel">
     <div class="panel-header"><span><i class="bi bi-info-circle-fill me-2 text-accent"></i>About</span></div>
@@ -385,6 +437,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
   loadZones();
   loadAbout();
+  loadUsers();
 });
 
 function loadSettings() {
@@ -408,6 +461,7 @@ function loadSettings() {
     setVal('s-mem-thresh', s.memory_spike_threshold || 95);
     setVal('s-groq-key',   s.groq_api_key || '');
     setVal('s-groq-model', s.groq_model || 'llama-3.3-70b-versatile');
+    setChk('s-groq-redact', s.groq_redact_ips !== 'false');
     setChk('s-tg-enabled', s.telegram_enabled === 'true');
     setVal('s-tg-token',   s.telegram_bot_token || '');
     setVal('s-tg-chats',   s.telegram_chat_ids || '');
@@ -523,6 +577,7 @@ function saveAll() {
     anomaly_cap_gbps: getVal('s-anom-cap'),
     campus_total_bandwidth_mbps: getVal('s-campus-bw') || '6000',
     groq_model: getVal('s-groq-model') || 'llama-3.3-70b-versatile',
+    groq_redact_ips: document.getElementById('s-groq-redact')?.checked ? 'true' : 'false',
     alert_on_down:        document.getElementById('s-alert-down').checked ? 'true' : 'false',
     alert_on_up:          document.getElementById('s-alert-up').checked   ? 'true' : 'false',
     anomaly_alert_enabled: document.getElementById('s-anom-alert').checked ? 'true' : 'false',
@@ -701,6 +756,95 @@ function setPColor(c) { document.getElementById('zone-color').value = c; }
 function confirmPurge() {
   showConfirm('Purge Logs', 'Purge all acknowledged alerts and logs older than retention period?', () => {
     showToast('Purge completed (restart app to run cleanup)', 'info');
+  });
+}
+
+function loadUsers() {
+  const el = document.getElementById('users-list');
+  if (!el) return;
+  fetch('/api/users').then(r => r.json()).then(users => {
+    if (!Array.isArray(users) || !users.length) {
+      el.innerHTML = '<div class="text-muted">Tidak ada user.</div>';
+      return;
+    }
+    el.innerHTML = `
+      <table class="nm-table">
+        <thead><tr><th>Username</th><th>Role</th><th>Last Login</th><th>Actions</th></tr></thead>
+        <tbody>
+          ${users.map(u => `
+            <tr>
+              <td class="fw-600">${esc(u.username)}</td>
+              <td><span class="badge ${u.role === 'admin' ? 'bg-primary' : 'bg-secondary'}">${esc(u.role)}</span></td>
+              <td class="mono-sm text-muted">${u.last_login ? esc(u.last_login.slice(0, 19).replace('T', ' ')) : '—'}</td>
+              <td>
+                <button class="btn-icon danger" onclick="deleteUserAccount(${u.id}, '${esc(u.username)}')" title="Hapus User">
+                  <i class="bi bi-trash3"></i>
+                </button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }).catch(() => {});
+}
+
+function changeOwnPassword() {
+  const current_password = getVal('pw-current');
+  const new_password = getVal('pw-new');
+  if (!current_password || !new_password) {
+    showToast('Isi password saat ini dan password baru', 'warning');
+    return;
+  }
+  fetch('/api/users/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ current_password, new_password })
+  }).then(r => r.json()).then(res => {
+    if (res.status === 'success') {
+      document.getElementById('pw-current').value = '';
+      document.getElementById('pw-new').value = '';
+      showToast('Password berhasil diperbarui!', 'success');
+    } else {
+      showToast(res.message || 'Gagal ubah password', 'danger');
+    }
+  });
+}
+
+function createUserAccount() {
+  const username = getVal('nu-username').trim();
+  const password = getVal('nu-password');
+  const role = getVal('nu-role');
+  if (!username || !password) {
+    showToast('Username dan password wajib diisi', 'warning');
+    return;
+  }
+  fetch('/api/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, role })
+  }).then(r => r.json()).then(res => {
+    if (res.status === 'success') {
+      document.getElementById('nu-username').value = '';
+      document.getElementById('nu-password').value = '';
+      loadUsers();
+      showToast(`User ${username} berhasil dibuat`, 'success');
+    } else {
+      showToast(res.message || 'Gagal membuat user', 'danger');
+    }
+  });
+}
+
+function deleteUserAccount(id, uname) {
+  showConfirm('Hapus User', `Hapus akun "${uname}"?`, () => {
+    fetch(`/api/users/${id}`, { method: 'DELETE' }).then(r => r.json()).then(res => {
+      if (res.status === 'success') {
+        loadUsers();
+        showToast('User dihapus', 'info');
+      } else {
+        showToast(res.message || 'Gagal menghapus user', 'danger');
+      }
+    });
   });
 }
 

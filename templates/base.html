@@ -5,9 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Dashboard{% endblock %} — TIKWatch</title>
   <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="/static/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+  <link href="/static/vendor/bootstrap-icons/bootstrap-icons.min.css" rel="stylesheet">
   <link href="/static/css/style.css" rel="stylesheet">
 </head>
 <body class="theme-{{ theme }}">
@@ -92,6 +91,16 @@
     <div class="sidebar-conn" id="sb-conn">
       <i class="bi bi-wifi-off text-danger"></i> Connecting…
     </div>
+    {% if current_user %}
+    <div class="status-row mt-2 pt-2 border-top" style="border-color: var(--border) !important; font-size: 11px;">
+      <span class="slabel text-truncate" title="{{ current_user.username }} ({{ current_user.role }})">
+        <i class="bi bi-person-circle me-1 text-accent"></i>{{ current_user.username }}
+      </span>
+      <a href="/logout" class="btn btn-sm btn-outline-danger ms-auto p-0 px-2 d-flex align-items-center gap-1" style="font-size: 10.5px; height: 22px; border-radius: var(--radius-sm); text-decoration: none;" title="Logout">
+        <i class="bi bi-box-arrow-right"></i> Out
+      </a>
+    </div>
+    {% endif %}
   </div>
 </aside>
 
@@ -393,9 +402,9 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="/static/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="/static/vendor/socket.io/socket.io.min.js"></script>
+<script src="/static/vendor/chart.js/chart.umd.min.js"></script>
 <script src="/static/js/main.js"></script>
 {% block scripts %}{% endblock %}
 </body>

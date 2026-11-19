@@ -1,4 +1,5 @@
 import json
+import re
 import urllib.request
 import threading
 import subprocess
@@ -412,6 +413,34 @@ def build_noc_telemetry_context(db, device=None, alert=None):
     return ctx
 
 
+def _redact_ips(text):
+    """Mask internal IPv4 addresses before sending telemetry to external Groq Cloud API."""
+    ip_map = {}
+    rev_map = {}
+    counter = [0]
+    pattern = re.compile(r'\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b')
+
+    def _repl(match):
+        ip = match.group(0)
+        if ip not in rev_map:
+            counter[0] += 1
+            alias = f"[HOST-IP-{counter[0]}]"
+            rev_map[ip] = alias
+            ip_map[alias] = ip
+        return rev_map[ip]
+
+    redacted = pattern.sub(_repl, text)
+    return redacted, ip_map
+
+
+def _restore_ips(text, ip_map):
+    """Restore masked IP placeholders back to real internal IPs locally."""
+    out = text
+    for alias, real_ip in ip_map.items():
+        out = out.replace(alias, real_ip)
+    return out
+
+
 def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
     """Query Groq LLM with live TIKWatch telemetry context. Returns (ok: bool, answer: str)."""
     api_key, model_name = get_groq_config(db)
@@ -421,20 +450,29 @@ def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
             "Masukkan API Key di Web Dashboard: <b>Settings &gt; AI False Warning Detector &gt; Groq API Key</b>."
         )
 
+    settings = db.get_settings()
+    redact_ips = settings.get('groq_redact_ips', 'true').lower() == 'true'
+    campus_bw_gbps = db.get_campus_total_bandwidth_mbps() / 1000.0
+
     ctx = build_noc_telemetry_context(db, device=device, alert=alert)
     system_prompt = (
         "Kamu adalah asisten AI NOC senior untuk sistem monitoring jaringan TIKWatch "
         "di UPT TIK Politeknik Negeri Jember (POLIJE). "
-        "Kapasitas total seluruh ISP kampus utama adalah 6 Gbps (6000 Mbps). "
+        f"Kapasitas total seluruh ISP kampus utama adalah {campus_bw_gbps:.1f} Gbps. "
         "Jawablah dalam bahasa Indonesia yang ringkas, teknis, terstruktur, dan akurat. "
-        "HANYA gunakan angka, IP, nama router, dan metrik dari JSON telemetri live yang diberikan; "
+        "HANYA gunakan angka, IP/alias host, nama router, dan metrik dari JSON telemetri live yang diberikan; "
         "jika suatu data tidak tersedia di JSON, katakan tidak tersedia (jangan mengarang). "
         "Berikan langkah troubleshooting nyata (termasuk perintah MikroTik RouterOS jika relevan)."
     )
-    user_prompt = (
+    raw_user_prompt = (
         f"Permintaan/Pertanyaan Operator NOC:\n{user_question}\n\n"
         f"Data Telemetri Live TIKWatch (JSON):\n{json.dumps(ctx, ensure_ascii=False)}"
     )
+    ip_map = {}
+    if redact_ips:
+        user_prompt, ip_map = _redact_ips(raw_user_prompt)
+    else:
+        user_prompt = raw_user_prompt
 
     try:
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -457,6 +495,8 @@ def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
         with urllib.request.urlopen(req, timeout=18) as response:
             res_data = json.loads(response.read().decode('utf-8'))
             answer = res_data['choices'][0]['message']['content'].strip()
+            if ip_map:
+                answer = _restore_ips(answer, ip_map)
             return True, answer
     except urllib.error.HTTPError as he:
         try:
