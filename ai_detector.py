@@ -204,6 +204,7 @@ def _refine_with_groq(db, socketio, alert, device, alert_id, initial_is_false, i
 
         final_is_false = int(ai_res.get('is_false_alarm', initial_is_false))
         final_explanation = ai_res.get('explanation', initial_explanation)
+        print(f"[AI Refinement] Alert #{alert_id} refined by {provider} ({model_name}): is_false={final_is_false}")
 
         # Update DB with refined AI insight
         with db.conn() as c:
@@ -367,13 +368,36 @@ def _call_llm_completion(provider, api_key, model_name, system_prompt, user_prom
         return res_data['choices'][0]['message']['content'].strip()
 
 
-def get_groq_config(db):
-    """Return (api_key, resolved_model_name) from database settings."""
+def get_active_ai_info(db):
+    """Return dictionary of active AI provider status, model, and display labels."""
     try:
-        api_key, _, model = _resolve_ai_creds(db)
-        return api_key, model
+        api_key, provider, model = _resolve_ai_creds(db)
+        settings = db.get_settings()
+        redact = settings.get('groq_redact_ips', 'true').lower() == 'true'
+        label = "Google AI Studio" if provider == 'google' else "Groq Cloud"
+        return {
+            'configured': bool(api_key),
+            'provider': provider,
+            'provider_label': label,
+            'model': model,
+            'api_key': api_key,
+            'redact_ips': redact,
+        }
     except Exception:
-        return '', 'llama-3.3-70b-versatile'
+        return {
+            'configured': False,
+            'provider': 'groq',
+            'provider_label': 'Groq Cloud',
+            'model': 'llama-3.3-70b-versatile',
+            'api_key': '',
+            'redact_ips': True,
+        }
+
+
+def get_groq_config(db):
+    """Legacy helper returning (api_key, resolved_model_name)."""
+    info = get_active_ai_info(db)
+    return info['api_key'], info['model']
 
 
 def build_noc_telemetry_context(db, device=None, alert=None):
@@ -401,6 +425,16 @@ def build_noc_telemetry_context(db, device=None, alert=None):
             'backbone_wan_out_mbps': tot_out_mbps,
             'backbone_utilization_pct': peak_util_pct,
         }
+
+        # Include configured active ISPs breakdown if present
+        try:
+            isp_list_raw = db.get_settings().get('campus_isp_list', '[]')
+            isps = json.loads(isp_list_raw)
+            active_isps = [isp for isp in isps if isp.get('enabled')]
+            if active_isps:
+                ctx['campus_summary']['active_isps'] = active_isps
+        except Exception:
+            pass
 
         all_devs = db.get_all_devices()
         ctx['down_or_warning_devices'] = [
@@ -514,29 +548,32 @@ def _restore_ips(text, ip_map):
 
 
 def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
-    """Query configured LLM (Groq or Google AI Studio) with live TIKWatch telemetry context."""
-    api_key, provider, model_name = _resolve_ai_creds(db)
-    provider_label = "Google AI Studio" if provider == 'google' else "Groq"
+    """Query configured LLM (Google AI Studio or Groq) with live TIKWatch telemetry context."""
+    info = get_active_ai_info(db)
+    api_key = info['api_key']
+    provider = info['provider']
+    model_name = info['model']
+    provider_label = info['provider_label']
+
     if not api_key:
         return False, (
             "⚠️ AI API Key belum dikonfigurasi. "
-            "Masukkan API Key Groq atau Google AI Studio di Web Dashboard: "
-            "<b>Settings &gt; AI False Warning Detector</b>."
+            "Masukkan API Key Google AI Studio atau Groq di Web Dashboard: "
+            "<b>Settings &gt; AI &amp; Telegram</b>."
         )
 
-    settings = db.get_settings()
-    redact_ips = settings.get('groq_redact_ips', 'true').lower() == 'true'
+    redact_ips = info['redact_ips']
     campus_bw_gbps = db.get_campus_total_bandwidth_mbps() / 1000.0
 
     ctx = build_noc_telemetry_context(db, device=device, alert=alert)
     system_prompt = (
-        "Kamu adalah asisten AI NOC senior untuk sistem monitoring jaringan TIKWatch "
-        "di UPT TIK Politeknik Negeri Jember (POLIJE). "
-        f"Kapasitas total seluruh ISP kampus utama adalah {campus_bw_gbps:.1f} Gbps. "
-        "Jawablah dalam bahasa Indonesia yang ringkas, teknis, terstruktur, dan akurat. "
-        "HANYA gunakan angka, IP/alias host, nama router, dan metrik dari JSON telemetri live yang diberikan; "
-        "jika suatu data tidak tersedia di JSON, katakan tidak tersedia (jangan mengarang). "
-        "Berikan langkah troubleshooting nyata (termasuk perintah MikroTik RouterOS jika relevan)."
+        "Kamu adalah Asisten AI Senior NOC TIKWatch di UPT TIK Politeknik Negeri Jember (POLIJE). "
+        f"Kapasitas bandwidth uplink seluruh ISP kampus utama adalah {campus_bw_gbps:.1f} Gbps. "
+        "Aturan Format & Respons:\n"
+        "1. Jawab dalam Bahasa Indonesia teknis yang ringkas, padat, dan solutif (maksimal 250-300 kata).\n"
+        "2. Format Telegram-friendly: gunakan bullet points (•) untuk daftar poin, cetak tebal (bold) untuk metrik atau nama perangkat, dan backtick (`) untuk perintah RouterOS atau nama interface. DILARANG menggunakan markdown table atau markdown heading pagar (#).\n"
+        "3. HANYA gunakan angka, IP, nama router, dan data dari JSON telemetri live yang disertakan; jangan mengarang data.\n"
+        "4. Berikan diagnosa root cause dan rekomendasi perbaikan/perintah RouterOS yang dapat langsung dieksekusi teknisi."
     )
     raw_user_prompt = (
         f"Permintaan/Pertanyaan Operator NOC:\n{user_question}\n\n"
@@ -572,4 +609,9 @@ def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
             msg = str(he)
         return False, f"⚠️ {provider_label} API Error ({model_name}): {msg}"
     except Exception as e:
-        return False, f"⚠️ Gagal menghubungi {provider_label} AI: {e}"
+        return False, f"⚠️ Gagal menghubungi {provider_label} AI ({model_name}): {e}"
+
+
+# Aliases for consistent naming across application
+ask_ai_noc = ask_groq_noc
+_refine_with_ai = _refine_with_groq

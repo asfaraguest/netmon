@@ -204,3 +204,16 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
     - **Selected Router BARU Menampilkan Active Ports (`/traffic <router>`):**
       - Menambahkan parameter `active_only=True` pada `get_latest_device_interface_traffic()` di `database.py` yang menyaring interface sehingga HANYA port dengan traffic aktif (`rx_bps + tx_bps > 0`) yang dimunculkan.
       - Saat pengguna memilih router tertentu via `/traffic <nama>` atau picker, bot menampilkan ringkasan performa Uplink WAN di atas, kemudian menyajikan rincian **Active Ports** yang sedang mengalirkan traffic, lengkap dengan penanda `[Uplink WAN]` pada port uplink-nya. Port idle/dormant (0 bps) otomatis disembunyikan.
+
+19. **Penyelarasan Dinamis Provider AI Aktif (Google AI Studio vs Groq Cloud) & Optimasi Perintah AI Telegram:**
+    - **Resolusi Dinamis Provider AI Aktif (`ai_detector.py`):**
+      - Menambahkan fungsi publik `get_active_ai_info(db)` yang mengembalikan status konfigurasi, provider aktif (`Google AI Studio` vs `Groq Cloud`), nama model riil (`gemini-flash-lite-latest` atau `llama-3.3-70b-versatile`), serta pengaturan privasi masking IP.
+      - Menyelaraskan modul `database.py` (`_filter_spikes_with_ai`) agar tidak lagi hardcoded ke endpoint Groq, melainkan menggunakan `_call_llm_completion` yang secara otomatis mendukung Google AI Studio maupun Groq Cloud saat filter outlier traffic bulanan.
+      - Menambahkan rincian alokasi multi-ISP kampus ke dalam telemetri snapshot (`build_noc_telemetry_context`).
+    - **Pembersihan String Hardcoded & Tampilan Engine Dinamis (`telegram_bot.py`):**
+      - Menghapus seluruh teks hardcoded "Groq" pada pesan callback query (`ai_alert:`, `ai_dev:`), menu `/help`, pengantar perintah `/ai`, dan Daily Digest.
+      - Pesan progress dan respons AI kini secara dinamis menampilkan badge engine aktif, contoh: `Google AI Studio • gemini-flash-lite-latest` atau `Groq Cloud • llama-3.3-70b-versatile`.
+      - Perintah `/help`, `/ai`, dan Daily Digest kini menampilkan kapasitas total multi-ISP kampus secara dinamis (mengacu pada total kapasitas ISP yang dikonfigurasi).
+    - **Optimasi Formatting & Prompt AI Telegram:**
+      - Mengoptimalkan converter Markdown-to-Telegram HTML (`_format_ai_html`) dengan memproteksi blok kode (`<pre><code>`), inline code (`<code>`), konversi heading `#` ke `<b>`, formatting bold, dan penataan daftar poin `•` tanpa menyebabkan parse error pada Telegram Bot API.
+      - Memperketat `system_prompt` pada `ask_groq_noc` / `ask_ai_noc` agar jawaban AI padat, teknis, solutif (di bawah 300 kata), langsung to-the-point untuk operator NOC, dan menyertakan perintah RouterOS yang tepat.

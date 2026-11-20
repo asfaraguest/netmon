@@ -718,11 +718,15 @@ class TelegramBot:
                     self.send_message(chat_id, f"🔔 <b>Maintenance Mode Dimatikan</b> untuk ID/Target <code>{m_target}</code>.")
             elif action.startswith("ai_alert:"):
                 aid = action.split(":", 1)[1]
-                self.answer_callback_query(cq_id, text="🤖 Menganalisa alert dengan Groq AI...")
+                import ai_detector
+                p_label = ai_detector.get_active_ai_info(self.db)['provider_label']
+                self.answer_callback_query(cq_id, text=f"🤖 Menganalisa alert ({p_label})...")
                 threading.Thread(target=self._run_ai_alert_analysis, args=(chat_id, aid), daemon=True).start()
             elif action.startswith("ai_dev:"):
                 did = action.split(":", 1)[1]
-                self.answer_callback_query(cq_id, text="🤖 Menganalisa perangkat dengan Groq AI...")
+                import ai_detector
+                p_label = ai_detector.get_active_ai_info(self.db)['provider_label']
+                self.answer_callback_query(cq_id, text=f"🤖 Menganalisa perangkat ({p_label})...")
                 self._cmd_diagnosa(chat_id, [did])
 
     def _run_poll_and_notify(self, chat_id, device):
@@ -748,6 +752,12 @@ class TelegramBot:
     # ─── Bot Commands ────────────────────────────────────────────────
 
     def _cmd_help(self, chat_id, name):
+        import ai_detector
+        ai_info = ai_detector.get_active_ai_info(self.db)
+        ai_tag = f"{ai_info['provider_label']} • {ai_info['model']}" if ai_info['configured'] else "Belum Dikonfigurasi"
+        campus_bw = self.db.get_campus_total_bandwidth_mbps() / 1000.0
+        bw_label = f"{campus_bw:.1f} Gbps" if campus_bw > 0 else "ISP Kampus"
+
         text = (
             f"👋 Halo, <b>{html.escape(str(name))}</b>!\n\n"
             "🏛️ <b>TIKWatch Bot</b> siap membantu monitoring utilisasi & kesehatan router kampus Politeknik Negeri Jember secara real-time.\n\n"
@@ -763,8 +773,8 @@ class TelegramBot:
             "• <code>/chart [1h|6h|24h|7d|30d]</code> — Grafik throughput dengan rentang waktu TIKWatch\n"
             "• <code>/chart &lt;nama/ip/id&gt;</code> — Grafik traffic router tertentu (contoh: <code>/chart core 7d</code>)\n"
             "• <code>/chart select</code> — Menu interaktif memilih router untuk digambar grafiknya\n\n"
-            "<b>🤖 AI NOC Assistant (Groq LLM):</b>\n"
-            "• <code>/ai &lt;pertanyaan&gt;</code> — Tanya AI tentang kondisi jaringan, bottleneck 6 Gbps, atau alert aktif\n"
+            f"<b>🤖 AI NOC Assistant ({html.escape(ai_tag)}):</b>\n"
+            f"• <code>/ai &lt;pertanyaan&gt;</code> — Tanya AI tentang kondisi jaringan, utilisasi {bw_label}, atau alert aktif\n"
             "• <code>/diagnosa &lt;nama/ip/id&gt;</code> — Diagnosa AI kesehatan perangkat & rekomendasi RouterOS\n\n"
             "<b>🖥️ Status Jaringan, Resource & Kontrol:</b>\n"
             "• <code>/server</code> atau <code>/resource server</code> — Resource usage server TIKWatch (CPU, RAM, Disk, Uptime)\n"
@@ -2308,43 +2318,105 @@ class TelegramBot:
 
         self._cmd_traffic_device(chat_id, [str(device['id'])])
 
-    # ─── Groq AI NOC Assistant Commands ─────────────────────────────
+    # ─── Dynamic AI NOC Assistant Commands (Google AI / Groq) ─────────
 
     @staticmethod
     def _format_ai_html(raw_text):
-        """Safely convert basic Markdown from LLM output to Telegram HTML."""
-        escaped = html.escape(str(raw_text or "").strip())
-        escaped = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', escaped)
-        escaped = re.sub(r'`([^`]+)`', r'<code>\1</code>', escaped)
-        return escaped
+        """Safely convert LLM Markdown output into Telegram-compatible HTML.
+        Supports <b>, <i>, <code>, <pre>, and converts lists/headings safely.
+        """
+        if not raw_text:
+            return ""
+
+        text = str(raw_text).strip()
+
+        # Step 1: Protect and extract code blocks ```lang ... ```
+        code_blocks = []
+        def _save_code_block(m):
+            code_content = m.group(2)
+            code_blocks.append(code_content)
+            return f"__NETMON_CODE_BLOCK_{len(code_blocks)-1}__"
+
+        text = re.sub(r'```([a-zA-Z0-9_\-\+]*)\n?(.*?)```', _save_code_block, text, flags=re.DOTALL)
+
+        # Step 2: Protect and extract inline code `...`
+        inline_codes = []
+        def _save_inline_code(m):
+            code_content = m.group(1)
+            inline_codes.append(code_content)
+            return f"__NETMON_INLINE_CODE_{len(inline_codes)-1}__"
+
+        text = re.sub(r'`([^`\n]+)`', _save_inline_code, text)
+
+        # Step 3: Escape HTML entities in standard prose
+        text = html.escape(text)
+
+        # Step 4: Convert Markdown headings (# Title -> <b>Title</b>)
+        text = re.sub(r'(?m)^#{1,6}\s*(.+)$', r'<b>\1</b>', text)
+
+        # Step 5: Convert bold **text** or __text__
+        text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+        text = re.sub(r'__(.+?)__', r'<b>\1</b>', text)
+
+        # Step 6: Convert bullet points (* item or - item -> • item)
+        text = re.sub(r'(?m)^[\*\-]\s+', '• ', text)
+
+        # Step 7: Restore inline code with <code>
+        for i, code in enumerate(inline_codes):
+            escaped_code = html.escape(code)
+            text = text.replace(f"__NETMON_INLINE_CODE_{i}__", f"<code>{escaped_code}</code>")
+
+        # Step 8: Restore code blocks with <pre><code>
+        for i, block in enumerate(code_blocks):
+            escaped_block = html.escape(block.strip())
+            text = text.replace(f"__NETMON_CODE_BLOCK_{i}__", f"<pre><code>{escaped_block}</code></pre>")
+
+        # Step 9: Collapse excessive blank lines
+        text = re.sub(r'\n{3,}', '\n\n', text)
+
+        return text
 
     def _cmd_ai(self, chat_id, args):
-        """Handle /ai <question> using Groq LLM with live TIKWatch telemetry."""
+        """Handle /ai <question> using active AI provider (Google AI Studio / Groq) with live telemetry."""
+        import ai_detector
+        ai_info = ai_detector.get_active_ai_info(self.db)
+        p_label = ai_info['provider_label']
+        model_name = ai_info['model']
+        campus_bw = self.db.get_campus_total_bandwidth_mbps() / 1000.0
+        bw_str = f"{campus_bw:.1f} Gbps" if campus_bw > 0 else "ISP"
+
         question = " ".join(args).strip() if args else ""
         if not question:
+            cfg_note = (
+                f"<i>Active Engine: {p_label} (<code>{html.escape(model_name)}</code>)</i>"
+                if ai_info['configured'] else
+                "⚠️ <i>API Key belum aktif. Atur di Dashboard: <b>Settings &gt; AI &amp; Telegram</b></i>"
+            )
             self.send_message(
                 chat_id,
-                "🤖 <b>AI NOC Assistant (Groq LLM)</b>\n\n"
-                "Ajukan pertanyaan apa saja seputar kondisi jaringan kampus (kapasitas ISP 6 Gbps, alert aktif, atau troubleshooting).\n\n"
-                "<b>Contoh penggunaan:</b>\n"
-                "• <code>/ai bagaimana kondisi jaringan dan utilisasi 6 Gbps saat ini?</code>\n"
-                "• <code>/ai analisa alert aktif dan cara perbaikannya</code>\n"
-                "• <code>/ai router mana yang CPU atau trafiknya paling tinggi?</code>\n"
-                "• <code>/diagnosa &lt;nama/ip&gt;</code> — Diagnosa mendalam 1 perangkat"
+                f"🤖 <b>TIKWatch AI NOC Assistant</b>\n\n"
+                f"Ajukan pertanyaan seputar kondisi jaringan kampus (kapasitas ISP {bw_str}, utilisasi router, alert aktif, atau rekomendasi perbaikan RouterOS).\n\n"
+                "<b>💡 Contoh Penggunaan:</b>\n"
+                f"• <code>/ai bagaimana kondisi jaringan dan utilisasi {bw_str} saat ini?</code>\n"
+                "• <code>/ai analisa alert terbuka dan potensi gangguan</code>\n"
+                "• <code>/ai router mana yang beban CPU atau trafiknya paling tinggi?</code>\n"
+                "• <code>/diagnosa &lt;nama/ip/id&gt;</code> — Diagnosa mendalam 1 router spesifik\n\n"
+                f"{cfg_note}"
             )
             return
 
         def _worker():
             try:
                 import ai_detector
-                ok, answer = ai_detector.ask_groq_noc(self.db, question)
+                ok, answer = ai_detector.ask_ai_noc(self.db, question)
                 if not ok:
                     self.send_message(chat_id, answer)
                     return
                 formatted = self._format_ai_html(answer)
-                _, model_name = ai_detector.get_groq_config(self.db)
+                cur_info = ai_detector.get_active_ai_info(self.db)
                 reply = (
-                    f"🤖 <b>TIKWatch AI NOC Assistant</b> (<code>{html.escape(model_name)}</code>)\n"
+                    f"🤖 <b>TIKWatch AI NOC Assistant</b>\n"
+                    f"<i>Engine: {cur_info['provider_label']} • <code>{html.escape(cur_info['model'])}</code></i>\n"
                     "━━━━━━━━━━━━━━━━━━━━━\n"
                     f"{formatted}"
                 )
@@ -2355,7 +2427,7 @@ class TelegramBot:
                 logger.error(f"[Telegram AI] /ai error: {e}")
                 self.send_message(chat_id, f"⚠️ Gagal memproses AI: {e}")
 
-        self.send_message(chat_id, "🤖 <i>Menganalisa telemetri live TIKWatch…</i>")
+        self.send_message(chat_id, f"🤖 <i>Menganalisa telemetri live TIKWatch ({p_label})…</i>")
         threading.Thread(target=_worker, daemon=True).start()
 
     def _cmd_diagnosa(self, chat_id, args):
@@ -2369,6 +2441,10 @@ class TelegramBot:
             self.send_message(chat_id, f"⚠️ Perangkat <code>{html.escape(target)}</code> tidak ditemukan.")
             return
 
+        import ai_detector
+        ai_info = ai_detector.get_active_ai_info(self.db)
+        p_label = ai_info['provider_label']
+
         def _worker():
             try:
                 import ai_detector
@@ -2377,16 +2453,16 @@ class TelegramBot:
                     f"{device.get('name')} ({device.get('ip')}). Sertakan analisa CPU/RAM/suhu/latency/uptime, "
                     f"trafik port aktif, riwayat downtime/reboot, dan rekomendasi konkret (termasuk perintah RouterOS jika perlu)."
                 )
-                ok, answer = ai_detector.ask_groq_noc(self.db, question, device=device)
+                ok, answer = ai_detector.ask_ai_noc(self.db, question, device=device)
                 if not ok:
                     self.send_message(chat_id, answer)
                     return
                 formatted = self._format_ai_html(answer)
-                _, model_name = ai_detector.get_groq_config(self.db)
+                cur_info = ai_detector.get_active_ai_info(self.db)
                 dname = html.escape(str(device.get('name') or device.get('ip')))
                 reply = (
                     f"🩺 <b>AI Diagnosa: {dname}</b> (<code>{device.get('ip')}</code>)\n"
-                    f"<i>Model: {html.escape(model_name)}</i>\n"
+                    f"<i>Engine: {cur_info['provider_label']} • <code>{html.escape(cur_info['model'])}</code></i>\n"
                     "━━━━━━━━━━━━━━━━━━━━━\n"
                     f"{formatted}"
                 )
@@ -2397,7 +2473,8 @@ class TelegramBot:
                 logger.error(f"[Telegram AI] /diagnosa error: {e}")
                 self.send_message(chat_id, f"⚠️ Gagal diagnosa AI: {e}")
 
-        self.send_message(chat_id, f"🩺 <i>Menjalankan AI diagnosa untuk <b>{html.escape(str(device.get('name') or device.get('ip')))}</b>…</i>")
+        dlabel = html.escape(str(device.get('name') or device.get('ip')))
+        self.send_message(chat_id, f"🩺 <i>Menjalankan AI diagnosa ({p_label}) untuk <b>{dlabel}</b>…</i>")
         threading.Thread(target=_worker, daemon=True).start()
 
     def _run_ai_alert_analysis(self, chat_id, alert_id):
@@ -2419,14 +2496,16 @@ class TelegramBot:
                 f"Analisa insiden alert #{alert_id}: '{alert_row.get('message')}'. "
                 f"Jelaskan kemungkinan root cause, dampak ke jaringan kampus, dan langkah verifikasi/perbaikan cepat untuk teknisi NOC."
             )
-            ok, answer = ai_detector.ask_groq_noc(self.db, question, device=device, alert=alert_row)
+            ok, answer = ai_detector.ask_ai_noc(self.db, question, device=device, alert=alert_row)
             if not ok:
                 self.send_message(chat_id, answer)
                 return
             formatted = self._format_ai_html(answer)
+            cur_info = ai_detector.get_active_ai_info(self.db)
             reply = (
                 f"🤖 <b>Analisa AI — Alert #{alert_id}</b>\n"
                 f"🛰️ <b>{html.escape(str(alert_row.get('device_name') or '-'))}</b> (<code>{alert_row.get('device_ip') or '-'}</code>)\n"
+                f"<i>Engine: {cur_info['provider_label']} • <code>{html.escape(cur_info['model'])}</code></i>\n"
                 "━━━━━━━━━━━━━━━━━━━━━\n"
                 f"{formatted}"
             )
@@ -2559,15 +2638,15 @@ class TelegramBot:
             ai_insight_block = ""
             try:
                 import ai_detector
-                api_key, _ = ai_detector.get_groq_config(self.db)
-                if api_key:
-                    ok, ai_summary = ai_detector.ask_groq_noc(
+                ai_info = ai_detector.get_active_ai_info(self.db)
+                if ai_info['configured']:
+                    ok, ai_summary = ai_detector.ask_ai_noc(
                         self.db,
-                        "Berikan ringkasan eksekutif NOC harian singkat (maksimal 3 kalimat) mengenai kesehatan router, alert terbuka, dan utilisasi terhadap kapasitas ISP 6 Gbps.",
+                        f"Berikan ringkasan eksekutif NOC harian singkat (maksimal 3 kalimat) mengenai kesehatan router, alert terbuka, dan utilisasi terhadap total kapasitas ISP kampus {campus_gbps:.1f} Gbps.",
                         max_tokens=260
                     )
                     if ok and ai_summary:
-                        ai_insight_block = f"\n🤖 <b>AI Daily Insight:</b>\n{self._format_ai_html(ai_summary)}\n"
+                        ai_insight_block = f"\n🤖 <b>AI Daily Insight ({ai_info['provider_label']}):</b>\n{self._format_ai_html(ai_summary)}\n"
             except Exception as aie:
                 logger.debug(f"[Telegram Digest AI] skipped: {aie}")
 

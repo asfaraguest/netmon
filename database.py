@@ -1794,7 +1794,8 @@ class Database:
 
             if api_key:
                 try:
-                    import urllib.request
+                    import ai_detector
+                    api_key, provider, model_name = ai_detector._resolve_ai_creds(self)
                     sub_candidates = candidates[:50]
                     prompt = (
                         f"Analisis log telemetri traffic jaringan berikut.\n"
@@ -1806,38 +1807,23 @@ class Database:
                         f'{{"discard_timestamps": ["YYYY-MM-DD HH:MM:SS", ...]}}'
                     )
 
-                    url = "https://api.groq.com/openai/v1/chat/completions"
-                    headers = {
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {api_key}",
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    }
-                    payload = {
-                        "model": (settings.get('groq_model') or "llama-3.3-70b-versatile").strip(),
-                        "response_format": {"type": "json_object"},
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": "You are a network traffic analyst. Respond ONLY with a raw JSON object containing \"discard_timestamps\" as a list of strings."
-                            },
-                            {
-                                "role": "user",
-                                "content": prompt
-                            }
-                        ],
-                        "temperature": 0.1
-                    }
-
-                    req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
-                    with urllib.request.urlopen(req, timeout=8) as response:
-                        res_data = json.loads(response.read().decode('utf-8'))
-                        text_resp = res_data['choices'][0]['message']['content'].strip()
-                        ai_res = json.loads(text_resp)
-                        for ts in ai_res.get('discard_timestamps', []):
-                            for (d, m) in candidate_by_ts.get(ts, []):
-                                discard_timestamps.add((d, m, ts))
+                    text_resp = ai_detector._call_llm_completion(
+                        provider=provider,
+                        api_key=api_key,
+                        model_name=model_name,
+                        system_prompt='You are a network traffic analyst. Respond ONLY with a raw JSON object containing "discard_timestamps" as a list of strings.',
+                        user_prompt=prompt,
+                        temperature=0.1,
+                        max_tokens=400,
+                        json_mode=True,
+                        timeout=10,
+                    )
+                    ai_res = json.loads(text_resp)
+                    for ts in ai_res.get('discard_timestamps', []):
+                        for (d, m) in candidate_by_ts.get(ts, []):
+                            discard_timestamps.add((d, m, ts))
                 except Exception as e:
-                    print(f"[AI Report Filter] Groq API call failed: {e}")
+                    print(f"[AI Report Filter] AI API call failed: {e}")
                     for cnd in candidates:
                         discard_timestamps.add((cnd['device_id'], cnd['metric_name'], cnd['timestamp']))
             else:
