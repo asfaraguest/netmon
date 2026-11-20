@@ -11,7 +11,7 @@ import signal
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -250,8 +250,9 @@ def main():
     except Exception:
         d_hour, d_min = 8, 0
 
+    traffic_offset = timedelta(seconds=max(3, traffic_poll_interval // 2))
     scheduler.add_job(poll_device_status, 'interval', seconds=poll_interval, id='snmp_poll', max_instances=1)
-    scheduler.add_job(poll_traffic, 'interval', seconds=traffic_poll_interval, id='traffic_poll', max_instances=1)
+    scheduler.add_job(poll_traffic, 'interval', seconds=traffic_poll_interval, id='traffic_poll', max_instances=1, next_run_time=datetime.now() + traffic_offset)
     scheduler.add_job(run_hourly_cleanup, 'interval', minutes=60, id='hourly_cleanup', max_instances=1)
     scheduler.add_job(run_monthly_report_cron, 'cron', day='last', hour=23, minute=50, id='monthly_report_cron')
     scheduler.add_job(run_weekly_vacuum, 'cron', day_of_week='sun', hour=3, minute=0, id='weekly_vacuum')

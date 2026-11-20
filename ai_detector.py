@@ -11,10 +11,10 @@ def _ping_device(ip):
     if not ip:
         return False
     is_win = platform.system().lower() == 'windows'
-    param = '-n' if is_win else '-c'
-    timeout_param = '-w' if is_win else '-W'
-    timeout_val = '1500' if is_win else '2'
-    cmd = ['ping', param, '1', timeout_param, timeout_val, ip]
+    if is_win:
+        cmd = ['ping', '-n', '1', '-w', '1500', ip]
+    else:
+        cmd = ['ping', '-n', '-c', '1', '-W', '2', ip]
     try:
         startupinfo = None
         if is_win:

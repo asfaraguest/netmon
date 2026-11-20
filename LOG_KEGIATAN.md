@@ -271,3 +271,13 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
       - Menambahkan helper `formatBytesCompact()` pada kolom *Received (Rx)* dan *Transmitted (Tx)* (`TB`/`GB`/`MB` dengan tooltip exact bytes) serta mencegah teks tabel *wrapping* dengan `.det-iface-table` dan `.det-iface-name`.
     - **Perbaikan Deteksi Port Speed >4.3 Gbps (`snmp_worker.py`):**
       - Memperbaiki typo OID `ifHighSpeed` walk di `get_detailed_stats()` dari `1.3.6.1.31.1.1.1.15` menjadi `1.3.6.1.2.1.31.1.1.1.15` sehingga interface `10 Gbps` (SFP+) terbaca akurat dan tidak lagi mentok di batas 32-bit `4.3 Gbps`.
+
+25. **Perbaikan False OFFLINE / Status Flapping pada Core BGP & Router (`snmp_worker.py`, `ai_detector.py`, `poller.py`, `app.py`):**
+    - **Penambahan Hysteresis Konsekutif (`_handle_unreachable_poll`):**
+      - Mengaktifkan pengecekan `_consecutive_ping_fails` yang sebelumnya dihitung tetapi tidak pernah dipakai: perangkat berstatus `up` kini membutuhkan **2 siklus polling gagal berturut-turut** sebelum status diubah menjadi `down` (`OFFLINE`) dan alert `DEVICE DOWN` dikirim.
+    - **Perbaikan Command Ping & Fallback TCP (`_ping`, `_ping_device`):**
+      - Menambahkan flag `-n` (numeric-only) pada `ping` Linux di `snmp_worker.py` dan `ai_detector.py` untuk mencegah reverse DNS (PTR) lookup yang sering membuat `subprocess.run(..., timeout=5.0)` berakhir `TimeoutExpired` dan salah dianggap offline.
+      - Menggunakan `ping -n -c 3 -i 0.25 -W 2` (timeout `7.0s`) serta memperluas port TCP fallback menjadi `[22, 80, 443, 179, 8291, 8728, 445]` dengan timeout `0.4s` agar router Core BGP dengan rate-limit ICMP tetap terdeteksi hidup.
+    - **Serialisasi Per-Device SNMP & Staggering Jadwal Poller:**
+      - Menambahkan per-device lock (`_get_device_lock`) agar `poll_device` dan `collect_interface_traffic` tidak membanjiri daemon SNMP router yang sama di detik yang sama, serta men-stagger jadwal awal `traffic_poll` di `poller.py` dan `app.py`.
+      - Menambahkan `_state_lock` untuk akses aman `_ping_history`, `_latest_ping`, `_if_prev`, `_if_meta_cache`, memindahkan cache pruning ke `_prune_stale_caches()` (per 60 detik), dan mendefinisikan `logger` di `snmp_worker.py` agar error logging di `_assess_traffic_drop_factors` tidak memicu `NameError`.

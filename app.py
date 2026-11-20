@@ -1760,8 +1760,9 @@ if __name__ == '__main__':
     settings = db.get_settings()
     poll_interval = max(10, int(settings.get('poll_interval', 30)))
     traffic_poll_interval = max(5, int(settings.get('traffic_poll_interval', 15)))
+    traffic_offset = timedelta(seconds=max(3, traffic_poll_interval // 2))
     scheduler.add_job(poll_device_status, 'interval', seconds=poll_interval, id='snmp_poll', max_instances=1)
-    scheduler.add_job(poll_traffic, 'interval', seconds=traffic_poll_interval, id='traffic_poll', max_instances=1)
+    scheduler.add_job(poll_traffic, 'interval', seconds=traffic_poll_interval, id='traffic_poll', max_instances=1, next_run_time=datetime.now() + traffic_offset)
     scheduler.add_job(run_hourly_cleanup, 'interval', minutes=60, id='hourly_cleanup', max_instances=1)
     # Automatically generate monthly report at 23:50 on the last day of the month before oldest data prunes
     scheduler.add_job(run_monthly_report_cron, 'cron', day='last', hour=23, minute=50, id='monthly_report_cron')

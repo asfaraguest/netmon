@@ -3,8 +3,10 @@
 NetMon - SNMP Worker (puresnmp 2.x, Python 3.9+)
 """
 
-import threading, socket, time, ipaddress, os, subprocess, re, sys, asyncio
+import threading, socket, time, ipaddress, os, subprocess, re, sys, asyncio, logging
 from datetime import datetime
+
+logger = logging.getLogger('netmon.snmp')
 
 # Set Windows Selector Event Loop Policy to prevent IOCP/Proactor event loop issues with UDP in background threads
 if sys.platform == 'win32':
@@ -99,6 +101,9 @@ class SNMPWorker:
         self._if_meta_cache = {}
         self._if_prev = {}
         self.db_write_lock = threading.RLock()
+        self._state_lock = threading.Lock()
+        self._device_snmp_locks = {}
+        self._last_cache_prune = 0.0
         self._ping_history = {}
         self._latest_ping = {}
         self._snmp_failing = set()
@@ -114,6 +119,40 @@ class SNMPWorker:
         self._iface_err_prev = {}
         self._last_iface_alert = {}
         self._restore_poller_state()
+
+    def _get_device_lock(self, device_id):
+        """Return a per-device RLock so concurrent status & traffic jobs don't flood the same router."""
+        with self._state_lock:
+            lock = self._device_snmp_locks.get(device_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._device_snmp_locks[device_id] = lock
+            return lock
+
+    def _prune_stale_caches(self):
+        """Periodically prune in-memory caches for deleted devices (at most once per 60s)."""
+        now_ts = time.time()
+        with self._state_lock:
+            if (now_ts - self._last_cache_prune) < 60.0:
+                return
+            self._last_cache_prune = now_ts
+        try:
+            active_dids = {d['id'] for d in self.db.get_all_devices()}
+            with self._state_lock:
+                for k in list(self._if_prev.keys()):
+                    if k[0] not in active_dids:
+                        self._if_prev.pop(k, None)
+                for k in list(self._interfaces_cache.keys()):
+                    if k not in active_dids:
+                        self._interfaces_cache.pop(k, None)
+                for k in list(self._if_meta_cache.keys()):
+                    if k not in active_dids:
+                        self._if_meta_cache.pop(k, None)
+                for k in list(self._device_snmp_locks.keys()):
+                    if k not in active_dids:
+                        self._device_snmp_locks.pop(k, None)
+        except Exception as e:
+            print(f"[Worker] Failed to prune caches: {e}")
 
     def _restore_poller_state(self):
         """Warm up rolling metric baselines from recent DB records so restarts don't wipe anomaly state."""
@@ -607,13 +646,14 @@ class SNMPWorker:
         latency_ms = None
         packet_loss = 0.0
         
-        # 1. Try standard OS Ping (sending 2 packets for latency & packet loss)
+        # 1. Try standard OS Ping (numeric -n on Linux skips slow/blocking PTR DNS lookups)
         is_win = platform.system().lower() == 'windows'
-        param = '-n' if is_win else '-c'
-        timeout_param = '-w' if is_win else '-W'
-        timeout_val = '1500' if is_win else '2'
-        
-        cmd = ['ping', param, '2', timeout_param, timeout_val, ip]
+        if is_win:
+            cmd = ['ping', '-n', '2', '-w', '1500', ip]
+            run_timeout = 6.0
+        else:
+            cmd = ['ping', '-n', '-c', '3', '-i', '0.25', '-W', '2', ip]
+            run_timeout = 7.0
         try:
             startupinfo = None
             if is_win:
@@ -625,7 +665,7 @@ class SNMPWorker:
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.PIPE, 
                 startupinfo=startupinfo, 
-                timeout=5.0,
+                timeout=run_timeout,
                 text=True
             )
             out = (res.stdout or '') + (res.stderr or '')
@@ -668,14 +708,14 @@ class SNMPWorker:
         except Exception:
             pass
 
-        # 2. Fallback to TCP connection check on common ports (if ICMP is blocked)
+        # 2. Fallback to TCP connection check on common router/server ports (if ICMP is rate-limited/blocked)
         if not is_alive:
             import socket
-            common_ports = [22, 80, 443, 445]
+            common_ports = [22, 80, 443, 179, 8291, 8728, 445]
             for port in common_ports:
                 try:
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.settimeout(0.2)  # Fast 200ms timeout
+                    s.settimeout(0.4)
                     t0 = time.time()
                     result = s.connect_ex((ip, port))
                     s.close()
@@ -695,12 +735,12 @@ class SNMPWorker:
             latency_ms = None
             packet_loss = 100.0
 
-        if ip not in self._ping_history:
-            self._ping_history[ip] = []
-        self._ping_history[ip].append((is_alive, latency_ms or elapsed))
-        self._ping_history[ip] = self._ping_history[ip][-10:]
-        
-        self._latest_ping[ip] = {'latency_ms': latency_ms, 'packet_loss': packet_loss}
+        with self._state_lock:
+            if ip not in self._ping_history:
+                self._ping_history[ip] = []
+            self._ping_history[ip].append((is_alive, latency_ms or elapsed))
+            self._ping_history[ip] = self._ping_history[ip][-10:]
+            self._latest_ping[ip] = {'latency_ms': latency_ms, 'packet_loss': packet_loss}
         return is_alive
 
     def _get_resource_metrics(self, ip, community, port, version, vendor_lower, descr_lower, sys_obj_id=None):
@@ -953,17 +993,7 @@ class SNMPWorker:
         }
 
     def poll_device(self, device):
-        # Prune memory caches to prevent leaks from deleted devices
-        try:
-            active_dids = {d['id'] for d in self.db.get_all_devices()}
-            for k in list(self._if_prev.keys()):
-                if k[0] not in active_dids:
-                    self._if_prev.pop(k, None)
-            for k in list(self._interfaces_cache.keys()):
-                if k not in active_dids:
-                    self._interfaces_cache.pop(k, None)
-        except Exception as e:
-            print(f"[Worker] Failed to prune caches: {e}")
+        self._prune_stale_caches()
 
         did, ip   = device['id'], device['ip']
         community = device.get('snmp_community', 'public') or 'public'
@@ -975,6 +1005,7 @@ class SNMPWorker:
         old_st    = device.get('status', 'unknown')
         snmp_en   = bool(device.get('snmp_enabled', 0))
         now       = datetime.now().isoformat()
+        dev_lock  = self._get_device_lock(did)
 
         # Target OIDs based on vendor detection
         vendor_lower = str(device.get('vendor') or '').lower()
@@ -982,23 +1013,24 @@ class SNMPWorker:
 
         result = None
         if snmp_en:
-            result = self._get(ip, community, [
-                OID['sysDescr'], 
-                '1.3.6.1.2.1.1.2.0', # sysObjectID
-                OID['sysUpTime'], 
-                OID['sysName']
-            ], port, version)
-            
-            # Jika offline (SNMP gagal), lakukan polling SNMP sekali lagi sebelum menyatakan offline
-            if not result:
-                import time
-                time.sleep(1.0)
+            with dev_lock:
                 result = self._get(ip, community, [
-                    OID['sysDescr'], 
-                    '1.3.6.1.2.1.1.2.0',
-                    OID['sysUpTime'], 
+                    OID['sysDescr'],
+                    '1.3.6.1.2.1.1.2.0', # sysObjectID
+                    OID['sysUpTime'],
                     OID['sysName']
                 ], port, version)
+
+            # Jika offline (SNMP gagal), lakukan polling SNMP sekali lagi sebelum verifikasi ping
+            if not result:
+                time.sleep(1.0)
+                with dev_lock:
+                    result = self._get(ip, community, [
+                        OID['sysDescr'],
+                        '1.3.6.1.2.1.1.2.0',
+                        OID['sysUpTime'],
+                        OID['sysName']
+                    ], port, version)
 
         if result:
             # ── SNMP responded: genuine UP with full data ──
@@ -1035,13 +1067,15 @@ class SNMPWorker:
             current_desc = upd.get('description') or device.get('description') or ''
             descr_lower = str(current_desc).lower()
 
-            # Dynamic resource usage extraction
-            metrics = self._get_resource_metrics(ip, community, port, version, vendor_lower, descr_lower, result.get('1.3.6.1.2.1.1.2.0', ''))
+            # Dynamic resource usage extraction & WAN traffic (serialized per device against traffic worker)
+            with dev_lock:
+                metrics = self._get_resource_metrics(ip, community, port, version, vendor_lower, descr_lower, result.get('1.3.6.1.2.1.1.2.0', ''))
             upd.update(metrics)
 
             # Telemetry: Measure ICMP Ping Latency & Packet Loss
             self._ping(ip)
-            p_stat = self._latest_ping.get(ip, {})
+            with self._state_lock:
+                p_stat = dict(self._latest_ping.get(ip, {}))
             if p_stat.get('latency_ms') is not None:
                 upd['latency_ms'] = p_stat['latency_ms']
             if p_stat.get('packet_loss') is not None:
@@ -1050,7 +1084,8 @@ class SNMPWorker:
             # Poll WAN traffic throughput outside DB write lock so SNMP I/O never stalls other writers
             traffic_data = None
             if device.get('type') == 'router':
-                traffic_data = self._poll_router_traffic(device, ip, community, port, version)
+                with dev_lock:
+                    traffic_data = self._poll_router_traffic(device, ip, community, port, version)
                 if traffic_data:
                     upd.update(traffic_data)
 
@@ -1096,9 +1131,10 @@ class SNMPWorker:
                 elif uptime_rebooted:
                     self._handle_fast_reboot(device, now, new_uptime)
 
-                self._snmp_failing.discard(ip)
-                self._consecutive_snmp_fails[ip] = 0
-                self._consecutive_ping_fails[ip] = 0
+                with self._state_lock:
+                    self._snmp_failing.discard(ip)
+                    self._consecutive_snmp_fails[ip] = 0
+                    self._consecutive_ping_fails[ip] = 0
                 self.db.update_device(did, upd)
 
                 try:
@@ -1114,10 +1150,10 @@ class SNMPWorker:
             
             # Jika terdeteksi offline (ping gagal), lakukan prosedur verifikasi ganda sebelum alarm dilempar
             if not is_alive:
-                import time
                 print(f"[Verification] {ip} seems offline via SNMP and Ping. Retrying SNMP poll...")
                 time.sleep(2.0)
-                verify_snmp = self._get(ip, community, [OID['sysDescr'], '1.3.6.1.2.1.1.2.0', '1.3.6.1.2.1.1.3.0'], port, version)
+                with dev_lock:
+                    verify_snmp = self._get(ip, community, [OID['sysDescr'], '1.3.6.1.2.1.1.2.0', '1.3.6.1.2.1.1.3.0'], port, version)
                 if verify_snmp:
                     print(f"[Verification] SNMP responded on retry for {ip}. Keeping device UP.")
                     result = verify_snmp
@@ -1133,9 +1169,10 @@ class SNMPWorker:
                         self.analyze_downtime_event(device, device.get('last_seen') or now, now, new_uptime)
                     elif uptime_rebooted and old_st != 'unknown':
                         self._handle_fast_reboot(device, now, new_uptime)
-                    self._snmp_failing.discard(ip)
-                    self._consecutive_snmp_fails[ip] = 0
-                    self._consecutive_ping_fails[ip] = 0
+                    with self._state_lock:
+                        self._snmp_failing.discard(ip)
+                        self._consecutive_snmp_fails[ip] = 0
+                        self._consecutive_ping_fails[ip] = 0
                     self.db.update_device(did, upd)
                     is_alive = True
                 else:
@@ -1151,13 +1188,14 @@ class SNMPWorker:
                         print(f"[Verification] Ping procedure succeeded on attempt {attempt+1} for {ip}. Device is alive.")
                         is_alive = True
                     else:
-                        print(f"[Verification] Ping procedure failed. {ip} is confirmed OFFLINE.")
+                        print(f"[Verification] Ping procedure failed. {ip} unreachable on this poll cycle.")
                         is_alive = False
 
             if is_alive:
                 # Device reachable via ping but SNMP is not responding (or revived above). Keep existing metrics.
-                self._consecutive_ping_fails[ip] = 0
-                p_stat = self._latest_ping.get(ip, {})
+                with self._state_lock:
+                    self._consecutive_ping_fails[ip] = 0
+                    p_stat = dict(self._latest_ping.get(ip, {}))
                 with self.db_write_lock:
                     upd = {'status': 'up', 'last_polled': now}
                     if p_stat.get('latency_ms') is not None:
@@ -1193,27 +1231,7 @@ class SNMPWorker:
                     except Exception:
                         pass
             else:
-                # Genuinely offline -> lempar notifikasi perangkat offline ke dashboard
-                fail_count = self._consecutive_ping_fails.get(ip, 0) + 1
-                self._consecutive_ping_fails[ip] = fail_count
-                with self.db_write_lock:
-                    self._snmp_failing.discard(ip)
-                    self._pending_analysis.pop(ip, None)
-                    self.db.update_device(did, {'status':'down','last_polled':now,
-                                                 'cpu_usage': None, 'memory_usage': None, 'temperature': None,
-                                                 'latency_ms': None, 'packet_loss': 100.0})
-                    self.db.save_metric(did, 'packet_loss', 100.0)
-                    try:
-                        full_dev = self.db.get_device(did)
-                        if full_dev:
-                            self.socketio.emit('device_updated', full_dev)
-                    except Exception:
-                        pass
-                    if old_st != 'down':
-                        s = self.db.get_settings()
-                        if s.get('alert_on_down','true') == 'true':
-                            self._alert(device, 'critical',
-                                        f"DEVICE DOWN: {device.get('name',ip)} ({ip}) — unreachable")
+                self._handle_unreachable_poll(device, did, ip, old_st, now, clear_snmp_metrics=True)
 
         else:
             # ── SNMP not enabled: ping-only check ──
@@ -1221,7 +1239,8 @@ class SNMPWorker:
             if not is_alive:
                 # Sebelum melempar notifikasi offline, lakukan polling SNMP ke perangkat
                 print(f"[Verification Ping-Only] {ip} offline via ping. Polling SNMP...")
-                snmp_check = self._get(ip, community, [OID['sysObjectID']], port, '2c')
+                with dev_lock:
+                    snmp_check = self._get(ip, community, [OID['sysObjectID']], port, '2c')
                 if snmp_check:
                     print(f"[Verification Ping-Only] {ip} responded to SNMP query. Mark as UP.")
                     is_alive = True
@@ -1230,7 +1249,6 @@ class SNMPWorker:
                     print(f"[Verification Ping-Only] SNMP failed on {ip}. Executing ping procedure...")
                     ping_ok = False
                     for attempt in range(3):
-                        import time
                         time.sleep(1.0)
                         if self._ping(ip):
                             ping_ok = True
@@ -1239,13 +1257,14 @@ class SNMPWorker:
                         print(f"[Verification Ping-Only] Ping procedure succeeded on attempt {attempt+1} for {ip}.")
                         is_alive = True
                     else:
-                        print(f"[Verification Ping-Only] Ping procedure failed. {ip} is confirmed OFFLINE.")
+                        print(f"[Verification Ping-Only] Ping procedure failed. {ip} unreachable on this poll cycle.")
                         is_alive = False
                     
-            with self.db_write_lock:
-                if is_alive:
+            if is_alive:
+                with self._state_lock:
                     self._consecutive_ping_fails[ip] = 0
-                    p_stat = self._latest_ping.get(ip, {})
+                    p_stat = dict(self._latest_ping.get(ip, {}))
+                with self.db_write_lock:
                     upd = {'status': 'up', 'last_polled': now}
                     if p_stat.get('latency_ms') is not None:
                         upd['latency_ms'] = p_stat['latency_ms']
@@ -1267,24 +1286,8 @@ class SNMPWorker:
                             self.socketio.emit('device_updated', full_dev)
                     except Exception:
                         pass
-                else:
-                    fail_count = self._consecutive_ping_fails.get(ip, 0) + 1
-                    self._consecutive_ping_fails[ip] = fail_count
-                    self._pending_analysis.pop(ip, None)
-                    self.db.update_device(did, {'status':'down','last_polled':now,
-                                                 'latency_ms': None, 'packet_loss': 100.0})
-                    self.db.save_metric(did, 'packet_loss', 100.0)
-                    try:
-                        full_dev = self.db.get_device(did)
-                        if full_dev:
-                            self.socketio.emit('device_updated', full_dev)
-                    except Exception:
-                        pass
-                    if old_st != 'down':
-                        s = self.db.get_settings()
-                        if s.get('alert_on_down','true') == 'true':
-                            self._alert(device, 'critical',
-                                        f"DEVICE DOWN: {device.get('name',ip)} ({ip}) — unreachable")
+            else:
+                self._handle_unreachable_poll(device, did, ip, old_st, now, clear_snmp_metrics=False)
 
         with self.db_write_lock:
             updated = self.db.get_device(did)
@@ -1292,6 +1295,40 @@ class SNMPWorker:
             self.socketio.emit('device_status_update', updated)
             self.socketio.emit('stats_update', self.db.get_dashboard_stats())
         return updated.get('status') if updated else 'unknown'
+
+    def _handle_unreachable_poll(self, device, did, ip, old_st, now, clear_snmp_metrics=True):
+        """Apply consecutive failure hysteresis (2 polls) before flipping an UP device to OFFLINE."""
+        with self._state_lock:
+            fail_count = self._consecutive_ping_fails.get(ip, 0) + 1
+            self._consecutive_ping_fails[ip] = fail_count
+
+        # Hysteresis: ignore a single transient poll failure on a healthy UP device
+        if old_st == 'up' and fail_count < 2:
+            print(f"[Poll Hysteresis] {device.get('name', ip)} ({ip}) unreachable (1/2) — keeping UP until next poll confirms")
+            with self.db_write_lock:
+                self.db.update_device(did, {'last_polled': now})
+            return
+
+        upd = {'status': 'down', 'last_polled': now, 'latency_ms': None, 'packet_loss': 100.0}
+        if clear_snmp_metrics:
+            upd.update({'cpu_usage': None, 'memory_usage': None, 'temperature': None})
+
+        with self.db_write_lock:
+            self._snmp_failing.discard(ip)
+            self._pending_analysis.pop(ip, None)
+            self.db.update_device(did, upd)
+            self.db.save_metric(did, 'packet_loss', 100.0)
+            try:
+                full_dev = self.db.get_device(did)
+                if full_dev:
+                    self.socketio.emit('device_updated', full_dev)
+            except Exception:
+                pass
+            if old_st != 'down':
+                s = self.db.get_settings()
+                if s.get('alert_on_down', 'true') == 'true':
+                    self._alert(device, 'critical',
+                                f"DEVICE DOWN: {device.get('name', ip)} ({ip}) — unreachable")
 
     def get_detailed_stats(self, device):
         ip = device['ip']
@@ -1683,7 +1720,8 @@ class SNMPWorker:
         version   = device.get('snmp_version', '2c') or '2c'
 
         now_ts = time.time()
-        meta_entry = self._if_meta_cache.get(did)
+        with self._state_lock:
+            meta_entry = self._if_meta_cache.get(did)
         need_meta = not meta_entry or (now_ts - meta_entry.get('ts', 0)) >= 300
         cached_64 = True if need_meta else meta_entry.get('is_64bit', True)
 
@@ -1712,8 +1750,10 @@ class SNMPWorker:
         def _ok_dict(val):
             return val if isinstance(val, dict) else {}
 
+        dev_lock = self._get_device_lock(did)
         try:
-            walk_res = asyncio.run(_fetch_traffic_walks())
+            with dev_lock:
+                walk_res = asyncio.run(_fetch_traffic_walks())
         except Exception:
             return
 
@@ -1736,7 +1776,8 @@ class SNMPWorker:
                         return_exceptions=True
                     )
                 try:
-                    fb_res = asyncio.run(_fetch_32bit())
+                    with dev_lock:
+                        fb_res = asyncio.run(_fetch_32bit())
                     hc_in = _ok_dict(fb_res[0])
                     hc_out = _ok_dict(fb_res[1])
                 except Exception:
@@ -1744,13 +1785,14 @@ class SNMPWorker:
                 if not hc_in:
                     return
                 is_64bit = False
-            self._if_meta_cache[did] = {
-                'ts': now_ts,
-                'if_desc': if_desc,
-                'if_high_speed': if_high_speed,
-                'if_speed': if_speed,
-                'is_64bit': is_64bit,
-            }
+            with self._state_lock:
+                self._if_meta_cache[did] = {
+                    'ts': now_ts,
+                    'if_desc': if_desc,
+                    'if_high_speed': if_high_speed,
+                    'if_speed': if_speed,
+                    'is_64bit': is_64bit,
+                }
         else:
             if_desc = meta_entry['if_desc']
             if not if_desc:
@@ -1808,9 +1850,10 @@ class SNMPWorker:
                 if (v := (hc_out or {}).get(k)) is not None), None)
             if rx is None or tx is None:
                 continue
-            key  = (did, idx)
-            prev = self._if_prev.get(key)
-            self._if_prev[key] = {'rx': rx, 'tx': tx, 'ts': now_ts, 'is_64bit': is_64bit}
+            key = (did, idx)
+            with self._state_lock:
+                prev = self._if_prev.get(key)
+                self._if_prev[key] = {'rx': rx, 'tx': tx, 'ts': now_ts, 'is_64bit': is_64bit}
             if prev:
                 if prev.get('is_64bit') != is_64bit:
                     continue
