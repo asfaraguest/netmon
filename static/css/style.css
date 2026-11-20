@@ -1171,19 +1171,19 @@ body.light-theme .sidebar-logo .bi {
   color: var(--text-primary) !important;
 }
 
-body.light-theme .nav-item {
+body.light-theme .sidebar .nav-item {
   border-radius: 8px !important;
   margin: 1px 12px !important;
   padding: 8px 12px !important;
   color: var(--text-secondary) !important;
 }
 
-body.light-theme .nav-item:hover {
+body.light-theme .sidebar .nav-item:hover {
   background: var(--bg-hover) !important;
   color: var(--text-primary) !important;
 }
 
-body.light-theme .nav-item.active {
+body.light-theme .sidebar .nav-item.active {
   background: var(--accent) !important;
   color: #ffffff !important;
 }
@@ -2120,4 +2120,77 @@ body.theme-realism {
 
 .latency-metric-badge.bad {
   color: #ff3b30;
+}
+
+/* ============================================================ DEVICE DETAIL MODAL POLISH */
+@media (min-width: 992px) {
+  #detailModal .modal-dialog {
+    max-width: 960px;
+  }
+}
+#detailModal .modal-title {
+  color: var(--text-primary);
+}
+#detailModal .state-timeline-wrapper {
+  padding: 10px 14px;
+  background: var(--bg-card2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+#detailModal .det-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+  list-style: none;
+  padding-left: 0;
+}
+#detailModal .det-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card2);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+#detailModal .det-tab-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+#detailModal .det-tab-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+#detailModal .det-tab-btn.active i {
+  color: #ffffff !important;
+}
+#detailModal .di-row {
+  padding: 6px 0;
+  gap: 10px;
+}
+#detailModal .di-row strong {
+  color: var(--text-primary);
+  text-align: right;
+  word-break: break-word;
+}
+#detailModal .det-iface-table th,
+#detailModal .det-iface-table td {
+  white-space: nowrap;
+  vertical-align: middle;
+}
+#detailModal .det-iface-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

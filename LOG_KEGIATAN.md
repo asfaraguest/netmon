@@ -259,3 +259,15 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
       - Memperhitungkan **jam operasional/transisi kampus** (istirahat siang, jam pulang kuliah, malam, Minggu) agar penurunan beban wajar saat ping sehat dan trafik residu masih mengalir tidak memicu alarm palsu.
     - **Penyelarasan AI Detector (`ai_detector.py`):**
       - Memisahkan klasifikasi heuristik dan prompt LLM khusus untuk insiden `traffic drop` / `penurunan trafik` agar tidak lagi keliru didiagnosa sebagai lonjakan/spike.
+
+24. **Perbaikan UI/UX Device Detail Modal & Akurasi Speed 10G SNMP (`templates/base.html`, `static/css/style.css`, `static/js/main.js`, `snmp_worker.py`):**
+    - **Perbaikan Kontras, Tab, & Layout Light/Dark Mode:**
+      - Memperlebar `#detailModal` (`modal-xl`, `max-width: 960px` pada desktop) dan mengganti badge header `#det-latency-badge` & `#det-loss-badge` ke class `.latency-metric-badge` agar tetap terbaca jelas di Light Mode (`Polije Web Portal` / `Light`).
+      - Mengganti class Tailwind yang tidak terdefinisi (`p-2.5`, `mb-1.5`, `gap-1.5`) pada *24-Hour State Timeline* dengan spacing CSS eksplisit sehingga ikon jam dan teks header sejajar rapi.
+      - Men-scope ulang rule global `body.light-theme .nav-item` di `style.css` khusus ke `.sidebar .nav-item` dan mengganti tab modal `#det-tabs` menggunakan `.det-tabs` & `.det-tab-btn` agar tampil horizontal, responsif, dan label `Traffic` tetap terlihat pada tab aktif.
+      - Mengganti `text-white` pada panel *BlackBox Forensics* menjadi `text-primary` agar terbaca di kedua tema, serta merapikan format `Vendor/Model` agar tidak menampilkan `—` di belakang vendor saat model kosong.
+    - **Perbaikan Chart Traffic & Tabel Interface Status:**
+      - Memaksa sumbu Y grafik real-time `initChart()` menggunakan `beginAtZero: true`, `min: 0`, dan `suggestedMax: 1000` (menghilangkan tick negatif/duplikat `-1 bps, -1 bps, 0 bps, 1 bps, 1 bps`), serta memuat otomatis 10 titik historis terakhir dari `/api/devices/<id>/traffic_history` melalui `seedInterfaceTrafficHistory()` saat modal dibuka atau ganti interface.
+      - Menambahkan helper `formatBytesCompact()` pada kolom *Received (Rx)* dan *Transmitted (Tx)* (`TB`/`GB`/`MB` dengan tooltip exact bytes) serta mencegah teks tabel *wrapping* dengan `.det-iface-table` dan `.det-iface-name`.
+    - **Perbaikan Deteksi Port Speed >4.3 Gbps (`snmp_worker.py`):**
+      - Memperbaiki typo OID `ifHighSpeed` walk di `get_detailed_stats()` dari `1.3.6.1.31.1.1.1.15` menjadi `1.3.6.1.2.1.31.1.1.1.15` sehingga interface `10 Gbps` (SFP+) terbaca akurat dan tidak lagi mentok di batas 32-bit `4.3 Gbps`.

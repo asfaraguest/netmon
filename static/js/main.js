@@ -253,6 +253,7 @@ let interfaceTrafficData = {};
 let chartLabels = [];
 let chartRxData = [];
 let chartTxData = [];
+let seededTrafficKey = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   const modalEl = document.getElementById('detailModal');
@@ -279,6 +280,9 @@ function openDeviceDetail(id) {
   chartLabels = [];
   chartRxData = [];
   chartTxData = [];
+  seededTrafficKey = null;
+  const lossBadgeReset = document.getElementById('det-loss-badge');
+  if (lossBadgeReset) lossBadgeReset.className = 'latency-metric-badge';
   
   // UI-BUG-10: Reset interface and clients containers to standard default immediately
   const rtHeader = document.querySelector('#detailModal h6.m-0');
@@ -398,7 +402,11 @@ function populateBasicFields(dev) {
   if (ipEl) ipEl.textContent = dev.ip;
   
   const vendorModelEl = document.getElementById('det-vendor-model');
-  if (vendorModelEl) vendorModelEl.textContent = `${dev.vendor || 'Unknown'} ${dev.model || '—'}`;
+  if (vendorModelEl) {
+    const vendor = (dev.vendor || '').trim();
+    const model = (dev.model || '').trim();
+    vendorModelEl.textContent = (vendor && model) ? `${vendor} · ${model}` : (vendor || model || '—');
+  }
   
   const sysNameEl = document.getElementById('det-sys-name');
   if (sysNameEl) sysNameEl.textContent = dev.sys_name || '—';
@@ -437,6 +445,7 @@ function closeDetailModal() {
   }
 
   activeDetailDeviceId = null;
+  seededTrafficKey = null;
 }
 
 function initChart() {
@@ -502,10 +511,14 @@ function initChart() {
           ticks: { color: tickColor, font: { size: 10 } }
         },
         y: {
+          beginAtZero: true,
+          min: 0,
+          suggestedMax: 1000,
           grid: { color: gridColor },
           ticks: {
             color: tickColor,
             font: { size: 10 },
+            maxTicksLimit: 6,
             callback: function(value) {
               return formatBandwidthSimple(value);
             }
@@ -517,12 +530,57 @@ function initChart() {
 }
 
 function formatBandwidthSimple(bps) {
-  if (bps === 0) return '0 bps';
   const val = parseFloat(bps);
+  if (!val || val <= 0) return '0 bps';
   if (val >= 1000000000) return `${(val / 1000000000).toFixed(1)} Gbps`;
   if (val >= 1000000) return `${(val / 1000000).toFixed(1)} Mbps`;
   if (val >= 1000) return `${(val / 1000).toFixed(1)} Kbps`;
   return `${val.toFixed(0)} bps`;
+}
+
+function formatBytesCompact(bytes) {
+  const val = Number(bytes) || 0;
+  if (val <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  const idx = Math.min(units.length - 1, Math.floor(Math.log(val) / Math.log(1024)));
+  const scaled = val / Math.pow(1024, idx);
+  return `${idx === 0 ? scaled.toFixed(0) : scaled.toFixed(scaled >= 100 ? 0 : 1)} ${units[idx]}`;
+}
+
+function seedInterfaceTrafficHistory(deviceId, ifaceName) {
+  if (!deviceId || !ifaceName) return;
+  const key = `${deviceId}:${ifaceName}`;
+  if (seededTrafficKey === key) return;
+  seededTrafficKey = key;
+
+  fetch(`/api/devices/${deviceId}/traffic_history?iface=${encodeURIComponent(ifaceName)}&hours=0.25`)
+    .then(r => r.json())
+    .then(res => {
+      if (activeDetailDeviceId !== deviceId || seededTrafficKey !== key || !trafficChartInstance) return;
+      if (res.status !== 'success' || !Array.isArray(res.points) || res.points.length === 0) return;
+      // Preserve any real-time non-zero samples already recorded for this interface
+      if (chartRxData.some(v => v > 0) || chartTxData.some(v => v > 0)) return;
+
+      const pts = res.points.slice(-10);
+      const newLabels = pts.map(p => {
+        const d = new Date((p.ts || '').replace(' ', 'T'));
+        return isNaN(d.getTime()) ? (p.ts || '') : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      });
+      const newRx = pts.map(p => Math.max(0, Number(p.rx_bps) || 0));
+      const newTx = pts.map(p => Math.max(0, Number(p.tx_bps) || 0));
+
+      chartLabels.splice(0, chartLabels.length, ...newLabels);
+      chartRxData.splice(0, chartRxData.length, ...newRx);
+      chartTxData.splice(0, chartTxData.length, ...newTx);
+      trafficChartInstance.update('none');
+
+      const latest = pts[pts.length - 1];
+      const txIn = document.getElementById('det-traffic-in');
+      if (txIn) txIn.textContent = formatBandwidth(Number(latest.rx_bps) || 0);
+      const txOut = document.getElementById('det-traffic-out');
+      if (txOut) txOut.textContent = formatBandwidth(Number(latest.tx_bps) || 0);
+    })
+    .catch(() => {});
 }
 
 function fetchRealtimeStats() {
@@ -556,7 +614,7 @@ function fetchRealtimeStats() {
         if (lossVal) lossVal.textContent = `${res.packet_loss}%`;
         const lossEl = document.getElementById('det-loss-badge');
         if (lossEl) {
-          lossEl.className = `badge ms-1 text-xs ${res.packet_loss > 0 ? 'bg-danger text-white' : ''}`;
+          lossEl.className = `latency-metric-badge${res.packet_loss > 0 ? ' bad' : ''}`;
         }
       }
 
@@ -741,20 +799,24 @@ function fetchRealtimeStats() {
         interfaces.forEach(iface => {
           const isSelected = (prevSelectedIdx === String(iface.index)) ? 'selected' : '';
           const statusLabel = iface.status === 'up' ? '🟢' : '🔴';
-          optHtml += `<option value="${iface.index}" ${isSelected}>${statusLabel} ${esc(iface.name)}</option>`;
+          optHtml += `<option value="${iface.index}" data-iface="${esc(iface.name)}" ${isSelected}>${statusLabel} ${esc(iface.name)}</option>`;
         });
         select.innerHTML = optHtml;
         
         // Build table body
-        tbody.innerHTML = interfaces.map(iface => `
+        tbody.innerHTML = interfaces.map(iface => {
+          const rxRaw = iface.rx_bytes || 0;
+          const txRaw = iface.tx_bytes || 0;
+          return `
           <tr data-index="${iface.index}" onclick="selectInterface(${iface.index})" style="cursor: pointer;" class="${prevSelectedIdx === String(iface.index) ? 'table-active' : ''}">
-            <td class="fw-500">${esc(iface.name)}</td>
+            <td class="fw-500 det-iface-name" title="${esc(iface.name)}">${esc(iface.name)}</td>
             <td>${iface.status === 'up' ? '<span class="text-success fw-600">UP</span>' : '<span class="text-danger">DOWN</span>'}</td>
             <td class="mono-sm">${formatBandwidthSimple(iface.speed)}</td>
-            <td class="mono-sm text-muted">${(iface.rx_bytes || 0).toLocaleString()} B</td>
-            <td class="mono-sm text-muted">${(iface.tx_bytes || 0).toLocaleString()} B</td>
+            <td class="mono-sm text-muted" title="${rxRaw.toLocaleString()} bytes">${formatBytesCompact(rxRaw)}</td>
+            <td class="mono-sm text-muted" title="${txRaw.toLocaleString()} bytes">${formatBytesCompact(txRaw)}</td>
           </tr>
-        `).join('');
+        `;
+        }).join('');
       } else {
         // Update existing elements inline to prevent layout shifts/scroll resets
         interfaces.forEach(iface => {
@@ -770,12 +832,20 @@ function fetchRealtimeStats() {
             if (row.cells[2].textContent !== speedText) row.cells[2].textContent = speedText;
             
             // Update Rx Bytes text
-            const rxText = `${(iface.rx_bytes || 0).toLocaleString()} B`;
-            if (row.cells[3].textContent !== rxText) row.cells[3].textContent = rxText;
+            const rxRaw = iface.rx_bytes || 0;
+            const rxText = formatBytesCompact(rxRaw);
+            if (row.cells[3].textContent !== rxText) {
+              row.cells[3].textContent = rxText;
+              row.cells[3].title = `${rxRaw.toLocaleString()} bytes`;
+            }
             
             // Update Tx Bytes text
-            const txText = `${(iface.tx_bytes || 0).toLocaleString()} B`;
-            if (row.cells[4].textContent !== txText) row.cells[4].textContent = txText;
+            const txRaw = iface.tx_bytes || 0;
+            const txText = formatBytesCompact(txRaw);
+            if (row.cells[4].textContent !== txText) {
+              row.cells[4].textContent = txText;
+              row.cells[4].title = `${txRaw.toLocaleString()} bytes`;
+            }
           }
         });
       }
@@ -788,6 +858,7 @@ function fetchRealtimeStats() {
       
       const activeIface = interfaces.find(x => x.index === activeIdx);
       if (activeIface) {
+        seedInterfaceTrafficHistory(targetId, activeIface.name);
         updateChartData(activeIface);
       }
     })
@@ -834,10 +905,16 @@ function onInterfaceChange() {
   });
   
   // Reset chart rolling datasets for the new interface to avoid draw lines connecting previous metrics
+  seededTrafficKey = null;
   if (trafficChartInstance) {
     chartRxData.fill(0);
     chartTxData.fill(0);
     trafficChartInstance.update('none');
+  }
+  const selectedOpt = select.options[select.selectedIndex];
+  const ifaceName = selectedOpt ? selectedOpt.dataset.iface : null;
+  if (activeDetailDeviceId && ifaceName) {
+    seedInterfaceTrafficHistory(activeDetailDeviceId, ifaceName);
   }
 }
 

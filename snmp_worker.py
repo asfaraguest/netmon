@@ -1495,7 +1495,7 @@ class SNMPWorker:
                     self._async_walk(ip, community, '1.3.6.1.2.1.31.1.1.1.10', port, version, timeout=1.5),
                     self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.10', port, version, timeout=1.5),
                     self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.16', port, version, timeout=1.5),
-                    self._async_walk(ip, community, '1.3.6.1.31.1.1.1.15', port, version, timeout=1.5),
+                    self._async_walk(ip, community, '1.3.6.1.2.1.31.1.1.1.15', port, version, timeout=1.5),
                     self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.14', port, version, timeout=1.5),
                     self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.20', port, version, timeout=1.5),
                     self._async_walk(ip, community, '1.3.6.1.2.1.2.2.1.13', port, version, timeout=1.5),

@@ -177,24 +177,25 @@
 
 <!-- Device Detail Modal (Global) -->
 <div class="modal fade" id="detailModal" tabindex="-1">
-  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+  <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
     <div class="modal-content nm-modal animate-fade-in">
       <div class="modal-header py-2 px-3" style="border-bottom: 1px solid var(--border);">
-        <h5 class="modal-title d-flex align-items-center gap-2">
+        <h5 class="modal-title d-flex align-items-center flex-wrap gap-2">
           <i class="bi bi-cpu-fill text-accent fs-5"></i>
           <span id="det-title" class="fw-600 text-md">Detail Perangkat</span>
-          <span class="badge ms-2 text-xs" id="det-status-badge"></span>
-          <span class="badge ms-1 text-xs" id="det-latency-badge" style="background: var(--bg-hover); border: 1px solid var(--border);" title="Ping Latency RTT"><i class="bi bi-lightning-charge-fill text-warning me-1"></i><span id="det-lat-val">— ms</span></span>
-          <span class="badge ms-1 text-xs" id="det-loss-badge" style="background: var(--bg-hover); border: 1px solid var(--border);" title="Packet Loss"><i class="bi bi-broadcast text-info me-1"></i><span id="det-loss-val">0%</span></span>
+          <span class="badge ms-1 text-xs" id="det-status-badge"></span>
+          <span class="latency-metric-badge" id="det-latency-badge" title="Ping Latency RTT"><i class="bi bi-lightning-charge-fill text-warning"></i><span id="det-lat-val">— ms</span></span>
+          <span class="latency-metric-badge" id="det-loss-badge" title="Packet Loss"><i class="bi bi-broadcast text-info"></i><span id="det-loss-val">0%</span></span>
         </h5>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" onclick="closeDetailModal()"></button>
       </div>
       <div class="modal-body p-3">
         <!-- State Timeline (Grafana-style 24-Hour History) -->
-        <div class="state-timeline-wrapper mb-3 p-2.5 rounded border" style="background: var(--bg-hover); border-color: var(--border) !important;">
-          <div class="d-flex justify-content-between align-items-center mb-1.5">
-            <span class="text-xs fw-600 d-flex align-items-center gap-1.5 text-secondary">
-              <i class="bi bi-clock-history text-accent"></i> 24-Hour State Timeline
+        <div class="state-timeline-wrapper mb-3 rounded">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+            <span class="text-xs fw-600 d-flex align-items-center gap-2 text-secondary">
+              <i class="bi bi-clock-history text-accent"></i>
+              <span>24-Hour State Timeline</span>
             </span>
             <div class="d-flex align-items-center gap-2 text-xs text-muted" style="font-size: 10px;">
               <span class="d-inline-flex align-items-center gap-1"><span class="tl-legend-dot st-up"></span>Online</span>
@@ -272,23 +273,20 @@
           <!-- Right side: Tabs (Monitoring & Latency & BlackBox Forensics) -->
           <div class="col-md-7 col-lg-8">
             <!-- Tabs -->
-            <ul class="nav nav-pills mb-2" id="det-tabs" role="tablist" style="border-bottom: 1px solid var(--border); padding-bottom: 8px;">
-              <li class="nav-item" role="presentation">
-                <button class="nav-link active py-1 px-3 text-xs fw-600 rounded btn-nm" id="det-tab-monitor" data-bs-toggle="pill" data-bs-target="#det-pane-monitor" type="button" role="tab" style="background: none; border: 1px solid transparent; color: var(--text);">
-                  <i class="bi bi-activity me-1 text-accent"></i> Traffic
-                </button>
-              </li>
-              <li class="nav-item" role="presentation">
-                <button class="nav-link py-1 px-3 text-xs fw-600 rounded btn-nm" id="det-tab-latency" data-bs-toggle="pill" data-bs-target="#det-pane-latency" type="button" role="tab" onclick="loadLatencyChart()" style="background: none; border: 1px solid transparent; color: var(--text);">
-                  <i class="bi bi-lightning-charge-fill me-1 text-warning"></i> Ping Latency
-                </button>
-              </li>
-              <li class="nav-item" role="presentation">
-                <button class="nav-link py-1 px-3 text-xs fw-600 rounded btn-nm" id="det-tab-blackbox" data-bs-toggle="pill" data-bs-target="#det-pane-blackbox" type="button" role="tab" onclick="loadBlackBoxForensics()" style="background: none; border: 1px solid transparent; color: var(--text);">
-                  <i class="bi bi-shield-fill-exclamation me-1 text-danger"></i> BlackBox Forensics
-                </button>
-              </li>
-            </ul>
+            <div class="det-tabs nav mb-3" id="det-tabs" role="tablist">
+              <button class="det-tab-btn active" id="det-tab-monitor" data-bs-toggle="pill" data-bs-target="#det-pane-monitor" type="button" role="tab" aria-selected="true">
+                <i class="bi bi-activity text-accent"></i>
+                <span>Traffic</span>
+              </button>
+              <button class="det-tab-btn" id="det-tab-latency" data-bs-toggle="pill" data-bs-target="#det-pane-latency" type="button" role="tab" aria-selected="false" onclick="loadLatencyChart()">
+                <i class="bi bi-lightning-charge-fill text-warning"></i>
+                <span>Ping Latency</span>
+              </button>
+              <button class="det-tab-btn" id="det-tab-blackbox" data-bs-toggle="pill" data-bs-target="#det-pane-blackbox" type="button" role="tab" aria-selected="false" onclick="loadBlackBoxForensics()">
+                <i class="bi bi-shield-fill-exclamation text-danger"></i>
+                <span>BlackBox Forensics</span>
+              </button>
+            </div>
 
             <div class="tab-content" id="det-tab-content">
               <!-- Monitor Pane -->
@@ -327,8 +325,8 @@
                   <h6 class="mb-2 d-flex align-items-center gap-2 fw-600 text-sm">
                     <i class="bi bi-ethernet text-accent"></i> Interface Status
                   </h6>
-                  <div style="max-height: 140px; overflow-y: auto;" class="rounded">
-                    <table class="nm-table table-sm m-0">
+                  <div style="max-height: 220px; overflow: auto;" class="rounded">
+                    <table class="nm-table det-iface-table table-sm m-0">
                       <thead class="sticky-top">
                         <tr>
                           <th class="border-0">Port Name</th>
@@ -387,9 +385,9 @@
                     <div class="p-3 rounded mb-3 border-start border-4" id="det-bb-alert-box" style="background: rgba(255, 193, 7, 0.05); border-color: var(--accent) !important;">
                       <div class="d-flex justify-content-between align-items-center mb-2">
                         <span class="badge text-xs px-2 py-1" id="det-bb-badge" style="background: var(--accent);">Penyebab Terdeteksi</span>
-                        <span class="text-xs text-muted">Tingkat Keyakinan: <strong id="det-bb-confidence" class="text-white"></strong></span>
+                        <span class="text-xs text-muted">Tingkat Keyakinan: <strong id="det-bb-confidence" class="text-primary"></strong></span>
                       </div>
-                      <h5 class="fw-700 text-md text-white mb-2" id="det-bb-root-cause">Mati Lampu / Power Loss</h5>
+                      <h5 class="fw-700 text-md text-primary mb-2" id="det-bb-root-cause">Mati Lampu / Power Loss</h5>
                       <p class="text-secondary text-xs mb-0" id="det-bb-narration" style="line-height:1.5;"></p>
                     </div>
                   </div>
