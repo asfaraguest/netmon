@@ -231,14 +231,13 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
       - Memperbarui tooltip grafik agregat backbone agar menampilkan angka laju Mbps sekaligus persentase utilisasi terhadap kapasitas total internet kampus.
       - Memastikan seluruh elemen baru tampil proporsional pada tampilan layar web, mode cetak (Print), maupun ekspor dokumen PDF.
 
-21. **Tema Kustom Personal "Polije Signature — Kampus SIP" (`style.css`, `base.html`, `login.html`, `settings.html`):**
-    - **Palet Identitas Resmi Polije (`polije.ac.id` & Branding SIP):**
-      - Mengadopsi warna resmi institusi Politeknik Negeri Jember: *Academic Royal Navy* (`#0a2a5e`), *Bondi/Sky Blue* (`#028daa` / `#0ea5e9`), *Golden Rice* (`#f5b700` — 9 bulir padi), *Hijau Vokasi* (`#16a34a`), dan *Merah Jember* (`#dc2626`) baik untuk mode Light (nuansa portal kampus) maupun Dark (mode NOC shift malam).
-    - **Elemen Personal Kampus:**
-      - Pita gradien 4 warna SIP di puncak sidebar dan kartu login.
-      - Sidebar Navy dengan pill motto `SMART • INNOVATIVE • PRO`, garis aksen emas di bawah logo Polije, dan indikator menu aktif biru-emas.
-      - Sticky page header dengan garis bawah gradien Navy–Bondi–Emas ala header portal `polije.ac.id`, serta kartu KPI/panel dengan border-top aksen biru-emas.
-      - Pratinjau tema langsung (*live preview*) dan kartu palet warna identitas Polije pada halaman Settings (`UI Theme`).
+21. **Tema Kustom "Polije Web Portal (polije.ac.id)" (`style.css`, `base.html`, `login.html`, `settings.html`):**
+    - **Desain Bersih Khas Portal Kampus (`polije.ac.id`):**
+      - Mengadopsi gaya portal resmi Politeknik Negeri Jember yang solid, rapi, dan formal tanpa gradien dekoratif berlebihan: *Polije Navy* (`#0b2246`), *Institutional Blue* (`#0277bd` / `#0284c7`), dan aksen *Emas Akademik* (`#eab308`) pada mode Light maupun Dark.
+    - **Sidebar & Tata Letak Terstruktur:**
+      - Sidebar solid Navy `#0b2246` dengan blok header logo `#081a36` bergaris emas `#eab308`, menu terstruktur dengan penanda garis kiri emas pada menu aktif, serta hover kuning-emas khas navigasi portal Polije.
+      - Sticky page header bersih dengan garis batas solid Navy, kartu panel/KPI datar dengan border tipis `#dce3ec`, tombol solid, serta footer portal resmi Politeknik Negeri Jember (`Jl. Mastrip PO Box 164, Jember`) di halaman utama dan login.
+      - Pratinjau tema langsung (*live preview*) pada dropdown `UI Theme` di Settings.
 
 22. **Perbaikan Menyeluruh Error `database is locked` Saat Generate Report & Konkurensi SQLite (`database.py`, `snmp_worker.py`):**
     - **Akar Masalah:**

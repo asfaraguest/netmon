@@ -55,16 +55,6 @@
     <div class="live-badge ms-auto"><span class="pulse"></span>LIVE</div>
   </div>
 
-  <div class="polije-sip-badge" title="Smart, Innovative, Professional — Politeknik Negeri Jember">
-    <span class="sip-dots">
-      <i style="background:#dc2626"></i>
-      <i style="background:#16a34a"></i>
-      <i style="background:#f5b700"></i>
-      <i style="background:#0ea5e9"></i>
-    </span>
-    <span>SMART • INNOVATIVE • PRO</span>
-  </div>
-
   <nav class="sidebar-nav">
     <a href="/" class="nav-item {% if request.endpoint=='dashboard' %}active{% endif %}">
       <i class="bi bi-speedometer2"></i><span>Dashboard</span>
@@ -159,6 +149,11 @@
   </div>
 
   {% block content %}{% endblock %}
+
+  <footer class="polije-portal-footer">
+    <span>&copy; Politeknik Negeri Jember &mdash; UPT Teknologi Informasi dan Komunikasi</span>
+    <span>Jl. Mastrip PO Box 164, Jember &bull; polije.ac.id</span>
+  </footer>
 </main>
 
 <!-- ======================================================
