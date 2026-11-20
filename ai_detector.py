@@ -188,54 +188,38 @@ def _refine_with_groq(db, socketio, alert, device, alert_id, initial_is_false, i
                 f'{{"is_false_alarm": 0 atau 1, "explanation": "Penjelasan singkat maks 2 kalimat dalam bahasa Indonesia"}}'
             )
         
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        settings = db.get_settings()
-        model_name = (settings.get('groq_model') or 'llama-3.3-70b-versatile').strip()
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        payload = {
-            "model": model_name,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a network analysis assistant. Respond ONLY with a raw JSON object containing \"is_false_alarm\" (0 or 1) and \"explanation\" (string in Indonesian, max 2 sentences)."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": 0.2
-        }
-        
-        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
-        with urllib.request.urlopen(req, timeout=8) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            text_resp = res_data['choices'][0]['message']['content'].strip()
-            ai_res = json.loads(text_resp)
-            
-            final_is_false = int(ai_res.get('is_false_alarm', initial_is_false))
-            final_explanation = ai_res.get('explanation', initial_explanation)
+        api_key, provider, model_name = _resolve_ai_creds(db)
+        text_resp = _call_llm_completion(
+            provider=provider,
+            api_key=api_key,
+            model_name=model_name,
+            system_prompt='You are a network analysis assistant. Respond ONLY with a raw JSON object containing "is_false_alarm" (0 or 1) and "explanation" (string in Indonesian, max 2 sentences).',
+            user_prompt=prompt,
+            temperature=0.2,
+            max_tokens=300,
+            json_mode=True,
+            timeout=10,
+        )
+        ai_res = json.loads(text_resp)
 
-            # Update DB with refined AI insight
-            with db.conn() as c:
-                c.execute('UPDATE alerts SET is_false_alarm = ?, ai_analysis = ? WHERE id = ?',
-                          (final_is_false, final_explanation, alert_id))
+        final_is_false = int(ai_res.get('is_false_alarm', initial_is_false))
+        final_explanation = ai_res.get('explanation', initial_explanation)
 
-            # Broadcast update via Socket.IO
-            if socketio:
-                socketio.emit('alert_update', {
-                    'id': alert_id,
-                    'is_false_alarm': final_is_false,
-                    'ai_analysis': final_explanation
-                })
+        # Update DB with refined AI insight
+        with db.conn() as c:
+            c.execute('UPDATE alerts SET is_false_alarm = ?, ai_analysis = ? WHERE id = ?',
+                      (final_is_false, final_explanation, alert_id))
+
+        # Broadcast update via Socket.IO
+        if socketio:
+            socketio.emit('alert_update', {
+                'id': alert_id,
+                'is_false_alarm': final_is_false,
+                'ai_analysis': final_explanation
+            })
 
     except Exception as e:
-        print(f"[AI Detector] Groq API refinement failed: {e}")
+        print(f"[AI Detector] AI refinement failed: {e}")
 
 def analyze_alert(db, socketio, alert_id):
     """Evaluates heuristics synchronously so DB has valid status immediately (eliminating race condition),
@@ -293,12 +277,100 @@ def analyze_alert(db, socketio, alert_id):
         print(f"[AI Detector] analyze_alert failed: {e}")
 
 
+def detect_ai_provider(api_key, provider_pref='auto', model_name=''):
+    """Auto-detect LLM provider (Google AI Studio vs Groq) and normalize default model."""
+    key = (api_key or '').strip()
+    pref = (provider_pref or 'auto').strip().lower()
+    model = (model_name or '').strip()
+
+    if pref in ('google', 'gemini', 'google_ai', 'aistudio'):
+        provider = 'google'
+    elif pref == 'groq':
+        provider = 'groq'
+    else:
+        provider = 'google' if key.startswith('AIza') else 'groq'
+
+    if provider == 'google':
+        if not model or not model.lower().startswith('gemini'):
+            model = 'gemini-flash-lite-latest'
+    else:
+        if not model or model.lower().startswith('gemini'):
+            model = 'llama-3.3-70b-versatile'
+
+    return provider, model
+
+
+def _resolve_ai_creds(db):
+    """Return (api_key, provider, model_name) from database settings."""
+    s = db.get_settings()
+    api_key = (s.get('groq_api_key') or '').strip()
+    provider_pref = s.get('ai_provider', 'auto')
+    raw_model = s.get('groq_model', '')
+    provider, model = detect_ai_provider(api_key, provider_pref=provider_pref, model_name=raw_model)
+    return api_key, provider, model
+
+
+def _call_llm_completion(provider, api_key, model_name, system_prompt, user_prompt,
+                         temperature=0.25, max_tokens=750, json_mode=False, timeout=18):
+    """Execute completion against Groq Cloud or Google AI Studio (Gemini) REST API."""
+    if provider == 'google':
+        import urllib.parse
+        safe_model = urllib.parse.quote(model_name, safe='-_.')
+        safe_key = urllib.parse.quote(api_key, safe='')
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:generateContent?key={safe_key}"
+        gen_cfg = {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+        }
+        if json_mode:
+            gen_cfg["responseMimeType"] = "application/json"
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": gen_cfg,
+        }
+        if system_prompt:
+            payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+        headers = {"Content-Type": "application/json"}
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            res_data = json.loads(response.read().decode('utf-8'))
+            candidates = res_data.get('candidates') or []
+            if not candidates:
+                raise ValueError("Google AI Studio tidak mengembalikan kandidat jawaban.")
+            parts = candidates[0].get('content', {}).get('parts') or []
+            text_out = "".join(str(p.get('text', '')) for p in parts if isinstance(p, dict)).strip()
+            if not text_out:
+                raise ValueError("Google AI Studio mengembalikan respon kosong.")
+            return text_out
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_prompt})
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+    req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        res_data = json.loads(response.read().decode('utf-8'))
+        return res_data['choices'][0]['message']['content'].strip()
+
+
 def get_groq_config(db):
-    """Return (api_key, model_name) from database settings."""
+    """Return (api_key, resolved_model_name) from database settings."""
     try:
-        s = db.get_settings()
-        api_key = (s.get('groq_api_key') or '').strip()
-        model = (s.get('groq_model') or 'llama-3.3-70b-versatile').strip()
+        api_key, _, model = _resolve_ai_creds(db)
         return api_key, model
     except Exception:
         return '', 'llama-3.3-70b-versatile'
@@ -442,12 +514,14 @@ def _restore_ips(text, ip_map):
 
 
 def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
-    """Query Groq LLM with live TIKWatch telemetry context. Returns (ok: bool, answer: str)."""
-    api_key, model_name = get_groq_config(db)
+    """Query configured LLM (Groq or Google AI Studio) with live TIKWatch telemetry context."""
+    api_key, provider, model_name = _resolve_ai_creds(db)
+    provider_label = "Google AI Studio" if provider == 'google' else "Groq"
     if not api_key:
         return False, (
-            "⚠️ Groq API Key belum dikonfigurasi. "
-            "Masukkan API Key di Web Dashboard: <b>Settings &gt; AI False Warning Detector &gt; Groq API Key</b>."
+            "⚠️ AI API Key belum dikonfigurasi. "
+            "Masukkan API Key Groq atau Google AI Studio di Web Dashboard: "
+            "<b>Settings &gt; AI False Warning Detector</b>."
         )
 
     settings = db.get_settings()
@@ -475,35 +549,27 @@ def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
         user_prompt = raw_user_prompt
 
     try:
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        payload = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.25,
-            "max_tokens": max_tokens
-        }
         import urllib.error
-        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
-        with urllib.request.urlopen(req, timeout=18) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            answer = res_data['choices'][0]['message']['content'].strip()
-            if ip_map:
-                answer = _restore_ips(answer, ip_map)
-            return True, answer
+        answer = _call_llm_completion(
+            provider=provider,
+            api_key=api_key,
+            model_name=model_name,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.25,
+            max_tokens=max_tokens,
+            json_mode=False,
+            timeout=20,
+        )
+        if ip_map:
+            answer = _restore_ips(answer, ip_map)
+        return True, answer
     except urllib.error.HTTPError as he:
         try:
             err_body = he.read().decode('utf-8')
             msg = json.loads(err_body).get('error', {}).get('message', he.reason)
         except Exception:
             msg = str(he)
-        return False, f"⚠️ Groq API Error ({model_name}): {msg}"
+        return False, f"⚠️ {provider_label} API Error ({model_name}): {msg}"
     except Exception as e:
-        return False, f"⚠️ Gagal menghubungi Groq AI: {e}"
+        return False, f"⚠️ Gagal menghubungi {provider_label} AI: {e}"

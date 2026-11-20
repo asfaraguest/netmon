@@ -48,11 +48,11 @@ ALLOWED_SETTING_KEYS = {
     'default_community', 'default_snmp_version',
     'alert_retention_days', 'log_retention_days', 'traffic_retention_hours',
     'report_metrics_retention_hours', 'interface_chart_retention_hours',
-    'anomaly_cap_multiplier', 'anomaly_cap_gbps', 'campus_total_bandwidth_mbps',
+    'anomaly_cap_multiplier', 'anomaly_cap_gbps', 'campus_total_bandwidth_mbps', 'campus_isp_list',
     'alert_on_down', 'alert_on_up', 'anomaly_alert_enabled',
     'traffic_spike_multiplier', 'traffic_spike_min_mbps', 'traffic_drop_min_mbps',
     'cpu_spike_threshold', 'cpu_jump_threshold', 'memory_spike_threshold',
-    'groq_api_key', 'groq_model', 'groq_redact_ips',
+    'ai_provider', 'groq_api_key', 'groq_model', 'groq_redact_ips',
     'telegram_enabled', 'telegram_bot_token', 'telegram_chat_ids',
     'telegram_notify_down', 'telegram_notify_up', 'telegram_censor_ips',
     'telegram_daily_digest_enabled', 'telegram_daily_digest_time',
@@ -1314,7 +1314,19 @@ def sync_unifi():
 
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
+    import ai_detector
     s = db.get_settings()
+    raw_key = (s.get('groq_api_key') or '').strip()
+    if raw_key:
+        det_provider, det_model = ai_detector.detect_ai_provider(
+            raw_key,
+            provider_pref=s.get('ai_provider', 'auto'),
+            model_name=s.get('groq_model', '')
+        )
+        s['ai_detected_provider'] = det_provider
+        s['groq_model'] = det_model
+    else:
+        s['ai_detected_provider'] = ''
     # Never expose internal cryptographic secrets or plaintext tokens
     s.pop('app_secret_key', None)
     s.pop('internal_emit_token', None)
@@ -1362,6 +1374,30 @@ def save_settings():
                 'message': f'Ditolak untuk mencegah lock-out: IP Anda ({request.remote_addr}) harus masuk di dalam daftar CIDR baru.'
             }), 400
         data['allowed_cidrs'] = normalized_cidrs
+    if 'campus_isp_list' in data:
+        try:
+            raw_list = data.get('campus_isp_list')
+            parsed = json.loads(raw_list) if isinstance(raw_list, str) else raw_list
+            if isinstance(parsed, list):
+                clean_isps = []
+                total_mbps = 0.0
+                for idx, item in enumerate(parsed[:4]):
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get('name') or f'ISP {idx + 1}')[:60]
+                    enabled = bool(item.get('enabled'))
+                    try:
+                        mbps = max(0.0, float(item.get('mbps') or 0))
+                    except (TypeError, ValueError):
+                        mbps = 0.0
+                    clean_isps.append({'name': name, 'mbps': mbps, 'enabled': enabled})
+                    if enabled:
+                        total_mbps += mbps
+                data['campus_isp_list'] = json.dumps(clean_isps, ensure_ascii=False)
+                if total_mbps > 0:
+                    data['campus_total_bandwidth_mbps'] = str(int(round(total_mbps)))
+        except Exception:
+            data.pop('campus_isp_list', None)
     db.save_settings(data)
     if 'poll_interval' in data:
         try:
@@ -1462,37 +1498,40 @@ def cleanup_traffic_anomalies():
 
 @app.route('/api/ai/test', methods=['POST'])
 def test_groq():
-    import urllib.request
+    import urllib.error
+    import ai_detector
     data = request.json or {}
     settings = db.get_settings()
     api_key = data.get('groq_api_key')
     if not api_key or api_key == '***':
         api_key = settings.get('groq_api_key', '')
-    model_name = (data.get('groq_model') or settings.get('groq_model') or 'llama-3.3-70b-versatile').strip()
-        
+    api_key = (api_key or '').strip()
+    provider_pref = data.get('ai_provider') or settings.get('ai_provider', 'auto')
+    raw_model = (data.get('groq_model') or settings.get('groq_model') or '').strip()
+    provider, model_name = ai_detector.detect_ai_provider(api_key, provider_pref=provider_pref, model_name=raw_model)
+    provider_label = "Google AI Studio" if provider == 'google' else "Groq"
+
     if not api_key:
         return jsonify({'status': 'error', 'message': 'API Key is empty'}), 400
-        
+
     try:
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        payload = {
-            "model": model_name,
-            "messages": [
-                {"role": "user", "content": "Say 'OK' and nothing else."}
-            ],
-            "temperature": 0.2
-        }
-        import urllib.error
-        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers)
-        with urllib.request.urlopen(req, timeout=5) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            text = res_data['choices'][0]['message']['content'].strip()
-            return jsonify({'status': 'success', 'message': f"Connected ({model_name})! Response: {text}"})
+        text = ai_detector._call_llm_completion(
+            provider=provider,
+            api_key=api_key,
+            model_name=model_name,
+            system_prompt="",
+            user_prompt="Say 'OK' and nothing else.",
+            temperature=0.2,
+            max_tokens=20,
+            json_mode=False,
+            timeout=10,
+        )
+        return jsonify({
+            'status': 'success',
+            'provider': provider,
+            'model': model_name,
+            'message': f"Connected via {provider_label} ({model_name})! Response: {text}"
+        })
     except urllib.error.HTTPError as he:
         try:
             err_body = he.read().decode('utf-8')
@@ -1500,9 +1539,9 @@ def test_groq():
             msg = err_json.get('error', {}).get('message', he.reason)
         except Exception:
             msg = str(he)
-        return jsonify({'status': 'error', 'message': f"Groq API Error: {msg}"}), 400
+        return jsonify({'status': 'error', 'message': f"{provider_label} API Error ({model_name}): {msg}"}), 400
     except Exception as e:
-        return jsonify({'status': 'error', 'message': f"API connection failed: {str(e)}"}), 400
+        return jsonify({'status': 'error', 'message': f"{provider_label} connection failed: {str(e)}"}), 400
 
 @app.route('/reports')
 def reports_page():

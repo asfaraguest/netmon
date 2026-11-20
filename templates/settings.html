@@ -71,10 +71,40 @@
           <input type="number" class="nm-input" id="s-anom-mult" min="1" max="10" step="0.01" value="1.05">
           <small class="text-muted">Toleransi lonjakan di atas kapasitas link (default 1.05x / buffer 5%).</small>
         </div>
-        <div class="col-12">
-          <label class="nm-label">Total Kapasitas ISP Kampus Utama (Mbps)</label>
-          <input type="number" class="nm-input" id="s-campus-bw" min="100" max="400000" step="100" value="6000">
-          <small class="text-muted">Total kapasitas seluruh ISP yang mengaliri kampus utama (default <b>6000 Mbps = 6.0 Gbps</b>). Digunakan untuk menghitung persentase utilisasi &amp; sisa headroom pada Dashboard, <code>/traffic all</code>, dan grafik <code>/chart</code>.</small>
+        <div class="col-12 pt-2 border-top">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <label class="nm-label mb-0">Kapasitas Internet ISP Kampus Utama (Max 4 ISP)</label>
+            <select class="nm-select" id="s-campus-isp-count" style="width:auto; min-width: 110px;" onchange="updateIspRowsVisibility()">
+              <option value="1">1 ISP</option>
+              <option value="2">2 ISP</option>
+              <option value="3">3 ISP</option>
+              <option value="4">4 ISP</option>
+            </select>
+          </div>
+          <div id="campus-isp-rows" class="d-flex flex-column gap-2">
+            <div class="row g-2 align-items-center isp-slot" data-slot="1">
+              <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-1" placeholder="Nama ISP 1 (misal: Astinet / Telkom)"></div>
+              <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-1" min="0" step="100" value="6000" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
+            </div>
+            <div class="row g-2 align-items-center isp-slot d-none" data-slot="2">
+              <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-2" placeholder="Nama ISP 2 (misal: Biznet)"></div>
+              <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-2" min="0" step="100" value="0" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
+            </div>
+            <div class="row g-2 align-items-center isp-slot d-none" data-slot="3">
+              <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-3" placeholder="Nama ISP 3 (misal: Icon+)"></div>
+              <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-3" min="0" step="100" value="0" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
+            </div>
+            <div class="row g-2 align-items-center isp-slot d-none" data-slot="4">
+              <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-4" placeholder="Nama ISP 4 (misal: Backup Link)"></div>
+              <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-4" min="0" step="100" value="0" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
+            </div>
+          </div>
+          <input type="hidden" id="s-campus-bw" value="6000">
+          <div class="mt-2 p-2 rounded border d-flex justify-content-between align-items-center" style="background:rgba(0,212,255,0.06); border-color:var(--border) !important;">
+            <span class="text-xs fw-600">Total Acuan Kapasitas ISP:</span>
+            <span class="badge bg-info-lt text-info fw-700" id="s-campus-bw-total-display">6.000 Mbps (6.00 Gbps)</span>
+          </div>
+          <small class="text-muted">Atur jumlah ISP yang aktif masuk ke kampus utama beserta kapasitas masing-masing (Mbps). Totalnya dipakai otomatis sebagai acuan utilisasi &amp; headroom Dashboard, <code>/traffic all</code>, grafik <code>/chart</code>, dan AI NOC.</small>
         </div>
         <div class="col-12">
           <label class="nm-label">Anomaly Absolute Cap (Gbps)</label>
@@ -165,32 +195,49 @@
 
   <!-- ============ AI DETECTOR ============ -->
   <div class="nm-panel">
-    <div class="panel-header">
-      <span><i class="bi bi-robot me-2 text-accent"></i>AI False Warning Detector</span>
+    <div class="panel-header d-flex justify-content-between align-items-center">
+      <div class="d-flex align-items-center gap-2">
+        <span><i class="bi bi-robot me-2 text-accent"></i>AI NOC &amp; False Warning Detector</span>
+        <span class="badge bg-secondary-lt text-muted border" id="ai-provider-badge" style="font-size:10px;padding:2px 6px;">Auto</span>
+      </div>
       <button class="btn-nm btn-sm" onclick="testGroq()"><i class="bi bi-plug-fill me-1"></i>Test Connection</button>
     </div>
     <div class="panel-body">
       <div class="row g-3">
-        <div class="col-md-7">
-          <label class="nm-label">Groq API Key</label>
-          <input type="password" class="nm-input" id="s-groq-key" placeholder="Leave blank or enter Groq API Key">
-          <small class="text-muted">TIKWatch menggunakan Groq LLM untuk deteksi false alarm, forensik downtime, serta asisten AI NOC di Bot Telegram (<code>/ai</code>, <code>/diagnosa</code>, dan tombol <b>Analisa AI</b>).</small>
-        </div>
-        <div class="col-md-5">
-          <label class="nm-label">Groq AI Model</label>
-          <select class="nm-select w-100" id="s-groq-model">
-            <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Recommended)</option>
-            <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
-            <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Ultra Fast)</option>
-            <option value="qwen/qwen3-32b">qwen/qwen3-32b</option>
+        <div class="col-md-4">
+          <label class="nm-label">AI Provider</label>
+          <select class="nm-select w-100" id="s-ai-provider" onchange="onAiCredInput(true)">
+            <option value="auto">Auto-Detect (Key)</option>
+            <option value="google">Google AI Studio (Gemini)</option>
+            <option value="groq">Groq Cloud</option>
           </select>
-          <small class="text-muted">Model AI yang dipakai Web Dashboard &amp; Bot Telegram.</small>
+        </div>
+        <div class="col-md-8">
+          <label class="nm-label">API Key (Groq <code>gsk_...</code> atau Google AI Studio <code>AIza...</code>)</label>
+          <input type="password" class="nm-input" id="s-groq-key" placeholder="Masukkan AIza... (Google AI Studio) atau gsk_... (Groq)" oninput="onAiCredInput(true)">
+        </div>
+        <div class="col-12">
+          <label class="nm-label">AI Model</label>
+          <select class="nm-select w-100" id="s-groq-model">
+            <optgroup label="Google AI Studio (Gemini)">
+              <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Recommended — Google AI Studio)</option>
+              <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+            </optgroup>
+            <optgroup label="Groq Cloud">
+              <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Recommended — Groq)</option>
+              <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
+              <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Ultra Fast)</option>
+              <option value="qwen/qwen3-32b">qwen/qwen3-32b</option>
+            </optgroup>
+          </select>
+          <small class="text-muted">Paste API key <code>AIza...</code> untuk autodetect ke Google AI Studio (<code>gemini-flash-lite-latest</code>), atau <code>gsk_...</code> untuk Groq. Dipakai oleh Web Dashboard &amp; Bot Telegram (<code>/ai</code>, <code>/diagnosa</code>).</small>
         </div>
         <div class="col-12">
           <label class="nm-label">Privasi Telemetri Cloud AI</label>
           <div class="nm-toggle-wrap">
             <label class="nm-toggle"><input type="checkbox" id="s-groq-redact" checked><span class="nm-slider"></span></label>
-            <span>Samarkan IP internal kampus (RFC1918) sebelum dikirim ke Groq Cloud API</span>
+            <span>Samarkan IP internal kampus (RFC1918) sebelum dikirim ke Cloud AI API</span>
           </div>
         </div>
       </div>
@@ -466,7 +513,7 @@ function loadSettings() {
     setVal('s-chart-ret',  s.interface_chart_retention_hours || 168);
     setVal('s-anom-mult',  s.anomaly_cap_multiplier || 1.05);
     setVal('s-anom-cap',   s.anomaly_cap_gbps || 5.0);
-    setVal('s-campus-bw',  s.campus_total_bandwidth_mbps || 6000);
+    loadCampusIspList(s);
     setChk('s-alert-down', s.alert_on_down !== 'false');
     setChk('s-alert-up',   s.alert_on_up   !== 'false');
     setChk('s-anom-alert', s.anomaly_alert_enabled !== 'false');
@@ -474,8 +521,10 @@ function loadSettings() {
     setVal('s-spike-min',  s.traffic_spike_min_mbps || 80.0);
     setVal('s-cpu-thresh', s.cpu_spike_threshold || 92);
     setVal('s-mem-thresh', s.memory_spike_threshold || 95);
+    setVal('s-ai-provider', s.ai_provider || 'auto');
     setVal('s-groq-key',   s.groq_api_key || '');
     setVal('s-groq-model', s.groq_model || 'llama-3.3-70b-versatile');
+    updateAiProviderBadge(s.ai_detected_provider || '');
     setChk('s-groq-redact', s.groq_redact_ips !== 'false');
     setChk('s-tg-enabled', s.telegram_enabled === 'true');
     setVal('s-tg-token',   s.telegram_bot_token || '');
@@ -593,6 +642,8 @@ function saveAll() {
     anomaly_cap_multiplier: getVal('s-anom-mult'),
     anomaly_cap_gbps: getVal('s-anom-cap'),
     campus_total_bandwidth_mbps: getVal('s-campus-bw') || '6000',
+    campus_isp_list: JSON.stringify(collectCampusIspList()),
+    ai_provider: getVal('s-ai-provider') || 'auto',
     groq_model: getVal('s-groq-model') || 'llama-3.3-70b-versatile',
     groq_redact_ips: document.getElementById('s-groq-redact')?.checked ? 'true' : 'false',
     alert_on_down:        document.getElementById('s-alert-down').checked ? 'true' : 'false',
@@ -693,10 +744,115 @@ function testUnifi() {
     });
 }
 
+function loadCampusIspList(s) {
+  let list = [];
+  try {
+    if (s.campus_isp_list) list = JSON.parse(s.campus_isp_list);
+  } catch (e) { list = []; }
+  const fallbackTotal = parseFloat(s.campus_total_bandwidth_mbps || 6000) || 6000;
+  if (!Array.isArray(list) || list.length === 0) {
+    list = [
+      { name: 'ISP 1 (Utama)', mbps: fallbackTotal, enabled: true },
+      { name: 'ISP 2', mbps: 0, enabled: false },
+      { name: 'ISP 3', mbps: 0, enabled: false },
+      { name: 'ISP 4', mbps: 0, enabled: false }
+    ];
+  }
+  let enabledCount = list.filter(x => x && x.enabled).length;
+  if (enabledCount < 1) enabledCount = 1;
+  if (enabledCount > 4) enabledCount = 4;
+  setVal('s-campus-isp-count', String(enabledCount));
+  for (let i = 1; i <= 4; i++) {
+    const item = list[i - 1] || {};
+    setVal(`s-isp-name-${i}`, item.name || `ISP ${i}`);
+    setVal(`s-isp-bw-${i}`, item.mbps != null ? item.mbps : (i === 1 ? fallbackTotal : 0));
+  }
+  updateIspRowsVisibility();
+}
+
+function updateIspRowsVisibility() {
+  const cnt = Math.max(1, Math.min(4, parseInt(getVal('s-campus-isp-count') || '1')));
+  for (let i = 1; i <= 4; i++) {
+    const row = document.querySelector(`.isp-slot[data-slot="${i}"]`);
+    if (row) row.classList.toggle('d-none', i > cnt);
+  }
+  recalcCampusBandwidth();
+}
+
+function recalcCampusBandwidth() {
+  const cnt = Math.max(1, Math.min(4, parseInt(getVal('s-campus-isp-count') || '1')));
+  let total = 0;
+  for (let i = 1; i <= cnt; i++) {
+    const v = parseFloat(getVal(`s-isp-bw-${i}`) || '0');
+    if (!isNaN(v) && v > 0) total += v;
+  }
+  setVal('s-campus-bw', String(Math.round(total)));
+  const disp = document.getElementById('s-campus-bw-total-display');
+  if (disp) {
+    const gbps = (total / 1000).toFixed(2);
+    disp.textContent = `${total.toLocaleString('id-ID')} Mbps (${gbps} Gbps)`;
+  }
+}
+
+function collectCampusIspList() {
+  const cnt = Math.max(1, Math.min(4, parseInt(getVal('s-campus-isp-count') || '1')));
+  const out = [];
+  for (let i = 1; i <= 4; i++) {
+    const mbps = Math.max(0, parseFloat(getVal(`s-isp-bw-${i}`) || '0') || 0);
+    out.push({
+      name: (getVal(`s-isp-name-${i}`) || `ISP ${i}`).trim(),
+      mbps: mbps,
+      enabled: i <= cnt
+    });
+  }
+  return out;
+}
+
+function updateAiProviderBadge(detected) {
+  const b = document.getElementById('ai-provider-badge');
+  if (!b) return;
+  if (detected === 'google') {
+    b.className = 'badge bg-info-lt text-info border border-info';
+    b.textContent = 'Google AI Studio';
+  } else if (detected === 'groq') {
+    b.className = 'badge bg-success-lt text-success border border-success';
+    b.textContent = 'Groq Cloud';
+  } else {
+    b.className = 'badge bg-secondary-lt text-muted border';
+    b.textContent = 'Auto';
+  }
+}
+
+function onAiCredInput(autoSelectModel) {
+  const pref = getVal('s-ai-provider') || 'auto';
+  const key = (getVal('s-groq-key') || '').trim();
+  const modelEl = document.getElementById('s-groq-model');
+  const curModel = modelEl ? modelEl.value : '';
+
+  let provider = '';
+  if (pref === 'google') provider = 'google';
+  else if (pref === 'groq') provider = 'groq';
+  else if (key && key !== '***') {
+    provider = key.startsWith('AIza') ? 'google' : 'groq';
+  } else if (curModel.startsWith('gemini')) {
+    provider = 'google';
+  }
+
+  updateAiProviderBadge(provider);
+  if (autoSelectModel && modelEl) {
+    if (provider === 'google' && !curModel.startsWith('gemini')) {
+      modelEl.value = 'gemini-flash-lite-latest';
+    } else if (provider === 'groq' && curModel.startsWith('gemini')) {
+      modelEl.value = 'llama-3.3-70b-versatile';
+    }
+  }
+}
+
 function testGroq() {
   const res = document.getElementById('groq-test-result');
-  res.innerHTML = '<div class="text-muted text-sm"><i class="bi bi-arrow-repeat spin me-1"></i>Testing Groq API connection…</div>';
+  res.innerHTML = '<div class="text-muted text-sm"><i class="bi bi-arrow-repeat spin me-1"></i>Testing AI API connection…</div>';
   const data = {
+    ai_provider: getVal('s-ai-provider') || 'auto',
     groq_api_key: getVal('s-groq-key'),
     groq_model: getVal('s-groq-model')
   };
@@ -708,6 +864,7 @@ function testGroq() {
   .then(r => r.json())
   .then(d => {
     if (d.status === 'success') {
+      if (d.provider) updateAiProviderBadge(d.provider);
       res.innerHTML = `<div class="text-success text-sm"><i class="bi bi-check-circle-fill me-1"></i>${d.message}</div>`;
     } else {
       res.innerHTML = `<div class="text-danger text-sm"><i class="bi bi-x-circle-fill me-1"></i>${d.message}</div>`;
