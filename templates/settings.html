@@ -5,7 +5,7 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">Settings</h1>
-    <p class="page-sub">Application configuration</p>
+    <p class="page-sub">Konfigurasi monitoring, kapasitas ISP, AI, notifikasi &amp; keamanan</p>
   </div>
   <div class="page-actions">
     <button class="btn-nm btn-sm btn-success" onclick="saveAll()">
@@ -14,28 +14,55 @@
   </div>
 </div>
 
+<!-- Category Tabs -->
+<div class="settings-tabs" id="settings-tabs">
+  <button type="button" class="settings-tab-btn active" onclick="filterSettingsCat('all', this)">
+    <i class="bi bi-grid-fill"></i>Semua
+  </button>
+  <button type="button" class="settings-tab-btn" onclick="filterSettingsCat('network', this)">
+    <i class="bi bi-speedometer2"></i>Jaringan, Polling &amp; ISP
+  </button>
+  <button type="button" class="settings-tab-btn" onclick="filterSettingsCat('notifications', this)">
+    <i class="bi bi-robot"></i>AI, Telegram &amp; Tema
+  </button>
+  <button type="button" class="settings-tab-btn" onclick="filterSettingsCat('integrations', this)">
+    <i class="bi bi-diagram-3-fill"></i>UniFi &amp; Zona
+  </button>
+  <button type="button" class="settings-tab-btn" onclick="filterSettingsCat('security', this)">
+    <i class="bi bi-shield-lock-fill"></i>Keamanan &amp; Sistem
+  </button>
+</div>
+
 <div class="settings-grid">
 
-  <!-- ============ POLLING ============ -->
-  <div class="nm-panel">
-    <div class="panel-header"><span><i class="bi bi-clock-fill me-2 text-accent"></i>Polling</span></div>
+  <!-- =========================================================
+       KATEGORI 1: JARINGAN, POLLING, RETENSI & KAPASITAS ISP
+       ========================================================= -->
+  <div class="settings-section-hdr" data-cat="network">
+    <i class="bi bi-hdd-network-fill"></i>
+    <span>1. Jaringan, Polling &amp; Kapasitas ISP</span>
+  </div>
+
+  <!-- Polling & SNMP -->
+  <div class="nm-panel" data-cat="network">
+    <div class="panel-header"><span><i class="bi bi-clock-fill me-2 text-accent"></i>Polling &amp; SNMP Defaults</span></div>
     <div class="panel-body">
       <div class="row g-3">
-        <div class="col-12">
-          <label class="nm-label">Poll Interval (seconds)</label>
+        <div class="col-sm-6">
+          <label class="nm-label">Poll Interval (detik)</label>
           <input type="number" class="nm-input" id="s-poll" min="10" max="3600" value="30">
-          <small class="text-muted">Min 10s. How often SNMP-enabled devices are queried.</small>
+          <small class="text-muted">Min 10s. Status ping &amp; SNMP router.</small>
         </div>
-        <div class="col-12">
-          <label class="nm-label">Traffic Poll Interval (seconds)</label>
+        <div class="col-sm-6">
+          <label class="nm-label">Traffic Poll Interval (detik)</label>
           <input type="number" class="nm-input" id="s-traffic-poll" min="5" max="3600" value="15">
-          <small class="text-muted">Min 5s. Default 15s (hemat beban SNMP pada 25-30 router).</small>
+          <small class="text-muted">Min 5s. Default 15s (optimal 25–30 router).</small>
         </div>
-        <div class="col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Default SNMP Community</label>
           <input type="text" class="nm-input" id="s-community" value="public">
         </div>
-        <div class="col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Default SNMP Version</label>
           <select class="nm-select w-100" id="s-version">
             <option value="1">v1</option>
@@ -44,213 +71,228 @@
           </select>
         </div>
         <div class="col-12">
-          <label class="nm-label">Alert Retention (days)</label>
+          <label class="nm-label">Alert Retention (hari)</label>
           <input type="number" class="nm-input" id="s-alert-ret" min="1" value="30">
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ============ TRAFFIC & RETENTION ============ -->
-  <div class="nm-panel">
-    <div class="panel-header"><span><i class="bi bi-hdd-network-fill me-2 text-accent"></i>Traffic &amp; Retention</span></div>
+  <!-- Retensi & Proteksi Anomali -->
+  <div class="nm-panel" data-cat="network">
+    <div class="panel-header"><span><i class="bi bi-database-gear me-2 text-accent"></i>Retensi Data &amp; Proteksi Anomali</span></div>
     <div class="panel-body">
       <div class="row g-3">
-        <div class="col-12">
-          <label class="nm-label">Report Data Retention (hours)</label>
+        <div class="col-sm-6">
+          <label class="nm-label">Report Data Retention (jam)</label>
           <input type="number" class="nm-input" id="s-report-ret" min="744" max="8760" value="1440">
-          <small class="text-muted">Berapa lama wan_in/wan_out/cpu/memory/temp disimpan -- ini sumber data laporan bulanan. Minimal 744 (31 hari) supaya laporan bulan penuh selalu lengkap. Default 1440 jam (60 hari) = buffer ~2 bulan.</small>
+          <small class="text-muted">Min 744 (31 hari). Default 1440 jam (60 hari).</small>
         </div>
-        <div class="col-12">
-          <label class="nm-label">Interface Chart Retention (hours)</label>
+        <div class="col-sm-6">
+          <label class="nm-label">Interface Chart Retention (jam)</label>
           <input type="number" class="nm-input" id="s-chart-ret" min="1" max="720" value="168">
-          <small class="text-muted">Berapa lama data mentah per-interface (resolusi tinggi, buat chart dashboard/device detail) disimpan. Tabel ini jauh lebih besar dari data laporan, jadi sengaja retensinya lebih pendek -- default 168 jam (7 hari) sudah cukup buat kebutuhan chart recent.</small>
+          <small class="text-muted">Resolusi tinggi per-port. Default 168 jam (7 hari).</small>
         </div>
-        <div class="col-12">
-          <label class="nm-label">Anomaly Cap Tolerance (&times; link speed)</label>
+        <div class="col-sm-6">
+          <label class="nm-label">Anomaly Cap Tolerance (&times; link)</label>
           <input type="number" class="nm-input" id="s-anom-mult" min="1" max="10" step="0.01" value="1.05">
-          <small class="text-muted">Toleransi lonjakan di atas kapasitas link (default 1.05x / buffer 5%).</small>
+          <small class="text-muted">Buffer lonjakan link (default 1.05x).</small>
         </div>
-        <div class="col-12 pt-2 border-top">
-          <div class="d-flex justify-content-between align-items-center mb-2">
-            <label class="nm-label mb-0">Kapasitas Internet ISP Kampus Utama (Max 4 ISP)</label>
-            <select class="nm-select" id="s-campus-isp-count" style="width:auto; min-width: 110px;" onchange="updateIspRowsVisibility()">
-              <option value="1">1 ISP</option>
-              <option value="2">2 ISP</option>
-              <option value="3">3 ISP</option>
-              <option value="4">4 ISP</option>
-            </select>
-          </div>
-          <div id="campus-isp-rows" class="d-flex flex-column gap-2">
-            <div class="row g-2 align-items-center isp-slot" data-slot="1">
-              <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-1" placeholder="Nama ISP 1 (misal: Astinet / Telkom)"></div>
-              <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-1" min="0" step="100" value="6000" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
-            </div>
-            <div class="row g-2 align-items-center isp-slot d-none" data-slot="2">
-              <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-2" placeholder="Nama ISP 2 (misal: Biznet)"></div>
-              <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-2" min="0" step="100" value="0" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
-            </div>
-            <div class="row g-2 align-items-center isp-slot d-none" data-slot="3">
-              <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-3" placeholder="Nama ISP 3 (misal: Icon+)"></div>
-              <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-3" min="0" step="100" value="0" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
-            </div>
-            <div class="row g-2 align-items-center isp-slot d-none" data-slot="4">
-              <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-4" placeholder="Nama ISP 4 (misal: Backup Link)"></div>
-              <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-4" min="0" step="100" value="0" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
-            </div>
-          </div>
-          <input type="hidden" id="s-campus-bw" value="6000">
-          <div class="mt-2 p-2 rounded border d-flex justify-content-between align-items-center" style="background:rgba(0,212,255,0.06); border-color:var(--border) !important;">
-            <span class="text-xs fw-600">Total Acuan Kapasitas ISP:</span>
-            <span class="badge bg-info-lt text-info fw-700" id="s-campus-bw-total-display">6.000 Mbps (6.00 Gbps)</span>
-          </div>
-          <small class="text-muted">Atur jumlah ISP yang aktif masuk ke kampus utama beserta kapasitas masing-masing (Mbps). Totalnya dipakai otomatis sebagai acuan utilisasi &amp; headroom Dashboard, <code>/traffic all</code>, grafik <code>/chart</code>, dan AI NOC.</small>
-        </div>
-        <div class="col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Anomaly Absolute Cap (Gbps)</label>
           <input type="number" class="nm-input" id="s-anom-cap" min="0.1" max="400" step="0.1" value="5.0">
-          <small class="text-muted">Plafon mutlak maksimum per-port (Gbps). Default 5.0 Gbps.</small>
+          <small class="text-muted">Plafon mutlak per-port (default 5.0 Gbps).</small>
         </div>
-        <div class="col-12 pt-2 border-top">
-          <label class="nm-label">Bersihkan Data Anomali Lama</label>
-          <div><small class="text-muted">Manual saja, TIDAK berjalan otomatis. Menolkan traffic historis yang melebihi cap di atas -- permanen, tidak bisa dibatalkan. Pastikan nilai cap sudah benar dulu sebelum klik.</small></div>
-          <button type="button" class="nm-btn nm-btn-outline-danger mt-2" onclick="runAnomalyCleanup()">
-            <i class="bi bi-eraser-fill me-1"></i> Bersihkan Sekarang
+        <div class="col-12 pt-2 border-top d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div style="flex: 1; min-width: 200px;">
+            <label class="nm-label mb-0">Bersihkan Data Anomali Lama</label>
+            <small class="text-muted d-block">Menolkan traffic historis melebihi cap di atas secara manual &amp; permanen.</small>
+          </div>
+          <button type="button" class="btn-nm btn-sm btn-danger" onclick="runAnomalyCleanup()">
+            <i class="bi bi-eraser-fill me-1"></i>Bersihkan Sekarang
           </button>
-          <div id="cleanup-result" class="mt-2"></div>
+          <div id="cleanup-result" class="w-100"></div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ============ ALERTING ============ -->
-  <div class="nm-panel">
+  <!-- Kapasitas Total ISP Kampus -->
+  <div class="nm-panel" data-cat="network">
+    <div class="panel-header">
+      <span><i class="bi bi-globe2 me-2 text-accent"></i>Kapasitas ISP Kampus Utama (Max 4 ISP)</span>
+      <select class="nm-select" id="s-campus-isp-count" style="width:auto; min-width: 105px;" onchange="updateIspRowsVisibility()">
+        <option value="1">1 ISP</option>
+        <option value="2">2 ISP</option>
+        <option value="3">3 ISP</option>
+        <option value="4">4 ISP</option>
+      </select>
+    </div>
+    <div class="panel-body d-flex flex-column justify-content-between">
+      <div>
+        <div id="campus-isp-rows" class="d-flex flex-column gap-2">
+          <div class="row g-2 align-items-center isp-slot" data-slot="1">
+            <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-1" placeholder="Nama ISP 1 (misal: Astinet / Telkom)"></div>
+            <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-1" min="0" step="100" value="6000" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
+          </div>
+          <div class="row g-2 align-items-center isp-slot d-none" data-slot="2">
+            <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-2" placeholder="Nama ISP 2 (misal: Biznet)"></div>
+            <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-2" min="0" step="100" value="0" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
+          </div>
+          <div class="row g-2 align-items-center isp-slot d-none" data-slot="3">
+            <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-3" placeholder="Nama ISP 3 (misal: Icon+)"></div>
+            <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-3" min="0" step="100" value="0" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
+          </div>
+          <div class="row g-2 align-items-center isp-slot d-none" data-slot="4">
+            <div class="col-7"><input type="text" class="nm-input" id="s-isp-name-4" placeholder="Nama ISP 4 (misal: Backup Link)"></div>
+            <div class="col-5"><div class="input-group input-group-sm"><input type="number" class="nm-input" id="s-isp-bw-4" min="0" step="100" value="0" oninput="recalcCampusBandwidth()"><span class="input-group-text" style="background:var(--bg-hover);border-color:var(--border);color:var(--text-muted);font-size:11px;">Mbps</span></div></div>
+          </div>
+        </div>
+        <input type="hidden" id="s-campus-bw" value="6000">
+      </div>
+      <div class="mt-3">
+        <div class="p-2 rounded border d-flex justify-content-between align-items-center mb-2" style="background:rgba(0,212,255,0.06); border-color:var(--border) !important;">
+          <span class="text-xs fw-600">Total Acuan Kapasitas ISP:</span>
+          <span class="badge bg-info-lt text-info fw-700" id="s-campus-bw-total-display">6.000 Mbps (6.00 Gbps)</span>
+        </div>
+        <small class="text-muted">Total kapasitas seluruh ISP aktif dipakai otomatis untuk menghitung utilisasi &amp; headroom di Dashboard, <code>/traffic all</code>, grafik <code>/chart</code>, dan AI NOC.</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alerting & Anomaly Detection -->
+  <div class="nm-panel" data-cat="network">
     <div class="panel-header"><span><i class="bi bi-bell-fill me-2 text-accent"></i>Alerting &amp; Anomaly Detection</span></div>
     <div class="panel-body">
       <div class="row g-3">
-        <div class="col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Alert on Device Down</label>
           <div class="nm-toggle-wrap">
             <label class="nm-toggle"><input type="checkbox" id="s-alert-down" checked><span class="nm-slider"></span></label>
-            <span>Create alert when SNMP unreachable</span>
+            <span>Alert saat SNMP unreachable</span>
           </div>
         </div>
-        <div class="col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Alert on Device Recovery</label>
           <div class="nm-toggle-wrap">
             <label class="nm-toggle"><input type="checkbox" id="s-alert-up" checked><span class="nm-slider"></span></label>
-            <span>Create alert when device comes back online</span>
+            <span>Alert saat kembali online</span>
           </div>
         </div>
         <div class="col-12 border-top pt-2">
           <label class="nm-label">Deteksi Anomali Lonjakan Traffic &amp; Resource</label>
           <div class="nm-toggle-wrap">
             <label class="nm-toggle"><input type="checkbox" id="s-anom-alert" checked><span class="nm-slider"></span></label>
-            <span>Kirim alert otomatis saat terjadi lonjakan traffic mendadak atau kenaikan CPU/RAM ekstrem</span>
+            <span>Alert otomatis saat lonjakan traffic mendadak atau CPU/RAM ekstrem</span>
           </div>
         </div>
-        <div class="col-md-6 col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Ambang Lonjakan Traffic (&times; Baseline)</label>
           <input type="number" class="nm-input" id="s-spike-mult" min="1.5" max="10.0" step="0.1" value="4.0">
-          <small class="text-muted">Kenaikan traffic dibanding rata-rata sebelumnya untuk dianggap anomali (default 4.0x / 400%).</small>
         </div>
-        <div class="col-md-6 col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Batas Minimum Traffic (Mbps)</label>
           <input type="number" class="nm-input" id="s-spike-min" min="1.0" max="1000.0" step="1.0" value="80.0">
-          <small class="text-muted">Batas minimum throughput agar lonjakan wajar (backup/download) tidak memicu false alarm (default 80 Mbps).</small>
         </div>
-        <div class="col-md-6 col-12">
-          <label class="nm-label">Ambang Lonjakan Kritis CPU (%)</label>
+        <div class="col-sm-6">
+          <label class="nm-label">Ambang Kritis CPU (%)</label>
           <input type="number" class="nm-input" id="s-cpu-thresh" min="50" max="100" value="92">
-          <small class="text-muted">Batas utilisasi CPU sustained untuk memicu peringatan spike (default 92%, toleran terhadap lonjakan sesaat SNMP walk).</small>
         </div>
-        <div class="col-md-6 col-12">
-          <label class="nm-label">Ambang Lonjakan Kritis RAM (%)</label>
+        <div class="col-sm-6">
+          <label class="nm-label">Ambang Kritis RAM (%)</label>
           <input type="number" class="nm-input" id="s-mem-thresh" min="50" max="100" value="95">
-          <small class="text-muted">Batas pemakaian RAM sustained untuk deteksi risiko OOM (default 95%).</small>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ============ APPEARANCE ============ -->
-  <div class="nm-panel">
-    <div class="panel-header"><span><i class="bi bi-palette-fill me-2 text-accent"></i>Appearance</span></div>
-    <div class="panel-body">
-      <div class="row g-3">
-        <div class="col-12">
-          <label class="nm-label">UI Theme</label>
-          <select class="nm-select w-100" id="s-theme">
-            <option value="default">Modern Slate NOC (Default)</option>
-            <option value="adminlte">AdminLTE 4 — Polije (Bondi Blue)</option>
-            <option value="cyber">Cyber Midnight (NOC Telemetry)</option>
-            <option value="minimalism">Minimalist (Nordic Slate)</option>
-            <option value="forest">Warm Forest (Night Shift)</option>
-          </select>
-          <small class="text-muted">Pilih gaya visual antarmuka berstandar NOC enterprise.</small>
-        </div>
-      </div>
-    </div>
+  <!-- =========================================================
+       KATEGORI 2: AI ASSISTANT, TELEGRAM BOT & TAMPILAN
+       ========================================================= -->
+  <div class="settings-section-hdr" data-cat="notifications">
+    <i class="bi bi-robot"></i>
+    <span>2. AI Assistant, Telegram Bot &amp; Tampilan</span>
   </div>
 
-  <!-- ============ AI DETECTOR ============ -->
-  <div class="nm-panel">
-    <div class="panel-header d-flex justify-content-between align-items-center">
-      <div class="d-flex align-items-center gap-2">
-        <span><i class="bi bi-robot me-2 text-accent"></i>AI NOC &amp; False Warning Detector</span>
-        <span class="badge bg-secondary-lt text-muted border" id="ai-provider-badge" style="font-size:10px;padding:2px 6px;">Auto</span>
+  <!-- Left Stack: AI NOC + Appearance -->
+  <div class="settings-col-stack" data-cat="notifications">
+    <div class="nm-panel">
+      <div class="panel-header">
+        <div class="d-flex align-items-center gap-2">
+          <span><i class="bi bi-robot me-2 text-accent"></i>AI NOC &amp; False Warning Detector</span>
+          <span class="badge bg-secondary-lt text-muted border" id="ai-provider-badge" style="font-size:10px;padding:2px 6px;">Auto</span>
+        </div>
+        <button class="btn-nm btn-sm" onclick="testGroq()"><i class="bi bi-plug-fill me-1"></i>Test Connection</button>
       </div>
-      <button class="btn-nm btn-sm" onclick="testGroq()"><i class="bi bi-plug-fill me-1"></i>Test Connection</button>
+      <div class="panel-body">
+        <div class="row g-3">
+          <div class="col-sm-4">
+            <label class="nm-label">AI Provider</label>
+            <select class="nm-select w-100" id="s-ai-provider" onchange="onAiCredInput(true)">
+              <option value="auto">Auto-Detect (Key)</option>
+              <option value="google">Google AI Studio</option>
+              <option value="groq">Groq Cloud</option>
+            </select>
+          </div>
+          <div class="col-sm-8">
+            <label class="nm-label">API Key (<code>AIza...</code> / <code>gsk_...</code>)</label>
+            <input type="password" class="nm-input" id="s-groq-key" placeholder="Masukkan AIza... (Google AI Studio) atau gsk_... (Groq)" oninput="onAiCredInput(true)">
+          </div>
+          <div class="col-12">
+            <label class="nm-label">AI Model</label>
+            <select class="nm-select w-100" id="s-groq-model">
+              <optgroup label="Google AI Studio (Gemini)">
+                <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Recommended — Google AI Studio)</option>
+                <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+              </optgroup>
+              <optgroup label="Groq Cloud">
+                <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Recommended — Groq)</option>
+                <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
+                <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Ultra Fast)</option>
+                <option value="qwen/qwen3-32b">qwen/qwen3-32b</option>
+              </optgroup>
+            </select>
+            <small class="text-muted">Paste key <code>AIza...</code> untuk autodetect Google AI Studio (<code>gemini-flash-lite-latest</code>), atau <code>gsk_...</code> untuk Groq.</small>
+          </div>
+          <div class="col-12">
+            <label class="nm-label">Privasi Telemetri Cloud AI</label>
+            <div class="nm-toggle-wrap">
+              <label class="nm-toggle"><input type="checkbox" id="s-groq-redact" checked><span class="nm-slider"></span></label>
+              <span>Samarkan IP internal kampus (RFC1918) sebelum dikirim ke Cloud AI</span>
+            </div>
+          </div>
+        </div>
+        <div id="groq-test-result" class="mt-2"></div>
+      </div>
     </div>
-    <div class="panel-body">
-      <div class="row g-3">
-        <div class="col-md-4">
-          <label class="nm-label">AI Provider</label>
-          <select class="nm-select w-100" id="s-ai-provider" onchange="onAiCredInput(true)">
-            <option value="auto">Auto-Detect (Key)</option>
-            <option value="google">Google AI Studio (Gemini)</option>
-            <option value="groq">Groq Cloud</option>
-          </select>
-        </div>
-        <div class="col-md-8">
-          <label class="nm-label">API Key (Groq <code>gsk_...</code> atau Google AI Studio <code>AIza...</code>)</label>
-          <input type="password" class="nm-input" id="s-groq-key" placeholder="Masukkan AIza... (Google AI Studio) atau gsk_... (Groq)" oninput="onAiCredInput(true)">
-        </div>
-        <div class="col-12">
-          <label class="nm-label">AI Model</label>
-          <select class="nm-select w-100" id="s-groq-model">
-            <optgroup label="Google AI Studio (Gemini)">
-              <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (Recommended — Google AI Studio)</option>
-              <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
-              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-            </optgroup>
-            <optgroup label="Groq Cloud">
-              <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile (Recommended — Groq)</option>
-              <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
-              <option value="llama-3.1-8b-instant">llama-3.1-8b-instant (Ultra Fast)</option>
-              <option value="qwen/qwen3-32b">qwen/qwen3-32b</option>
-            </optgroup>
-          </select>
-          <small class="text-muted">Paste API key <code>AIza...</code> untuk autodetect ke Google AI Studio (<code>gemini-flash-lite-latest</code>), atau <code>gsk_...</code> untuk Groq. Dipakai oleh Web Dashboard &amp; Bot Telegram (<code>/ai</code>, <code>/diagnosa</code>).</small>
-        </div>
-        <div class="col-12">
-          <label class="nm-label">Privasi Telemetri Cloud AI</label>
-          <div class="nm-toggle-wrap">
-            <label class="nm-toggle"><input type="checkbox" id="s-groq-redact" checked><span class="nm-slider"></span></label>
-            <span>Samarkan IP internal kampus (RFC1918) sebelum dikirim ke Cloud AI API</span>
+
+    <div class="nm-panel">
+      <div class="panel-header"><span><i class="bi bi-palette-fill me-2 text-accent"></i>Appearance &amp; Theme</span></div>
+      <div class="panel-body">
+        <div class="row g-3">
+          <div class="col-12">
+            <label class="nm-label">UI Theme</label>
+            <select class="nm-select w-100" id="s-theme">
+              <option value="default">Modern Slate NOC (Default)</option>
+              <option value="adminlte">AdminLTE 4 — Polije (Bondi Blue)</option>
+              <option value="cyber">Cyber Midnight (NOC Telemetry)</option>
+              <option value="minimalism">Minimalist (Nordic Slate)</option>
+              <option value="forest">Warm Forest (Night Shift)</option>
+            </select>
+            <small class="text-muted">Pilih gaya visual antarmuka berstandar NOC enterprise.</small>
           </div>
         </div>
       </div>
-      <div id="groq-test-result" class="mt-2"></div>
     </div>
   </div>
 
-  <!-- ============ TELEGRAM BOT ============ -->
-  <div class="nm-panel">
-    <div class="panel-header d-flex justify-content-between align-items-center">
-      <div class="d-flex align-items-center">
+  <!-- Right Panel: Telegram Bot -->
+  <div class="nm-panel" data-cat="notifications">
+    <div class="panel-header">
+      <div class="d-flex align-items-center gap-2">
         <span><i class="bi bi-telegram me-2 text-accent"></i>Telegram Bot Integration</span>
-        <span class="badge ms-2" id="tg-status-badge" style="font-size: 10px; padding: 2px 6px;">Checking…</span>
+        <span class="badge" id="tg-status-badge" style="font-size: 10px; padding: 2px 6px;">Checking…</span>
       </div>
       <button class="btn-nm btn-sm" onclick="testTelegram()"><i class="bi bi-send-fill me-1"></i>Test Connection</button>
     </div>
@@ -260,56 +302,54 @@
           <label class="nm-label">Aktifkan Telegram Bot</label>
           <div class="nm-toggle-wrap">
             <label class="nm-toggle"><input type="checkbox" id="s-tg-enabled"><span class="nm-slider"></span></label>
-            <span>Aktifkan notifikasi alert instan & bot interaktif</span>
+            <span>Aktifkan notifikasi alert instan &amp; bot interaktif</span>
           </div>
         </div>
         <div class="col-12">
           <label class="nm-label">Bot Token (dari @BotFather)</label>
           <input type="password" class="nm-input" id="s-tg-token" placeholder="Contoh: 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ">
-          <small class="text-muted">Dapatkan token bot dari @BotFather di Telegram.</small>
         </div>
         <div class="col-12">
           <label class="nm-label">Authorized Chat IDs / Group IDs</label>
           <input type="text" class="nm-input" id="s-tg-chats" placeholder="Contoh: 123456789, -100987654321">
-          <small class="text-muted">ID pengguna atau grup tujuan (pisahkan dengan koma). Chat yang belum terdaftar tidak dapat mengirim perintah ke bot.</small>
+          <small class="text-muted">Pisahkan dengan koma. Chat yang belum terdaftar otomatis ditolak oleh bot.</small>
         </div>
-        <div class="col-md-6 col-12">
-          <label class="nm-label">Notifikasi Saat Perangkat DOWN</label>
+        <div class="col-sm-6">
+          <label class="nm-label">Notifikasi Perangkat DOWN</label>
           <div class="nm-toggle-wrap">
             <label class="nm-toggle"><input type="checkbox" id="s-tg-down" checked><span class="nm-slider"></span></label>
-            <span>Kirim alert instan saat perangkat Down</span>
+            <span>Alert saat Down</span>
           </div>
         </div>
-        <div class="col-md-6 col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Notifikasi Pemulihan (UP)</label>
           <div class="nm-toggle-wrap">
             <label class="nm-toggle"><input type="checkbox" id="s-tg-up" checked><span class="nm-slider"></span></label>
-            <span>Kirim notifikasi saat perangkat kembali online</span>
+            <span>Alert saat Online</span>
           </div>
         </div>
-        <div class="col-md-6 col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Daily Digest (Rekap Harian)</label>
           <div class="nm-toggle-wrap">
             <label class="nm-toggle"><input type="checkbox" id="s-tg-digest" checked><span class="nm-slider"></span></label>
-            <span>Kirim rekap harian status jaringan otomatis</span>
+            <span>Rekap otomatis harian</span>
           </div>
         </div>
-        <div class="col-md-6 col-12">
-          <label class="nm-label">Waktu Daily Digest (HH:MM)</label>
+        <div class="col-sm-6">
+          <label class="nm-label">Waktu Daily Digest (WIB)</label>
           <input type="time" class="nm-input" id="s-tg-digest-time" value="08:00">
-          <small class="text-muted">Jadwal pengiriman rekap harian (WIB).</small>
         </div>
         <div class="col-12">
           <label class="nm-label">Sensor IP Router (Spoiler Klik-untuk-Buka)</label>
           <div class="nm-toggle-wrap">
             <label class="nm-toggle"><input type="checkbox" id="s-tg-censor-ips" checked><span class="nm-slider"></span></label>
-            <span>Blur IP router di pesan bot Telegram (tap/klik sensor untuk melihat IP asli)</span>
+            <span>Blur IP router di pesan bot Telegram (klik/tap untuk melihat IP asli)</span>
           </div>
         </div>
         <div class="col-12">
-          <div class="p-2 border rounded" style="background: rgba(255,255,255,0.03); font-size: 0.82rem;">
+          <div class="p-2 border rounded" style="background: rgba(255,255,255,0.03); font-size: 0.8rem;">
             <i class="bi bi-info-circle-fill text-info me-1"></i>
-            <b>Cara mendapatkan Chat ID:</b> Buka bot Anda di Telegram lalu kirim <code>/start</code> atau <code>/myid</code>. Bot akan membalas dengan Chat ID Anda, atau gunakan bot <code>@userinfobot</code>.
+            <b>Tips Chat ID:</b> Kirim <code>/start</code> atau <code>/myid</code> ke bot Anda untuk melihat ID secara otomatis.
           </div>
         </div>
       </div>
@@ -317,59 +357,75 @@
     </div>
   </div>
 
-  <!-- ============ UNIFI ============ -->
-  <div class="nm-panel">
+  <!-- =========================================================
+       KATEGORI 3: INTEGRASI UNIFI & MANAJEMEN ZONA
+       ========================================================= -->
+  <div class="settings-section-hdr" data-cat="integrations">
+    <i class="bi bi-diagram-3-fill"></i>
+    <span>3. Integrasi Eksternal &amp; Manajemen Zona</span>
+  </div>
+
+  <!-- UniFi Controller -->
+  <div class="nm-panel" data-cat="integrations">
     <div class="panel-header">
       <span><i class="bi bi-cloud-fill me-2 text-accent"></i>UniFi Controller</span>
       <button class="btn-nm btn-sm" onclick="testUnifi()"><i class="bi bi-plug-fill me-1"></i>Test Connection</button>
     </div>
     <div class="panel-body">
       <div class="row g-3">
-        <div class="col-12">
+        <div class="col-sm-8">
           <label class="nm-label">Controller Host / IP</label>
           <input type="text" class="nm-input" id="s-uf-host" placeholder="192.168.1.1 or controller.local">
         </div>
-        <div class="col-12">
+        <div class="col-sm-4">
           <label class="nm-label">Port</label>
           <input type="number" class="nm-input" id="s-uf-port" value="8443">
         </div>
-        <div class="col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Site</label>
           <input type="text" class="nm-input" id="s-uf-site" value="default">
         </div>
-        <div class="col-12">
+        <div class="col-sm-6">
           <label class="nm-label">Username</label>
           <input type="text" class="nm-input" id="s-uf-user" placeholder="admin">
         </div>
         <div class="col-12">
           <label class="nm-label">Password</label>
-          <input type="password" class="nm-input" id="s-uf-pass" placeholder="Leave blank to keep existing">
+          <input type="password" class="nm-input" id="s-uf-pass" placeholder="Kosongkan jika tidak diubah">
         </div>
       </div>
       <div id="uf-test-result" class="mt-2"></div>
     </div>
   </div>
 
-  <!-- ============ ZONES ============ -->
-  <div class="nm-panel">
+  <!-- Zone Management -->
+  <div class="nm-panel" data-cat="integrations">
     <div class="panel-header">
       <span><i class="bi bi-diagram-3-fill me-2 text-accent"></i>Zone Management</span>
       <button class="btn-nm btn-sm btn-success" onclick="openZoneModal()">
         <i class="bi bi-plus-lg me-1"></i>Add Zone
       </button>
     </div>
-    <div class="panel-body p-0">
+    <div class="panel-body p-0 settings-zone-scroll">
       <div id="zone-list">
         <div class="text-center text-muted py-4">Loading…</div>
       </div>
     </div>
   </div>
 
-  <!-- ============ SECURITY & USERS ============ -->
-  <div class="nm-panel">
+  <!-- =========================================================
+       KATEGORI 4: KEAMANAN, AKUN & INFORMASI SISTEM
+       ========================================================= -->
+  <div class="settings-section-hdr" data-cat="security">
+    <i class="bi bi-shield-lock-fill"></i>
+    <span>4. Keamanan, Akun &amp; Informasi Sistem</span>
+  </div>
+
+  <!-- Security & User Accounts (Full Width) -->
+  <div class="nm-panel settings-span-full" data-cat="security">
     <div class="panel-header"><span><i class="bi bi-shield-lock-fill me-2 text-accent"></i>Security &amp; User Accounts</span></div>
     <div class="panel-body">
-      <div class="row g-3 mb-3">
+      <div class="row g-3 align-items-end mb-3">
         <div class="col-md-4">
           <label class="nm-label">Password Saat Ini</label>
           <input type="password" class="nm-input" id="pw-current" placeholder="Password saat ini">
@@ -378,37 +434,38 @@
           <label class="nm-label">Password Baru (min. 6 karakter)</label>
           <input type="password" class="nm-input" id="pw-new" placeholder="Password baru">
         </div>
-        <div class="col-md-4 d-flex align-items-end">
-          <button type="button" class="btn-nm btn-primary w-100 justify-content-center" onclick="changeOwnPassword()">
+        <div class="col-md-4">
+          <button type="button" class="btn-nm btn-primary w-100 justify-content-center" style="min-height: 36px;" onclick="changeOwnPassword()">
             <i class="bi bi-key-fill me-1"></i>Ubah Password Saya
           </button>
         </div>
       </div>
       {% if current_user and current_user.role == 'admin' %}
-      <hr class="nm-divider">
-      <div class="row g-2 mb-3">
+      <hr class="nm-divider my-3">
+      <div class="row g-3 mb-3">
         <div class="col-12">
           <label class="nm-label">Allowed Client Subnets (IP Lock CIDR)</label>
           <input type="text" class="nm-input font-monospace" id="s-allowed-cidrs" placeholder="10.122.100.0/24">
           <small class="text-muted">Pisahkan dengan koma jika lebih dari satu subnet (misal: <code>10.122.100.0/24, 192.168.10.0/24</code>). Localhost selalu diizinkan; darurat bypass via env <code>NETMON_DISABLE_IP_LOCK=1</code>.</small>
         </div>
       </div>
-      <hr class="nm-divider">
-      <div class="row g-2 mb-3">
-        <div class="col-md-3">
+      <hr class="nm-divider my-3">
+      <label class="nm-label">Manajemen Akun Pengguna</label>
+      <div class="row g-2 align-items-end mb-3">
+        <div class="col-md-3 col-sm-6">
           <input type="text" class="nm-input" id="nu-username" placeholder="Username baru">
         </div>
-        <div class="col-md-3">
+        <div class="col-md-3 col-sm-6">
           <input type="password" class="nm-input" id="nu-password" placeholder="Password (min. 6)">
         </div>
-        <div class="col-md-3">
+        <div class="col-md-3 col-sm-6">
           <select class="nm-select w-100" id="nu-role">
             <option value="viewer">Viewer (Read-Only)</option>
             <option value="admin">Admin (Full Access)</option>
           </select>
         </div>
-        <div class="col-md-3">
-          <button type="button" class="btn-nm btn-success w-100 justify-content-center" onclick="createUserAccount()">
+        <div class="col-md-3 col-sm-6">
+          <button type="button" class="btn-nm btn-success w-100 justify-content-center" style="min-height: 36px;" onclick="createUserAccount()">
             <i class="bi bi-person-plus-fill me-1"></i>Tambah Akun
           </button>
         </div>
@@ -418,9 +475,14 @@
     </div>
   </div>
 
-  <!-- ============ APP INFO ============ -->
-  <div class="nm-panel about-panel">
-    <div class="panel-header"><span><i class="bi bi-info-circle-fill me-2 text-accent"></i>About</span></div>
+  <!-- App Info (Full Width) -->
+  <div class="nm-panel about-panel" data-cat="security">
+    <div class="panel-header">
+      <span><i class="bi bi-info-circle-fill me-2 text-accent"></i>About TIKWatch</span>
+      <button class="btn-nm btn-sm btn-danger" onclick="confirmPurge()">
+        <i class="bi bi-trash3-fill me-1"></i>Purge Old Logs
+      </button>
+    </div>
     <div class="panel-body">
       <div class="about-grid">
         <div class="about-item"><span class="about-lbl">Application</span><span class="about-val">TIKWatch</span></div>
@@ -429,15 +491,7 @@
         <div class="about-item"><span class="about-lbl">Database</span><span class="about-val mono-sm" id="about-db">—</span></div>
         <div class="about-item"><span class="about-lbl">Devices</span><span class="about-val" id="about-devs">—</span></div>
         <div class="about-item"><span class="about-lbl">Alert Log</span><span class="about-val" id="about-alerts">—</span></div>
-        <div class="about-item"><span class="about-lbl">SNMP</span>
-          <span class="about-val" id="about-snmp">Checking…</span>
-        </div>
-      </div>
-      <hr class="nm-divider mt-3">
-      <div class="d-flex gap-2 mt-2">
-        <button class="btn-nm btn-sm btn-danger" onclick="confirmPurge()">
-          <i class="bi bi-trash3-fill me-1"></i>Purge Old Logs
-        </button>
+        <div class="about-item"><span class="about-lbl">SNMP</span><span class="about-val" id="about-snmp">Checking…</span></div>
       </div>
     </div>
   </div>
@@ -493,6 +547,19 @@
 <script>
 let zoneModal;
 let zones = [];
+
+function filterSettingsCat(cat, btn) {
+  document.querySelectorAll('#settings-tabs .settings-tab-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  document.querySelectorAll('.settings-grid > [data-cat]').forEach(el => {
+    const match = (cat === 'all') || (el.getAttribute('data-cat') === cat);
+    if (cat !== 'all' && el.classList.contains('settings-section-hdr')) {
+      el.classList.add('d-none');
+    } else {
+      el.classList.toggle('d-none', !match);
+    }
+  });
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   zoneModal    = new bootstrap.Modal(document.getElementById('zoneModal'));
