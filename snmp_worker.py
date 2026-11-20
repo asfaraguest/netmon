@@ -104,6 +104,9 @@ class SNMPWorker:
         self._state_lock = threading.Lock()
         self._device_snmp_locks = {}
         self._last_cache_prune = 0.0
+        self._last_snmp_ok = {}
+        self._recent_unreachable = {}
+        self._last_diag_log = {}
         self._ping_history = {}
         self._latest_ping = {}
         self._snmp_failing = set()
@@ -594,6 +597,15 @@ class SNMPWorker:
                 continue
         return res if res else None
 
+    def _log_diag_throttled(self, key, message, cooldown=60.0):
+        now_ts = time.time()
+        with self._state_lock:
+            last = self._last_diag_log.get(key, 0.0)
+            if (now_ts - last) < cooldown:
+                return
+            self._last_diag_log[key] = now_ts
+        print(message)
+
     def _get(self, ip, community, oids, port=161, version='2c', timeout=2):
         if not SNMP_OK: return None
         for attempt in range(2):
@@ -605,6 +617,7 @@ class SNMPWorker:
                 if attempt == 0:
                     time.sleep(0.5)
             except Exception as e:
+                self._log_diag_throttled(('snmp_get', ip), f"[SNMP _get WARN] {ip}: {type(e).__name__}: {e}")
                 if attempt == 0:
                     time.sleep(0.5)
         return None
@@ -697,6 +710,9 @@ class SNMPWorker:
                     except Exception:
                         pass
             else:
+                stderr_txt = (res.stderr or '').strip()
+                if stderr_txt:
+                    self._log_diag_throttled(('ping_stderr', ip), f"[Ping WARN] {ip} rc={res.returncode}: {stderr_txt}")
                 m_loss = re.search(r'(\d+)%\s*packet loss', out)
                 if m_loss:
                     try:
@@ -705,8 +721,8 @@ class SNMPWorker:
                         packet_loss = 100.0
                 else:
                     packet_loss = 100.0
-        except Exception:
-            pass
+        except Exception as pe:
+            self._log_diag_throttled(('ping_exc', ip), f"[Ping ERROR] {ip}: {type(pe).__name__}: {pe}")
 
         # 2. Fallback to TCP connection check on common router/server ports (if ICMP is rate-limited/blocked)
         if not is_alive:
@@ -1033,6 +1049,8 @@ class SNMPWorker:
                     ], port, version)
 
         if result:
+            with self._state_lock:
+                self._last_snmp_ok[did] = time.time()
             # ── SNMP responded: genuine UP with full data ──
             upd = {'status':'up', 'last_polled': now}
             if result.get(OID['sysName']):   upd['sys_name']    = result[OID['sysName']]
@@ -1297,14 +1315,45 @@ class SNMPWorker:
         return updated.get('status') if updated else 'unknown'
 
     def _handle_unreachable_poll(self, device, did, ip, old_st, now, clear_snmp_metrics=True):
-        """Apply consecutive failure hysteresis (2 polls) before flipping an UP device to OFFLINE."""
+        """Apply consecutive failure hysteresis (3 polls, or 5 during mass-outage bursts)
+        plus recent-traffic SNMP liveness check before flipping an UP device to OFFLINE."""
+        now_ts = time.time()
         with self._state_lock:
-            fail_count = self._consecutive_ping_fails.get(ip, 0) + 1
-            self._consecutive_ping_fails[ip] = fail_count
+            last_snmp_ok = self._last_snmp_ok.get(did, 0.0)
+            if old_st == 'up' and (now_ts - last_snmp_ok) <= 45.0:
+                self._consecutive_ping_fails[ip] = 0
+                recent_ok = True
+            else:
+                recent_ok = False
+                fail_count = self._consecutive_ping_fails.get(ip, 0) + 1
+                self._consecutive_ping_fails[ip] = fail_count
+                self._recent_unreachable[did] = now_ts
+                stale_unreach = [k for k, ts in self._recent_unreachable.items() if (now_ts - ts) > 90.0]
+                for k in stale_unreach:
+                    del self._recent_unreachable[k]
+                concurrent_fails = len(self._recent_unreachable)
 
-        # Hysteresis: ignore a single transient poll failure on a healthy UP device
-        if old_st == 'up' and fail_count < 2:
-            print(f"[Poll Hysteresis] {device.get('name', ip)} ({ip}) unreachable (1/2) — keeping UP until next poll confirms")
+        if recent_ok:
+            print(f"[Poll Guard] {device.get('name', ip)} ({ip}) had live SNMP traffic <45s ago — keeping UP")
+            with self.db_write_lock:
+                self.db.update_device(did, {'last_polled': now})
+            return
+
+        # Determine hysteresis threshold: 3 normal cycles, or 5 if >=50% of UP devices fail together
+        threshold = 3
+        if old_st == 'up':
+            try:
+                with self.db.conn() as c:
+                    up_total = int(c.execute("SELECT COUNT(*) FROM devices WHERE status='up'").fetchone()[0])
+                if up_total >= 4 and concurrent_fails >= max(3, int(up_total * 0.5)):
+                    threshold = 5
+                    print(f"[Mass-Outage Guard] {concurrent_fails}/{up_total} UP devices unreachable simultaneously — raising threshold to {fail_count}/{threshold} for {device.get('name', ip)} ({ip})")
+            except Exception:
+                pass
+
+        # Hysteresis: keep UP until consecutive poll threshold is met
+        if old_st == 'up' and fail_count < threshold:
+            print(f"[Poll Hysteresis] {device.get('name', ip)} ({ip}) unreachable ({fail_count}/{threshold}) — keeping UP until confirmed")
             with self.db_write_lock:
                 self.db.update_device(did, {'last_polled': now})
             return
@@ -1809,6 +1858,8 @@ class SNMPWorker:
                 return
 
         now_ts = time.time()
+        with self._state_lock:
+            self._last_snmp_ok[did] = now_ts
         settings = self.db.get_settings()
         traffic_interval = max(5, int(settings.get('traffic_poll_interval', 15)))
         logged_gap = False

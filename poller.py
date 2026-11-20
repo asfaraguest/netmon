@@ -113,7 +113,7 @@ def poll_device_status():
     if not devices:
         return
     from concurrent.futures import ThreadPoolExecutor
-    max_poll_workers = min(12, len(devices) or 1)
+    max_poll_workers = min(6, len(devices) or 1)
     with ThreadPoolExecutor(max_workers=max_poll_workers) as executor:
         futures = [executor.submit(snmp_worker.poll_device, device) for device in devices]
         for future in futures:
@@ -129,7 +129,7 @@ def poll_traffic():
     if not snmp_devices:
         return
     from concurrent.futures import ThreadPoolExecutor
-    max_traffic_workers = min(12, len(snmp_devices))
+    max_traffic_workers = min(4, len(snmp_devices))
     with ThreadPoolExecutor(max_workers=max_traffic_workers) as executor:
         futures = [executor.submit(snmp_worker.collect_interface_traffic, device) for device in snmp_devices]
         for future in futures:

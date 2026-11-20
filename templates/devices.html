@@ -409,15 +409,19 @@ function filterByType(type, btn) {
 }
 
 window.onInitData = (d) => { allDevices = d.devices; allZones = d.zones; populateZoneSelect(d.zones); renderTable(d.devices); };
+let _deviceUpdateTimer = null;
 window.onDeviceUpdate = () => {
-  Promise.all([
-    fetch('/api/devices').then(r=>r.json()),
-    fetch('/api/devices/type_counts').then(r=>r.json()),
-  ]).then(([devs, counts]) => {
-    allDevices = devs;
-    renderTypeTabs(counts);
-    renderTable(devs);
-  });
+  if (_deviceUpdateTimer) clearTimeout(_deviceUpdateTimer);
+  _deviceUpdateTimer = setTimeout(() => {
+    Promise.all([
+      fetch('/api/devices').then(r=>r.json()),
+      fetch('/api/devices/type_counts').then(r=>r.json()),
+    ]).then(([devs, counts]) => {
+      allDevices = devs;
+      renderTypeTabs(counts);
+      renderTable(devs);
+    });
+  }, 450);
 };
 
 function renderTable(devices) {

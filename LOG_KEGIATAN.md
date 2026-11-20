@@ -288,3 +288,12 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
       - Menggunakan real peak pada rentang granular (`1h`) dan nilai rata-rata (`AVG`) per bucket untuk rentang panjang (`24h`, `3d`, `7d`) agar tren harian tidak bias oleh spike sesaat, sambil tetap menyertakan `in_peak`/`out_peak` dan `in_avg`/`out_avg`.
     - **Garis Referensi P95, Summary Strip, & Perbaikan Legend (`templates/dashboard.html`):**
       - Menambahkan garis referensi putus-putus `P95 Download` & `P95 Upload`, strip ringkasan **`Avg | P95 | Peak`** dan **`Utilisasi P95`** terhadap kapasitas ISP kampus, format sumbu Y adaptif (`Mbps`/`Gbps`) mulai dari `0`, persentase utilisasi di tooltip, serta memperbaiki legend dot dengan CSS class `.tp-legend-dot` / `.tp-legend-line`.
+
+27. **Perlindungan Menyeluruh Anti False Mass-Offline & Perbaikan Izin Ping Systemd (`update.sh`, `snmp_worker.py`, `poller.py`, `templates/devices.html`):**
+    - **Perbaikan Izin ICMP Ping & Limit FD di `netmon-poller.service` (`update.sh`):**
+      - Mengganti `NoNewPrivileges=yes` pada `netmon-poller.service` dengan `AmbientCapabilities=CAP_NET_RAW` dan `CapabilityBoundingSet=CAP_NET_RAW` (serta menaikkan `LimitNOFILE=65536` pada kedua service) agar binary `/bin/ping` tidak ditolak kernel (`Operation not permitted`) saat dijalankan sebagai user non-root `netmon`.
+    - **Mass-Outage Guard, Recent SNMP Liveness, & Hysteresis 3x/5x (`snmp_worker.py`):**
+      - Memeriksa `_last_snmp_ok` dari worker traffic (`<= 45s`) sebelum menandai unreachable, menaikkan hysteresis kegagalan beruntun menjadi `3` siklus polling (dan otomatis menjadi `5` siklus jika `>= 50%` perangkat UP gagal bersamaan akibat gangguan sesaat pada VM/poller).
+      - Menambahkan logging diagnostik ter-throttle untuk kegagalan `ping` (`stderr` / `TimeoutExpired`) dan `_get` agar akar masalah OS/network langsung terbaca di `journalctl -u netmon-poller`.
+    - **Reduksi Burst Concurrency & Debounce UI (`poller.py`, `templates/devices.html`):**
+      - Menyesuaikan worker pool `poll_device_status` (`12` → `6`) dan `poll_traffic` (`12` → `4`) agar tidak memicu saturasi conntrack/CoPP router, serta men-debounce refresh WebSocket `onDeviceUpdate` di `devices.html` (`450ms`).

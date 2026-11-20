@@ -269,6 +269,7 @@ StandardError=journal
 SyslogIdentifier=netmon
 NoNewPrivileges=yes
 PrivateTmp=yes
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
@@ -293,8 +294,10 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=netmon-poller
-NoNewPrivileges=yes
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
 PrivateTmp=yes
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
