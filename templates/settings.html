@@ -273,14 +273,29 @@
         <div class="row g-3">
           <div class="col-12">
             <label class="nm-label">UI Theme</label>
-            <select class="nm-select w-100" id="s-theme">
+            <select class="nm-select w-100" id="s-theme" onchange="previewTheme(this.value, true)">
+              <option value="polije">Polije Signature — Kampus SIP (polije.ac.id)</option>
               <option value="default">Modern Slate NOC (Default)</option>
               <option value="adminlte">AdminLTE 4 — Polije (Bondi Blue)</option>
               <option value="cyber">Cyber Midnight (NOC Telemetry)</option>
               <option value="minimalism">Minimalist (Nordic Slate)</option>
               <option value="forest">Warm Forest (Night Shift)</option>
             </select>
-            <small class="text-muted">Pilih gaya visual antarmuka berstandar NOC enterprise.</small>
+            <small class="text-muted">Pilih gaya visual antarmuka (perubahan langsung dipratinjau, klik Save All Settings untuk menyimpan).</small>
+
+            <div id="polije-palette-preview" class="mt-2 p-2 rounded border d-none" style="background: var(--bg-hover); border-color: var(--border) !important;">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-xs fw-700 text-primary">Palet Identitas Polije (SIP)</span>
+                <span class="text-xxs text-muted" style="font-size: 10px;">Smart • Innovative • Professional</span>
+              </div>
+              <div class="d-flex align-items-center gap-2 flex-wrap" style="font-size: 10.5px;">
+                <span class="d-inline-flex align-items-center gap-1"><span style="width:11px;height:11px;border-radius:3px;background:#0a2a5e;border:1px solid rgba(255,255,255,0.2);"></span>Navy</span>
+                <span class="d-inline-flex align-items-center gap-1"><span style="width:11px;height:11px;border-radius:3px;background:#028daa;"></span>Bondi Blue</span>
+                <span class="d-inline-flex align-items-center gap-1"><span style="width:11px;height:11px;border-radius:3px;background:#f5b700;"></span>Emas Padi</span>
+                <span class="d-inline-flex align-items-center gap-1"><span style="width:11px;height:11px;border-radius:3px;background:#16a34a;"></span>Hijau Vokasi</span>
+                <span class="d-inline-flex align-items-center gap-1"><span style="width:11px;height:11px;border-radius:3px;background:#dc2626;"></span>Merah Jember</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -611,6 +626,7 @@ function loadSettings() {
     else if (['winxp', 'realism'].includes(curTheme)) curTheme = 'default';
     else if (curTheme === 'brutalism') curTheme = 'minimalism';
     setVal('s-theme', curTheme);
+    previewTheme(curTheme, false);
     
     // Live Telegram status badge
     fetch('/api/telegram/status')
@@ -940,6 +956,19 @@ function testGroq() {
   .catch(() => {
     res.innerHTML = '<div class="text-danger text-sm"><i class="bi bi-x-circle-fill me-1"></i>Connection failed</div>';
   });
+}
+
+function previewTheme(themeName, applyToBody = false) {
+  const paletteBox = document.getElementById('polije-palette-preview');
+  if (paletteBox) {
+    paletteBox.classList.toggle('d-none', themeName !== 'polije');
+  }
+  if (applyToBody && themeName) {
+    Array.from(document.body.classList).forEach(cls => {
+      if (cls.startsWith('theme-')) document.body.classList.remove(cls);
+    });
+    document.body.classList.add('theme-' + themeName);
+  }
 }
 
 // ---- Zones ----
