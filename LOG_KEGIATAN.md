@@ -217,3 +217,16 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
     - **Optimasi Formatting & Prompt AI Telegram:**
       - Mengoptimalkan converter Markdown-to-Telegram HTML (`_format_ai_html`) dengan memproteksi blok kode (`<pre><code>`), inline code (`<code>`), konversi heading `#` ke `<b>`, formatting bold, dan penataan daftar poin `•` tanpa menyebabkan parse error pada Telegram Bot API.
       - Memperketat `system_prompt` pada `ask_groq_noc` / `ask_ai_noc` agar jawaban AI padat, teknis, solutif (di bawah 300 kata), langsung to-the-point untuk operator NOC, dan menyertakan perintah RouterOS yang tepat.
+
+20. **Visualisasi Persentase Utilisasi Bandwidth Total Internet Kampus Utama pada Laporan Bulanan (`reports.html` & `database.py`):**
+    - **Perhitungan Agregat & Rasio Utilisasi (`database.py`):**
+      - Pada `generate_and_save_monthly_report`, sistem menghitung rasio utilisasi bandwidth backbone terhadap total kapasitas ISP kampus utama (`utilization_peak_pct`, `utilization_avg_pct`, `utilization_p95_pct`, serta utilisasi in/out).
+      - Menghitung pula persentase utilisasi uplink per router individu terhadap kapasitas port uplink masing-masing.
+    - **Panel Highlight Utilisasi Bandwidth Kampus (`reports.html`):**
+      - Menambahkan kartu highlight visual di Section 1 Laporan Bulanan yang menampilkan kapasitas total internet kampus (misal `6.0 Gbps`), persentase utilisasi puncak (Peak), persentase P95, persentase rata-rata (Avg), dan progress bar indikator kapasitas (hijau <70%, kuning 70-85%, merah >85%).
+      - Tersedia fallback penghitungan dinamis di sisi browser agar laporan historis lama tetap dapat menampilkan persentase utilisasi tanpa perlu digenerate ulang.
+    - **Integrasi Tabel & Tooltip Grafik:**
+      - Menambahkan baris footer (`<tfoot>`) ringkasan `TOTAL BACKBONE KAMPUS` pada tabel *Detail Uplink per Router* lengkap dengan total volume, rata-rata, P95, dan persentase utilisasi puncak.
+      - Menampilkan persentase utilisasi uplink per router pada kolom *Puncak (Down/Up)*.
+      - Memperbarui tooltip grafik agregat backbone agar menampilkan angka laju Mbps sekaligus persentase utilisasi terhadap kapasitas total internet kampus.
+      - Memastikan seluruh elemen baru tampil proporsional pada tampilan layar web, mode cetak (Print), maupun ekspor dokumen PDF.

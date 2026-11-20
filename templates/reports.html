@@ -77,7 +77,51 @@
 
         <!-- Section 1: Backbone Summary -->
         <div class="mb-4">
-          <h5 class="fw-700 text-primary mb-3"><i class="bi bi-graph-up me-2 text-accent"></i>Ringkasan Throughput Backbone (Agregat)</h5>
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="fw-700 text-primary m-0"><i class="bi bi-graph-up me-2 text-accent"></i>Ringkasan Throughput Backbone (Agregat)</h5>
+            <span class="badge bg-secondary-dim text-secondary mono-sm" id="bb-campus-cap-badge" style="font-size: 11px;">Kapasitas ISP: 6.0 Gbps</span>
+          </div>
+
+          <!-- Highlight Card: Utilisasi Bandwidth Internet Kampus Utama -->
+          <div class="p-3 mb-3 rounded" style="background: var(--bg-hover); border: 1px solid var(--border-lt);">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+              <div>
+                <div class="d-flex align-items-center gap-2">
+                  <i class="bi bi-speedometer2 text-accent fs-5"></i>
+                  <span class="fw-700 text-primary">Utilisasi Bandwidth Total Internet Kampus Utama</span>
+                  <span class="badge" id="bb-util-status-badge" style="font-size: 10px; padding: 2px 7px;">Normal</span>
+                </div>
+                <div class="text-xs text-muted mt-1">
+                  Persentase pemakaian throughput agregat backbone terhadap total kapasitas pipa internet kampus (<span id="bb-campus-cap-text" class="fw-600 text-primary">6.0 Gbps</span>).
+                </div>
+              </div>
+              <div class="d-flex align-items-center gap-4 text-end">
+                <div>
+                  <div class="text-xs text-muted font-semibold">Puncak (Peak)</div>
+                  <div class="fs-4 fw-800 text-warning" id="bb-util-peak">0.0%</div>
+                  <div class="text-xxs text-muted" id="bb-util-peak-sub">0 Mbps / 6000 Mbps</div>
+                </div>
+                <div style="border-left: 1px solid var(--border-lt); height: 38px;"></div>
+                <div>
+                  <div class="text-xs text-muted font-semibold">P95 (95th %)</div>
+                  <div class="fs-4 fw-800 text-info" id="bb-util-p95">0.0%</div>
+                  <div class="text-xxs text-muted" id="bb-util-p95-sub">0 Mbps</div>
+                </div>
+                <div style="border-left: 1px solid var(--border-lt); height: 38px;"></div>
+                <div>
+                  <div class="text-xs text-muted font-semibold">Rata-Rata (Avg)</div>
+                  <div class="fs-4 fw-800 text-success" id="bb-util-avg">0.0%</div>
+                  <div class="text-xxs text-muted" id="bb-util-avg-sub">0 Mbps</div>
+                </div>
+              </div>
+            </div>
+            <!-- Progress Bar -->
+            <div class="mt-2.5">
+              <div class="progress" style="height: 6px; background: rgba(0,0,0,0.06); border-radius: 3px; overflow: hidden;">
+                <div id="bb-util-progress-bar" class="progress-bar bg-accent" role="progressbar" style="width: 0%; transition: width 0.6s ease;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+              </div>
+            </div>
+          </div>
           
           <div class="row g-3 mb-4">
             <!-- Total RX -->
@@ -101,7 +145,7 @@
               <div class="p-3 rounded bg-hover" style="border: 1px solid var(--border-lt);">
                 <div class="text-muted text-xs font-semibold mb-1">Rata-Rata Throughput</div>
                 <div class="fs-5 fw-700 text-success" id="bb-avg-rates">—</div>
-                <div class="text-xs text-muted mt-1">Down / Up (Mbps)</div>
+                <div class="text-xs text-muted mt-1" id="bb-avg-sub">Down / Up (Mbps)</div>
               </div>
             </div>
             <!-- Peak Throughput -->
@@ -173,6 +217,9 @@
               <tbody id="router-uplink-rows">
                 <!-- Rendered dynamically -->
               </tbody>
+              <tfoot id="router-uplink-tfoot" style="background: var(--bg-hover); border-top: 2px solid var(--border-lt); font-weight: 600;">
+                <!-- Total Backbone Aggregate Summary -->
+              </tfoot>
             </table>
           </div>
         </div>
@@ -343,24 +390,105 @@ function selectReport(id) {
 
   const data = report.data;
 
-  // Render Backbone KPI values
+  // Render Backbone KPI values & Total Campus Internet Utilization
   document.getElementById('bb-total-rx').textContent = `${data.backbone.total_in_gb.toLocaleString('id-ID')} GB`;
   document.getElementById('bb-total-tx').textContent = `${data.backbone.total_out_gb.toLocaleString('id-ID')} GB`;
   document.getElementById('bb-avg-rates').innerHTML = `<i class="bi bi-arrow-down text-success me-1"></i>${formatMbps(data.backbone.avg_in_mbps)} <i class="bi bi-arrow-up text-primary ms-2 me-1"></i>${formatMbps(data.backbone.avg_out_mbps)}`;
   document.getElementById('bb-peak-rates').innerHTML = `<i class="bi bi-arrow-down text-warning me-1"></i>${formatMbps(data.backbone.peak_in_mbps)} <i class="bi bi-arrow-up text-primary ms-2 me-1"></i>${formatMbps(data.backbone.peak_out_mbps)}`;
+
+  // Calculate Campus Total Bandwidth Utilization
+  const campusCapMbps = Number(data.backbone.campus_capacity_mbps || 6000);
+  const campusCapGbps = campusCapMbps >= 1000 ? (campusCapMbps / 1000).toFixed(1) + ' Gbps' : campusCapMbps + ' Mbps';
+
+  const peakRate = Math.max(data.backbone.peak_in_mbps || 0, data.backbone.peak_out_mbps || 0);
+  const avgRate = Math.max(data.backbone.avg_in_mbps || 0, data.backbone.avg_out_mbps || 0);
+  const p95Rate = Math.max(data.backbone.p95_in_mbps || 0, data.backbone.p95_out_mbps || 0);
+
+  const peakUtilPct = data.backbone.utilization_peak_pct !== undefined
+    ? Number(data.backbone.utilization_peak_pct)
+    : (campusCapMbps > 0 ? Number(((peakRate / campusCapMbps) * 100).toFixed(1)) : 0);
+
+  const avgUtilPct = data.backbone.utilization_avg_pct !== undefined
+    ? Number(data.backbone.utilization_avg_pct)
+    : (campusCapMbps > 0 ? Number(((avgRate / campusCapMbps) * 100).toFixed(1)) : 0);
+
+  const p95UtilPct = data.backbone.utilization_p95_pct !== undefined
+    ? Number(data.backbone.utilization_p95_pct)
+    : (campusCapMbps > 0 ? Number(((p95Rate / campusCapMbps) * 100).toFixed(1)) : 0);
+
+  // Populate Campus Utilization Highlight Card
+  const capBadge = document.getElementById('bb-campus-cap-badge');
+  if (capBadge) capBadge.textContent = `Kapasitas ISP: ${campusCapGbps}`;
+
+  const capText = document.getElementById('bb-campus-cap-text');
+  if (capText) capText.textContent = campusCapGbps;
+
+  const peakUtilEl = document.getElementById('bb-util-peak');
+  if (peakUtilEl) peakUtilEl.textContent = `${peakUtilPct.toFixed(1)}%`;
+
+  const peakUtilSub = document.getElementById('bb-util-peak-sub');
+  if (peakUtilSub) peakUtilSub.textContent = `${formatMbps(peakRate)} / ${formatMbps(campusCapMbps)}`;
+
+  const p95UtilEl = document.getElementById('bb-util-p95');
+  if (p95UtilEl) p95UtilEl.textContent = `${p95UtilPct.toFixed(1)}%`;
+
+  const p95UtilSub = document.getElementById('bb-util-p95-sub');
+  if (p95UtilSub) p95UtilSub.textContent = `Puncak P95: ${formatMbps(p95Rate)}`;
+
+  const avgUtilEl = document.getElementById('bb-util-avg');
+  if (avgUtilEl) avgUtilEl.textContent = `${avgUtilPct.toFixed(1)}%`;
+
+  const avgUtilSub = document.getElementById('bb-util-avg-sub');
+  if (avgUtilSub) avgUtilSub.textContent = `Rerata: ${formatMbps(avgRate)}`;
+
+  const progressBar = document.getElementById('bb-util-progress-bar');
+  const statusBadge = document.getElementById('bb-util-status-badge');
+  if (progressBar) {
+    const clampedPct = Math.min(100, Math.max(0, peakUtilPct));
+    progressBar.style.width = `${clampedPct}%`;
+    progressBar.setAttribute('aria-valuenow', clampedPct);
+
+    if (peakUtilPct >= 85) {
+      progressBar.className = 'progress-bar bg-danger';
+      if (statusBadge) {
+        statusBadge.className = 'badge bg-danger-lt text-danger border border-danger';
+        statusBadge.textContent = 'Kritis (>85%)';
+      }
+    } else if (peakUtilPct >= 70) {
+      progressBar.className = 'progress-bar bg-warning';
+      if (statusBadge) {
+        statusBadge.className = 'badge bg-warning-lt text-warning border border-warning';
+        statusBadge.textContent = 'Waspada (70-85%)';
+      }
+    } else {
+      progressBar.className = 'progress-bar bg-success';
+      if (statusBadge) {
+        statusBadge.className = 'badge bg-success-lt text-success border border-success';
+        statusBadge.textContent = 'Normal (<70%)';
+      }
+    }
+  }
+
+  const avgSub = document.getElementById('bb-avg-sub');
+  if (avgSub) {
+    avgSub.innerHTML = `Down / Up • <span class="text-success fw-600">Avg Util: ${avgUtilPct.toFixed(1)}%</span>`;
+  }
+
   const p95Sub = document.getElementById('bb-p95-sub');
   if (p95Sub) {
     if (data.backbone.p95_in_mbps !== undefined) {
-      p95Sub.innerHTML = `Cacti P95: <b>${formatMbps(data.backbone.p95_in_mbps)}</b> / <b>${formatMbps(data.backbone.p95_out_mbps)}</b>`;
+      p95Sub.innerHTML = `Cacti P95: <b>${formatMbps(data.backbone.p95_in_mbps)}</b> / <b>${formatMbps(data.backbone.p95_out_mbps)}</b> (<b class="text-warning">${peakUtilPct.toFixed(1)}%</b> peak)`;
     } else {
-      p95Sub.textContent = 'Down / Up (Mbps)';
+      p95Sub.innerHTML = `Down / Up • <span class="text-warning fw-600">Peak Util: ${peakUtilPct.toFixed(1)}%</span>`;
     }
   }
 
   // Render routers rows
   const tbody = document.getElementById('router-uplink-rows');
+  const tfoot = document.getElementById('router-uplink-tfoot');
   if (!data.routers || data.routers.length === 0) {
     tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-4">Tidak ada data router pada laporan ini</td></tr>`;
+    if (tfoot) tfoot.innerHTML = '';
     return;
   }
 
@@ -372,6 +500,14 @@ function selectReport(id) {
     const p95Cell = (router.p95_rx_mbps !== undefined)
       ? `<span class="text-info"><i class="bi bi-arrow-down me-0.5"></i>${formatMbps(router.p95_rx_mbps)}</span><span class="text-primary ms-2"><i class="bi bi-arrow-up me-0.5"></i>${formatMbps(router.p95_tx_mbps)}</span>`
       : `<span class="text-muted">—</span>`;
+
+    const rUplink = router.uplink_speed_mbps || 1000;
+    const rPeak = Math.max(router.peak_rx_mbps || 0, router.peak_tx_mbps || 0);
+    const rUtilPct = router.uplink_utilization_pct !== undefined
+      ? Number(router.uplink_utilization_pct)
+      : Number(((rPeak / rUplink) * 100).toFixed(1));
+    const rUplinkBadge = rUplink >= 1000 ? `${(rUplink/1000).toFixed(1)}G` : `${rUplink}M`;
+
     return `
       <tr>
         <td style="padding: 12px;">
@@ -386,12 +522,48 @@ function selectReport(id) {
         </td>
         <td style="padding: 12px; text-align: center;">${p95Cell}</td>
         <td style="padding: 12px; text-align: center;">
-          <span class="text-warning"><i class="bi bi-arrow-down me-0.5"></i>${formatMbps(router.peak_rx_mbps)}</span>
-          <span class="text-primary ms-2"><i class="bi bi-arrow-up me-0.5"></i>${formatMbps(router.peak_tx_mbps)}</span>
+          <div>
+            <span class="text-warning"><i class="bi bi-arrow-down me-0.5"></i>${formatMbps(router.peak_rx_mbps)}</span>
+            <span class="text-primary ms-2"><i class="bi bi-arrow-up me-0.5"></i>${formatMbps(router.peak_tx_mbps)}</span>
+          </div>
+          <div class="text-xxs text-muted mt-0.5">Uplink: <span class="fw-600 text-secondary">${rUtilPct.toFixed(1)}%</span> (${rUplinkBadge})</div>
         </td>
       </tr>
     `;
   }).join('');
+
+  if (tfoot) {
+    tfoot.innerHTML = `
+      <tr>
+        <td style="padding: 12px;">
+          <div class="fw-700 text-primary d-flex align-items-center">
+            <i class="bi bi-globe me-1.5 text-accent"></i>TOTAL BACKBONE KAMPUS
+            <span class="badge bg-primary-lt text-primary ms-2" style="font-size: 9px; padding: 1px 4px;">${campusCapGbps}</span>
+          </div>
+          <div class="text-muted" style="font-size: 10px;">Agregat Router Uplink Utama</div>
+        </td>
+        <td style="padding: 12px; font-weight: 700;">${data.backbone.total_in_gb.toLocaleString('id-ID')} GB</td>
+        <td style="padding: 12px; font-weight: 700;">${data.backbone.total_out_gb.toLocaleString('id-ID')} GB</td>
+        <td style="padding: 12px; text-align: center;">
+          <span class="text-success fw-600"><i class="bi bi-arrow-down me-0.5"></i>${formatMbps(data.backbone.avg_in_mbps)}</span>
+          <span class="text-primary ms-2 fw-600"><i class="bi bi-arrow-up me-0.5"></i>${formatMbps(data.backbone.avg_out_mbps)}</span>
+          <div class="text-xxs text-muted mt-0.5">Util: <b class="text-success">${avgUtilPct.toFixed(1)}%</b></div>
+        </td>
+        <td style="padding: 12px; text-align: center;">
+          <span class="text-info fw-600"><i class="bi bi-arrow-down me-0.5"></i>${formatMbps(data.backbone.p95_in_mbps || 0)}</span>
+          <span class="text-primary ms-2 fw-600"><i class="bi bi-arrow-up me-0.5"></i>${formatMbps(data.backbone.p95_out_mbps || 0)}</span>
+          <div class="text-xxs text-muted mt-0.5">Util: <b class="text-info">${p95UtilPct.toFixed(1)}%</b></div>
+        </td>
+        <td style="padding: 12px; text-align: center;">
+          <div>
+            <span class="text-warning fw-600"><i class="bi bi-arrow-down me-0.5"></i>${formatMbps(data.backbone.peak_in_mbps)}</span>
+            <span class="text-primary ms-2 fw-600"><i class="bi bi-arrow-up me-0.5"></i>${formatMbps(data.backbone.peak_out_mbps)}</span>
+          </div>
+          <div class="text-xxs text-muted mt-0.5">Puncak: <b class="text-warning">${peakUtilPct.toFixed(1)}%</b></div>
+        </td>
+      </tr>
+    `;
+  }
 
   // Render health rows
   const healthSection = document.getElementById('router-health-section');
@@ -731,6 +903,16 @@ function renderBackboneReportChart(points, isRawData = false) {
               boxWidth: 10,
               font: { size: 9 },
               color: tickColor
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const val = context.parsed.y !== undefined ? context.parsed.y : context.raw;
+                const cap = (activeReport && activeReport.data && activeReport.data.backbone && activeReport.data.backbone.campus_capacity_mbps) || 6000;
+                const pct = cap > 0 ? ((val / cap) * 100).toFixed(1) : 0;
+                return `${context.dataset.label}: ${formatMbps(val)} (${pct}% utilisasi)`;
+              }
             }
           }
         },

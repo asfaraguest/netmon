@@ -2034,10 +2034,16 @@ class Database:
             p95_rx_mbps = self.calc_percentile([v / 1e6 for _, v in rx_points], 95) if rx_points else 0.0
             p95_tx_mbps = self.calc_percentile([v / 1e6 for _, v in tx_points], 95) if tx_points else 0.0
 
+            uplink_mbps = float(router.get('uplink_speed_mbps') or 1000.0)
+            peak_r_rx = round(max_rx_bps / 1e6, 2)
+            peak_r_tx = round(max_tx_bps / 1e6, 2)
+
             router_stats = {
                 'id': rid,
                 'name': router['name'],
                 'ip': router['ip'],
+                'uplink_speed_mbps': int(uplink_mbps),
+                'uplink_utilization_pct': round((max(peak_r_rx, peak_r_tx) / uplink_mbps) * 100.0, 1) if uplink_mbps > 0 else 0.0,
                 'include_in_aggregate': router.get('include_in_aggregate', 1),
                 'total_rx_gb': round(total_rx_bytes / 1e9, 2),
                 'total_tx_gb': round(total_tx_bytes / 1e9, 2),
@@ -2045,8 +2051,8 @@ class Database:
                 'avg_tx_mbps': round(avg_tx_bps / 1e6, 2),
                 'p95_rx_mbps': p95_rx_mbps,
                 'p95_tx_mbps': p95_tx_mbps,
-                'peak_rx_mbps': round(max_rx_bps / 1e6, 2),
-                'peak_tx_mbps': round(max_tx_bps / 1e6, 2),
+                'peak_rx_mbps': peak_r_rx,
+                'peak_tx_mbps': peak_r_tx,
                 
                 # Health metrics
                 'avg_cpu': round(avg_cpu, 1),
@@ -2108,11 +2114,34 @@ class Database:
         report['backbone']['avg_out_mbps'] = round(total_backbone_tx_bps_sum / 1e6, 2)
         report['backbone']['p95_in_mbps'] = self.calc_percentile([pt['rx'] for pt in bb_1m_pts], 95) if bb_1m_pts else round(sum(r.get('p95_rx_mbps', 0.0) for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)
         report['backbone']['p95_out_mbps'] = self.calc_percentile([pt['tx'] for pt in bb_1m_pts], 95) if bb_1m_pts else round(sum(r.get('p95_tx_mbps', 0.0) for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)
-        report['backbone']['campus_capacity_mbps'] = int(self.get_campus_total_bandwidth_mbps())
+        campus_cap = float(self.get_campus_total_bandwidth_mbps() or 6000.0)
+        report['backbone']['campus_capacity_mbps'] = int(campus_cap)
         report['backbone']['peak_in_mbps'] = round(max(backbone_peaks_rx) / 1e6, 2) if backbone_peaks_rx else 0.0
         report['backbone']['peak_out_mbps'] = round(max(backbone_peaks_tx) / 1e6, 2) if backbone_peaks_tx else 0.0
         report['backbone']['total_in_gb'] = round(sum(r['total_rx_gb'] for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)
         report['backbone']['total_out_gb'] = round(sum(r['total_tx_gb'] for r in report['routers'] if r.get('include_in_aggregate', 1) == 1), 2)
+
+        # Calculate Bandwidth Utilization % against Total Campus Internet Capacity
+        if campus_cap > 0:
+            peak_traffic = max(report['backbone']['peak_in_mbps'], report['backbone']['peak_out_mbps'])
+            avg_traffic = max(report['backbone']['avg_in_mbps'], report['backbone']['avg_out_mbps'])
+            p95_traffic = max(report['backbone']['p95_in_mbps'], report['backbone']['p95_out_mbps'])
+
+            report['backbone']['utilization_peak_pct'] = round((peak_traffic / campus_cap) * 100.0, 1)
+            report['backbone']['utilization_avg_pct'] = round((avg_traffic / campus_cap) * 100.0, 1)
+            report['backbone']['utilization_p95_pct'] = round((p95_traffic / campus_cap) * 100.0, 1)
+            report['backbone']['utilization_in_peak_pct'] = round((report['backbone']['peak_in_mbps'] / campus_cap) * 100.0, 1)
+            report['backbone']['utilization_out_peak_pct'] = round((report['backbone']['peak_out_mbps'] / campus_cap) * 100.0, 1)
+            report['backbone']['utilization_in_avg_pct'] = round((report['backbone']['avg_in_mbps'] / campus_cap) * 100.0, 1)
+            report['backbone']['utilization_out_avg_pct'] = round((report['backbone']['avg_out_mbps'] / campus_cap) * 100.0, 1)
+        else:
+            report['backbone']['utilization_peak_pct'] = 0.0
+            report['backbone']['utilization_avg_pct'] = 0.0
+            report['backbone']['utilization_p95_pct'] = 0.0
+            report['backbone']['utilization_in_peak_pct'] = 0.0
+            report['backbone']['utilization_out_peak_pct'] = 0.0
+            report['backbone']['utilization_in_avg_pct'] = 0.0
+            report['backbone']['utilization_out_avg_pct'] = 0.0
         
         # 3. Save report to DB
         with self.conn() as c:
