@@ -8,7 +8,10 @@ import sqlite3
 import json
 import logging
 import os
+import random
 import secrets
+import threading
+import time
 from datetime import datetime
 from contextlib import contextmanager
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -23,27 +26,66 @@ DB_PATH = os.environ.get('DB_PATH', DEFAULT_DB)
 class Database:
     def __init__(self):
         self.db_path = DB_PATH
+        self._write_lock = threading.RLock()
         self._init_db()
+
+    @staticmethod
+    def _is_locked_error(exc):
+        msg = str(exc).lower()
+        return 'locked' in msg or 'busy' in msg
+
+    def _run_with_retry(self, fn, max_retries=6):
+        """Execute a DB operation with jittered exponential backoff on transient SQLite lock/busy errors."""
+        last_exc = None
+        for attempt in range(max_retries + 1):
+            try:
+                return fn()
+            except sqlite3.OperationalError as e:
+                if not self._is_locked_error(e) or attempt >= max_retries:
+                    raise
+                last_exc = e
+                delay = min(2.5, 0.12 * (2 ** attempt)) + random.uniform(0.02, 0.12)
+                logger.warning(f"[DB] SQLite busy/locked (attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.2f}s...")
+                time.sleep(delay)
+        if last_exc:
+            raise last_exc
 
     @contextmanager
     def conn(self):
-        c = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
+        c = sqlite3.connect(self.db_path, check_same_thread=False, timeout=45.0)
         c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA busy_timeout=45000")
         c.execute("PRAGMA synchronous=NORMAL")
-        c.execute("PRAGMA cache_size=-2000")
+        c.execute("PRAGMA cache_size=-8000")
         c.execute("PRAGMA temp_store=MEMORY")
         c.execute("PRAGMA mmap_size=268435456")
         try:
             yield c
-            c.commit()
+            if c.in_transaction:
+                for attempt in range(5):
+                    try:
+                        c.commit()
+                        break
+                    except sqlite3.OperationalError as e:
+                        if not self._is_locked_error(e) or attempt >= 4:
+                            raise
+                        time.sleep(0.08 * (attempt + 1) + random.uniform(0.01, 0.05))
         except Exception:
-            c.rollback()
+            try:
+                c.rollback()
+            except Exception:
+                pass
             raise
         finally:
             c.close()
 
     def _init_db(self):
+        def _enable_wal():
+            with self.conn() as c:
+                c.execute("PRAGMA journal_mode=WAL")
+                c.execute("PRAGMA wal_autocheckpoint=1000")
+        self._run_with_retry(_enable_wal)
+
         with self.conn() as c:
             try:
                 c.execute("DROP INDEX IF EXISTS idx_metrics_device")
@@ -555,8 +597,11 @@ class Database:
         fields.append('updated_at = ?')
         values.append(datetime.now().isoformat())
         values.append(device_id)
-        with self.conn() as c:
-            c.execute(f'UPDATE devices SET {", ".join(fields)} WHERE id = ?', tuple(values))
+        def _do_update():
+            with self._write_lock:
+                with self.conn() as c:
+                    c.execute(f'UPDATE devices SET {", ".join(fields)} WHERE id = ?', tuple(values))
+        self._run_with_retry(_do_update)
 
     def delete_device(self, device_id):
         with self.conn() as c:
@@ -707,22 +752,28 @@ class Database:
 
     def set_poller_state(self, key, value):
         try:
-            with self.conn() as c:
-                c.execute(
-                    'INSERT OR REPLACE INTO poller_state (key, value, updated_at) VALUES (?, ?, ?)',
-                    (key, json.dumps(value), datetime.now().isoformat())
-                )
+            def _do_set():
+                with self._write_lock:
+                    with self.conn() as c:
+                        c.execute(
+                            'INSERT OR REPLACE INTO poller_state (key, value, updated_at) VALUES (?, ?, ?)',
+                            (key, json.dumps(value), datetime.now().isoformat())
+                        )
+            self._run_with_retry(_do_set)
         except Exception as e:
             logger.warning(f"[DB] set_poller_state({key}) failed: {e}")
 
     def cleanup_old_records(self, alert_days=30, log_days=90):
         """Prune old acknowledged alerts and access logs periodically."""
         try:
-            with self.conn() as c:
-                c.execute("DELETE FROM alerts WHERE acknowledged = 1 AND created_at < datetime('now', ? || ' days')",
-                          (f'-{int(alert_days)}',))
-                c.execute("DELETE FROM access_logs WHERE created_at < datetime('now', ? || ' days')",
-                          (f'-{int(log_days)}',))
+            def _do_cleanup():
+                with self._write_lock:
+                    with self.conn() as c:
+                        c.execute("DELETE FROM alerts WHERE acknowledged = 1 AND created_at < datetime('now', ? || ' days')",
+                                  (f'-{int(alert_days)}',))
+                        c.execute("DELETE FROM access_logs WHERE created_at < datetime('now', ? || ' days')",
+                                  (f'-{int(log_days)}',))
+            self._run_with_retry(_do_cleanup)
         except Exception as e:
             logger.warning(f"[DB] cleanup_old_records failed: {e}")
 
@@ -1013,14 +1064,47 @@ class Database:
     # ============================================================
 
     def save_metric(self, device_id, name, value):
-        with self.conn() as c:
-            c.execute('INSERT INTO snmp_metrics (device_id, metric_name, metric_value) VALUES (?, ?, ?)',
-                      (device_id, name, str(value)))
+        def _do_save():
+            with self._write_lock:
+                with self.conn() as c:
+                    c.execute('INSERT INTO snmp_metrics (device_id, metric_name, metric_value) VALUES (?, ?, ?)',
+                              (device_id, name, str(value)))
+        self._run_with_retry(_do_save)
+
+    def save_metrics_batch(self, metric_rows):
+        """Batch-insert [(device_id, metric_name, value), ...] in a single transaction."""
+        if not metric_rows:
+            return
+        rows = [(did, name, str(val)) for did, name, val in metric_rows]
+        def _do_batch():
+            with self._write_lock:
+                with self.conn() as c:
+                    c.executemany(
+                        'INSERT INTO snmp_metrics (device_id, metric_name, metric_value) VALUES (?, ?, ?)',
+                        rows
+                    )
+        self._run_with_retry(_do_batch)
 
     def save_interface_traffic(self, device_id, iface_name, iface_idx, rx_bps, tx_bps):
-        with self.conn() as c:
-            c.execute('INSERT INTO interface_traffic (device_id,iface_name,iface_idx,rx_bps,tx_bps) VALUES (?,?,?,?,?)',
-                      (device_id, iface_name, iface_idx, rx_bps, tx_bps))
+        def _do_save():
+            with self._write_lock:
+                with self.conn() as c:
+                    c.execute('INSERT INTO interface_traffic (device_id,iface_name,iface_idx,rx_bps,tx_bps) VALUES (?,?,?,?,?)',
+                              (device_id, iface_name, iface_idx, rx_bps, tx_bps))
+        self._run_with_retry(_do_save)
+
+    def save_interface_traffic_batch(self, traffic_rows):
+        """Batch-insert [(device_id, iface_name, iface_idx, rx_bps, tx_bps), ...] in one transaction."""
+        if not traffic_rows:
+            return
+        def _do_batch():
+            with self._write_lock:
+                with self.conn() as c:
+                    c.executemany(
+                        'INSERT INTO interface_traffic (device_id,iface_name,iface_idx,rx_bps,tx_bps) VALUES (?,?,?,?,?)',
+                        traffic_rows
+                    )
+        self._run_with_retry(_do_batch)
 
     def get_interface_traffic(self, device_id, iface_name=None, hours=1):
         try:
@@ -1503,11 +1587,14 @@ class Database:
         # jadi dikasih retensi jauh lebih panjang dp interface_traffic (yang cuma buat chart recent).
         if metrics_retention_hours is None:
             metrics_retention_hours = interface_retention_hours
-        with self.conn() as c:
-            c.execute("DELETE FROM interface_traffic WHERE sampled_at < datetime('now', ? || ' hours')",
-                      (f'-{int(interface_retention_hours)}',))
-            c.execute("DELETE FROM snmp_metrics WHERE timestamp < datetime('now', ? || ' hours')",
-                      (f'-{int(metrics_retention_hours)}',))
+        def _do_cleanup():
+            with self._write_lock:
+                with self.conn() as c:
+                    c.execute("DELETE FROM interface_traffic WHERE sampled_at < datetime('now', ? || ' hours')",
+                              (f'-{int(interface_retention_hours)}',))
+                    c.execute("DELETE FROM snmp_metrics WHERE timestamp < datetime('now', ? || ' hours')",
+                              (f'-{int(metrics_retention_hours)}',))
+        self._run_with_retry(_do_cleanup)
 
 
     def get_metric_history(self, device_id, name, hours=1):
@@ -1700,9 +1787,12 @@ class Database:
         }
         
         if not routers:
-            with self.conn() as c:
-                c.execute('INSERT OR REPLACE INTO monthly_reports (report_month, report_data, generated_at) VALUES (?, ?, datetime("now"))',
-                          (month_str, json.dumps(report)))
+            def _save_empty_report():
+                with self._write_lock:
+                    with self.conn() as c:
+                        c.execute('INSERT OR REPLACE INTO monthly_reports (report_month, report_data, generated_at) VALUES (?, ?, datetime("now"))',
+                                  (month_str, json.dumps(report)))
+            self._run_with_retry(_save_empty_report)
             return report
             
         # Parse month_str to calendar month bounds
@@ -1713,14 +1803,16 @@ class Database:
         month_end = f"{next_year:04d}-{next_mon:02d}-01 00:00:00"
 
         # 2. Query metrics for the specified calendar month
-        with self.conn() as c:
-            rows = c.execute('''
-                SELECT device_id, metric_name, timestamp, CAST(metric_value AS REAL) as val
-                FROM snmp_metrics
-                WHERE metric_name IN ('wan_in', 'wan_out')
-                  AND timestamp >= ? AND timestamp < ?
-                ORDER BY timestamp ASC
-            ''', (month_start, month_end)).fetchall()
+        def _read_traffic_metrics():
+            with self.conn() as c:
+                return c.execute('''
+                    SELECT device_id, metric_name, timestamp, CAST(metric_value AS REAL) as val
+                    FROM snmp_metrics
+                    WHERE metric_name IN ('wan_in', 'wan_out')
+                      AND timestamp >= ? AND timestamp < ?
+                    ORDER BY timestamp ASC
+                ''', (month_start, month_end)).fetchall()
+        rows = self._run_with_retry(_read_traffic_metrics)
 
             
         # Build lookup: device_id -> uplink_speed in bps
@@ -1887,20 +1979,22 @@ class Database:
                 overall_max_ts = max(overall_max_ts, _tx[-1][0])
             
         # Query health metrics (cpu, memory, temperature) and alerts for the routers
-        with self.conn() as c:
-            health_rows = c.execute('''
-                SELECT device_id, metric_name, CAST(metric_value AS REAL) as val
-                FROM snmp_metrics
-                WHERE metric_name IN ('cpu_usage', 'memory_usage', 'temperature')
-                  AND timestamp >= ? AND timestamp < ?
-            ''', (month_start, month_end)).fetchall()
-            
-            alert_rows = c.execute('''
-                SELECT device_id, COUNT(*) as cnt
-                FROM alerts
-                WHERE created_at >= ? AND created_at < ?
-                GROUP BY device_id
-            ''', (month_start, month_end)).fetchall()
+        def _read_health_and_alerts():
+            with self.conn() as c:
+                h_rows = c.execute('''
+                    SELECT device_id, metric_name, CAST(metric_value AS REAL) as val
+                    FROM snmp_metrics
+                    WHERE metric_name IN ('cpu_usage', 'memory_usage', 'temperature')
+                      AND timestamp >= ? AND timestamp < ?
+                ''', (month_start, month_end)).fetchall()
+                a_rows = c.execute('''
+                    SELECT device_id, COUNT(*) as cnt
+                    FROM alerts
+                    WHERE created_at >= ? AND created_at < ?
+                    GROUP BY device_id
+                ''', (month_start, month_end)).fetchall()
+                return h_rows, a_rows
+        health_rows, alert_rows = self._run_with_retry(_read_health_and_alerts)
 
         health_vals = defaultdict(list)
         for hr in health_rows:
@@ -2143,10 +2237,14 @@ class Database:
             report['backbone']['utilization_in_avg_pct'] = 0.0
             report['backbone']['utilization_out_avg_pct'] = 0.0
         
-        # 3. Save report to DB
-        with self.conn() as c:
-            c.execute('INSERT OR REPLACE INTO monthly_reports (report_month, report_data, generated_at) VALUES (?, ?, datetime("now"))',
-                      (month_str, json.dumps(report)))
+        # 3. Save report to DB (with lock & retry to survive concurrent poller writes)
+        report_json = json.dumps(report)
+        def _save_report():
+            with self._write_lock:
+                with self.conn() as c:
+                    c.execute('INSERT OR REPLACE INTO monthly_reports (report_month, report_data, generated_at) VALUES (?, ?, datetime("now"))',
+                              (month_str, report_json))
+        self._run_with_retry(_save_report)
                       
         return report
 

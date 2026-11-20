@@ -239,3 +239,12 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
       - Sidebar Navy dengan pill motto `SMART • INNOVATIVE • PRO`, garis aksen emas di bawah logo Polije, dan indikator menu aktif biru-emas.
       - Sticky page header dengan garis bawah gradien Navy–Bondi–Emas ala header portal `polije.ac.id`, serta kartu KPI/panel dengan border-top aksen biru-emas.
       - Pratinjau tema langsung (*live preview*) dan kartu palet warna identitas Polije pada halaman Settings (`UI Theme`).
+
+22. **Perbaikan Menyeluruh Error `database is locked` Saat Generate Report & Konkurensi SQLite (`database.py`, `snmp_worker.py`):**
+    - **Akar Masalah:**
+      - `Database.conn()` sebelumnya menjalankan `PRAGMA journal_mode=WAL` pada setiap panggilan query, memicu lock contention lintas proses antara `netmon` (Gunicorn) dan `netmon-poller`.
+      - `collect_interface_traffic` dan `poll_device` membuka puluhan hingga ratusan transaksi *insert* individual per siklus polling setiap 15 detik (sementara `poll_device` juga sempat menahan `db_write_lock` saat I/O SNMP jaringan berjalan).
+    - **Solusi Konkurensi & Batching:**
+      - Memindahkan `PRAGMA journal_mode=WAL` & `PRAGMA wal_autocheckpoint=1000` agar hanya dijalankan sekali di `_init_db()`, serta memasang `PRAGMA busy_timeout=45000` dan cache 8 MB (`cache_size=-8000`) pada setiap koneksi.
+      - Menambahkan `_run_with_retry()` (jittered exponential backoff) + `self._write_lock` untuk operasi penulisan kritis (`generate_and_save_monthly_report`, `update_device`, `save_metric`, `save_interface_traffic`, `cleanup_*`, `set_poller_state`).
+      - Menambahkan `save_metrics_batch()` dan `save_interface_traffic_batch()` di `database.py`, serta memindahkan `_poll_router_traffic()` ke luar `db_write_lock` di `snmp_worker.py`, sehingga ratusan insert per 15 detik diringkas menjadi 1 transaksi batch per router.

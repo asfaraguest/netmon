@@ -901,27 +901,34 @@ class SNMPWorker:
             if p_stat.get('packet_loss') is not None:
                 upd['packet_loss'] = p_stat['packet_loss']
             
-            with self.db_write_lock:
-                # Save metrics to DB timeseries
-                if metrics['cpu_usage'] is not None:
-                    self.db.save_metric(did, 'cpu_usage', metrics['cpu_usage'])
-                if metrics['memory_usage'] is not None:
-                    self.db.save_metric(did, 'memory_usage', metrics['memory_usage'])
-                if metrics['temperature'] is not None:
-                    self.db.save_metric(did, 'temperature', metrics['temperature'])
-                if upd.get('latency_ms') is not None:
-                    self.db.save_metric(did, 'ping_latency', upd['latency_ms'])
-                if upd.get('packet_loss') is not None:
-                    self.db.save_metric(did, 'packet_loss', upd['packet_loss'])
+            # Poll WAN traffic throughput outside DB write lock so SNMP I/O never stalls other writers
+            traffic_data = None
+            if device.get('type') == 'router':
+                traffic_data = self._poll_router_traffic(device, ip, community, port, version)
+                if traffic_data:
+                    upd.update(traffic_data)
 
-                # Poll WAN traffic throughput if device type is router
-                traffic_data = None
-                if device.get('type') == 'router':
-                    traffic_data = self._poll_router_traffic(device, ip, community, port, version)
-                    if traffic_data:
-                        upd.update(traffic_data)
-                        self.db.save_metric(did, 'wan_in', traffic_data['wan_in'])
-                        self.db.save_metric(did, 'wan_out', traffic_data['wan_out'])
+            metric_batch = []
+            if metrics['cpu_usage'] is not None:
+                metric_batch.append((did, 'cpu_usage', metrics['cpu_usage']))
+            if metrics['memory_usage'] is not None:
+                metric_batch.append((did, 'memory_usage', metrics['memory_usage']))
+            if metrics['temperature'] is not None:
+                metric_batch.append((did, 'temperature', metrics['temperature']))
+            if upd.get('latency_ms') is not None:
+                metric_batch.append((did, 'ping_latency', upd['latency_ms']))
+            if upd.get('packet_loss') is not None:
+                metric_batch.append((did, 'packet_loss', upd['packet_loss']))
+            if traffic_data:
+                metric_batch.append((did, 'wan_in', traffic_data['wan_in']))
+                metric_batch.append((did, 'wan_out', traffic_data['wan_out']))
+            if upd.get('uptime'):
+                metric_batch.append((did, 'uptime', upd['uptime']))
+
+            with self.db_write_lock:
+                # Save all device timeseries metrics in one transaction
+                if metric_batch:
+                    self.db.save_metrics_batch(metric_batch)
 
                 # Run live anomaly detection for traffic surges and sudden resource spikes
                 self._analyze_metric_anomalies(device, metrics, traffic_data)
@@ -947,8 +954,6 @@ class SNMPWorker:
                 self._consecutive_snmp_fails[ip] = 0
                 self._consecutive_ping_fails[ip] = 0
                 self.db.update_device(did, upd)
-                if upd.get('uptime'):
-                    self.db.save_metric(did, 'uptime', upd['uptime'])
 
                 try:
                     full_dev = self.db.get_device(did)
@@ -1619,6 +1624,7 @@ class SNMPWorker:
         settings = self.db.get_settings()
         traffic_interval = max(5, int(settings.get('traffic_poll_interval', 15)))
         logged_gap = False
+        traffic_batch = []
 
         for oid, name in if_desc.items():
             idx = oid.split('.')[-1]
@@ -1733,8 +1739,11 @@ class SNMPWorker:
                     print(f"[Traffic] Spike terdeteksi pada device_id={did} interface={name} (tx_bps={tx_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps) - reset to 0")
                     tx_bps = 0.0
                 
-                with self.db_write_lock:
-                    self.db.save_interface_traffic(did, str(name), int(idx), rx_bps, tx_bps)
+                traffic_batch.append((did, str(name), int(idx), rx_bps, tx_bps))
+
+        if traffic_batch:
+            with self.db_write_lock:
+                self.db.save_interface_traffic_batch(traffic_batch)
 
     def capture_live_traffic(self, device, sample_seconds=3):
         """Ambil 2 sampel SNMP berjarak sample_seconds detik dan kembalikan delta traffic instan per-interface."""
