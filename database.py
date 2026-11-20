@@ -51,17 +51,29 @@ class Database:
             raise last_exc
 
     @contextmanager
-    def conn(self):
+    def conn(self, read_only=False):
         c = sqlite3.connect(self.db_path, check_same_thread=False, timeout=45.0)
         c.row_factory = sqlite3.Row
-        c.execute("PRAGMA busy_timeout=45000")
-        c.execute("PRAGMA synchronous=NORMAL")
-        c.execute("PRAGMA cache_size=-8000")
-        c.execute("PRAGMA temp_store=MEMORY")
-        c.execute("PRAGMA mmap_size=268435456")
+        for pragma in (
+            "PRAGMA busy_timeout=45000",
+            "PRAGMA synchronous=NORMAL",
+            "PRAGMA cache_size=-8000",
+            "PRAGMA temp_store=MEMORY"
+        ):
+            try:
+                c.execute(pragma)
+            except sqlite3.OperationalError:
+                pass
+        try:
+            c.execute("PRAGMA mmap_size=268435456")
+        except sqlite3.OperationalError:
+            try:
+                c.execute("PRAGMA mmap_size=0")
+            except Exception:
+                pass
         try:
             yield c
-            if c.in_transaction:
+            if not read_only and c.in_transaction:
                 for attempt in range(5):
                     try:
                         c.commit()
@@ -70,6 +82,8 @@ class Database:
                         if not self._is_locked_error(e) or attempt >= 4:
                             raise
                         time.sleep(0.08 * (attempt + 1) + random.uniform(0.01, 0.05))
+            elif read_only and c.in_transaction:
+                c.rollback()
         except Exception:
             try:
                 c.rollback()
@@ -986,7 +1000,7 @@ class Database:
             return c.execute('SELECT COUNT(*) FROM alerts WHERE acknowledged=0 AND is_false_alarm=0').fetchone()[0]
 
     def get_active_alerts(self, limit=10):
-        with self.conn() as c:
+        with self.conn(read_only=True) as c:
             rows = c.execute('''
                 SELECT id, device_id, device_name, device_ip, severity, message, details,
                        acknowledged, ack_by, ack_at, is_false_alarm, ai_analysis, replica_count,
@@ -1049,7 +1063,7 @@ class Database:
     # ============================================================
 
     def get_settings(self):
-        with self.conn() as c:
+        with self.conn(read_only=True) as c:
             rows = c.execute('SELECT key, value FROM settings').fetchall()
             return {r['key']: r['value'] for r in rows}
 
@@ -1642,7 +1656,7 @@ class Database:
     # ============================================================
 
     def get_dashboard_stats(self):
-        with self.conn() as c:
+        with self.conn(read_only=True) as c:
             total    = c.execute('SELECT COUNT(*) FROM devices').fetchone()[0]
             up       = c.execute("SELECT COUNT(*) FROM devices WHERE status='up'").fetchone()[0]
             down     = c.execute("SELECT COUNT(*) FROM devices WHERE status='down'").fetchone()[0]

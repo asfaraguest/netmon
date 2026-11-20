@@ -810,7 +810,19 @@ class TelegramBot:
 
     def _cmd_status(self, chat_id):
         try:
-            stats = self.db.get_dashboard_stats()
+            stats = None
+            last_err = None
+            for attempt in range(3):
+                try:
+                    stats = self.db.get_dashboard_stats()
+                    if stats:
+                        break
+                except Exception as err:
+                    last_err = err
+                    time.sleep(0.25)
+            if not stats and last_err:
+                raise last_err
+
             total = stats.get('total', 0)
             up = stats.get('up', 0)
             down = stats.get('down', 0)
