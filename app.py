@@ -54,7 +54,7 @@ ALLOWED_SETTING_KEYS = {
     'cpu_spike_threshold', 'cpu_jump_threshold', 'memory_spike_threshold',
     'groq_api_key', 'groq_model', 'groq_redact_ips',
     'telegram_enabled', 'telegram_bot_token', 'telegram_chat_ids',
-    'telegram_notify_down', 'telegram_notify_up',
+    'telegram_notify_down', 'telegram_notify_up', 'telegram_censor_ips',
     'telegram_daily_digest_enabled', 'telegram_daily_digest_time',
     'unifi_host', 'unifi_port', 'unifi_site', 'unifi_user', 'unifi_pass',
     'theme', 'app_name', 'global_maintenance_until',

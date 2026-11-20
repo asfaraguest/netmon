@@ -253,6 +253,13 @@
           <small class="text-muted">Jadwal pengiriman rekap harian (WIB).</small>
         </div>
         <div class="col-12">
+          <label class="nm-label">Sensor IP Router (Spoiler Klik-untuk-Buka)</label>
+          <div class="nm-toggle-wrap">
+            <label class="nm-toggle"><input type="checkbox" id="s-tg-censor-ips" checked><span class="nm-slider"></span></label>
+            <span>Blur IP router di pesan bot Telegram (tap/klik sensor untuk melihat IP asli)</span>
+          </div>
+        </div>
+        <div class="col-12">
           <div class="p-2 border rounded" style="background: rgba(255,255,255,0.03); font-size: 0.82rem;">
             <i class="bi bi-info-circle-fill text-info me-1"></i>
             <b>Cara mendapatkan Chat ID:</b> Buka bot Anda di Telegram lalu kirim <code>/start</code> atau <code>/myid</code>. Bot akan membalas dengan Chat ID Anda, atau gunakan bot <code>@userinfobot</code>.
@@ -475,6 +482,7 @@ function loadSettings() {
     setVal('s-tg-chats',   s.telegram_chat_ids || '');
     setChk('s-tg-down',    s.telegram_notify_down !== 'false');
     setChk('s-tg-up',      s.telegram_notify_up !== 'false');
+    setChk('s-tg-censor-ips', s.telegram_censor_ips !== 'false');
     setChk('s-tg-digest',  s.telegram_daily_digest_enabled !== 'false');
     setVal('s-tg-digest-time', s.telegram_daily_digest_time || '08:00');
     setVal('s-uf-host',    s.unifi_host || '');
@@ -598,6 +606,7 @@ function saveAll() {
     telegram_chat_ids:    getVal('s-tg-chats'),
     telegram_notify_down: document.getElementById('s-tg-down').checked ? 'true' : 'false',
     telegram_notify_up:   document.getElementById('s-tg-up').checked   ? 'true' : 'false',
+    telegram_censor_ips:  document.getElementById('s-tg-censor-ips').checked ? 'true' : 'false',
     telegram_daily_digest_enabled: document.getElementById('s-tg-digest').checked ? 'true' : 'false',
     telegram_daily_digest_time:   getVal('s-tg-digest-time') || '08:00',
     unifi_host:           getVal('s-uf-host'),

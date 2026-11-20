@@ -212,6 +212,7 @@ def sync_dynamic_settings():
             s.get('telegram_chat_ids', ''),
             s.get('telegram_notify_down', 'true'),
             s.get('telegram_notify_up', 'true'),
+            s.get('telegram_censor_ips', 'true'),
             s.get('telegram_daily_digest_time', '08:00'),
         )
         if _last_cfg_sig is None:
@@ -225,13 +226,13 @@ def sync_dynamic_settings():
                 scheduler.reschedule_job('snmp_poll', trigger='interval', seconds=max(10, int(sig[0])))
             if sig[1] != old_sig[1]:
                 scheduler.reschedule_job('traffic_poll', trigger='interval', seconds=max(5, int(sig[1])))
-            if sig[7] != old_sig[7]:
+            if sig[8] != old_sig[8]:
                 try:
-                    dh, dm = [int(x) for x in sig[7].split(':')]
+                    dh, dm = [int(x) for x in sig[8].split(':')]
                     scheduler.reschedule_job('telegram_daily_digest', trigger='cron', hour=dh, minute=dm)
                 except Exception:
                     pass
-            if sig[2:7] != old_sig[2:7]:
+            if sig[2:8] != old_sig[2:8]:
                 telegram_bot.reload_config()
             logger.info("[Poller] Hot-reloaded updated configuration from database.")
         _publish_telegram_status()

@@ -65,6 +65,7 @@ class TelegramBot:
         self.enabled = False
         self.notify_down = True
         self.notify_up = True
+        self.censor_ips = True
         self.daily_digest_enabled = True
         self.daily_digest_time = "08:00"
 
@@ -94,6 +95,7 @@ class TelegramBot:
         self.chat_ids = [c.strip() for c in re.split(r'[,;\s]+', raw_chats) if c.strip()]
         self.notify_down = settings.get('telegram_notify_down', 'true').lower() == 'true'
         self.notify_up = settings.get('telegram_notify_up', 'true').lower() == 'true'
+        self.censor_ips = settings.get('telegram_censor_ips', 'true').lower() != 'false'
         self.daily_digest_enabled = settings.get('telegram_daily_digest_enabled', 'true').lower() == 'true'
         self.daily_digest_time = settings.get('telegram_daily_digest_time', '08:00').strip() or "08:00"
 
@@ -211,6 +213,51 @@ class TelegramBot:
 
     # ─── Low-level Telegram API calls ────────────────────────────────
 
+    _IPV4_RE = re.compile(
+        r'(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}'
+        r'(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:/\d{1,2})?(?![\d.])'
+    )
+    _HTML_TOKEN_RE = re.compile(
+        r'(<tg-spoiler>.*?</tg-spoiler>|<code\b[^>]*>.*?</code>|<pre\b[^>]*>.*?</pre>|<[^>]+>)',
+        re.IGNORECASE | re.DOTALL
+    )
+
+    def _censor_ips_html(self, text):
+        """Wrap IPv4 addresses in Telegram native <tg-spoiler> (click/tap to reveal)."""
+        if not getattr(self, 'censor_ips', True) or not text:
+            return text
+        parts = self._HTML_TOKEN_RE.split(str(text))
+        out = []
+        for part in parts:
+            if not part:
+                continue
+            low = part.lower()
+            if low.startswith('<tg-spoiler>'):
+                out.append(part)
+            elif low.startswith('<code'):
+                m = re.match(r'^<code\b[^>]*>(.*)</code>$', part, re.IGNORECASE | re.DOTALL)
+                if m:
+                    inner = m.group(1)
+                    if self._IPV4_RE.fullmatch(inner.strip()):
+                        out.append(f'<tg-spoiler>{inner.strip()}</tg-spoiler>')
+                    else:
+                        replaced = self._IPV4_RE.sub(r'</code><tg-spoiler>\g<0></tg-spoiler><code>', inner)
+                        out.append(f'<code>{replaced}</code>'.replace('<code></code>', ''))
+                else:
+                    out.append(part)
+            elif low.startswith('<pre'):
+                m = re.match(r'^<pre\b[^>]*>(.*)</pre>$', part, re.IGNORECASE | re.DOTALL)
+                if m:
+                    replaced = self._IPV4_RE.sub(r'</pre><tg-spoiler>\g<0></tg-spoiler><pre>', m.group(1))
+                    out.append(f'<pre>{replaced}</pre>'.replace('<pre></pre>', ''))
+                else:
+                    out.append(part)
+            elif part.startswith('<'):
+                out.append(part)
+            else:
+                out.append(self._IPV4_RE.sub(r'<tg-spoiler>\g<0></tg-spoiler>', part))
+        return ''.join(out)
+
     def _send_request(self, method, payload=None, timeout=15):
         if not self.bot_token:
             return None
@@ -229,6 +276,8 @@ class TelegramBot:
 
     def send_message(self, chat_id, text, parse_mode="HTML", reply_markup=None):
         """Send a message to a specific chat with automatic plain-text fallback."""
+        if parse_mode == "HTML":
+            text = self._censor_ips_html(text)
         payload = {
             "chat_id": chat_id,
             "text": text,
@@ -255,6 +304,8 @@ class TelegramBot:
 
     def edit_message_text(self, chat_id, message_id, text, parse_mode="HTML", reply_markup=None):
         """Edit an existing message. If target was a media message (photo), deletes it and sends fresh text."""
+        if parse_mode == "HTML":
+            text = self._censor_ips_html(text)
         payload = {
             "chat_id": chat_id,
             "message_id": message_id,
@@ -301,6 +352,8 @@ class TelegramBot:
         if not self.bot_token:
             return None
         try:
+            if caption and parse_mode == "HTML":
+                caption = self._censor_ips_html(caption)
             url = f"{self.api_url}/sendPhoto"
             data = {"chat_id": chat_id}
             if caption:
@@ -330,6 +383,8 @@ class TelegramBot:
         if not self.bot_token:
             return None
         try:
+            if caption and parse_mode == "HTML":
+                caption = self._censor_ips_html(caption)
             url = f"{self.api_url}/editMessageMedia"
             media_obj = {
                 "type": "photo",
@@ -444,8 +499,8 @@ class TelegramBot:
                     "Akun atau grup Anda belum terdaftar di whitelist TIKWatch.\n\n"
                     f"• <b>Chat ID Anda:</b> <code>{chat_id}</code>\n"
                     f"• <b>User ID:</b> <code>{user_id}</code>\n"
-                    f"• <b>Username:</b> @{username if username else '-'}\n"
-                    f"• <b>Nama:</b> {first_name}\n\n"
+                    f"• <b>Username:</b> @{html.escape(str(username)) if username else '-'}\n"
+                    f"• <b>Nama:</b> {html.escape(str(first_name))}\n\n"
                     "<i>Untuk memberikan akses, salin <b>Chat ID</b> di atas lalu masukkan ke menu "
                     "<b>Settings &gt; Telegram Bot Integration &gt; Authorized Chat IDs</b> di Web Dashboard TIKWatch, lalu klik tombol <b>Save All Settings</b>.</i>"
                 )
@@ -558,10 +613,10 @@ class TelegramBot:
                 self.db.acknowledge_alert(alert_id, user=f"Telegram (@{username})")
                 self.answer_callback_query(cq_id, text=f"✅ Alert #{alert_id} berhasil di-acknowledge!")
 
-                # Live update message to show who acknowledged it
-                orig_text = msg.get("text", "")
+                # Live update message to show who acknowledged it (escape original plain text & preserve IP spoiler)
+                orig_text = html.escape(str(msg.get("text", "")))
                 now_str = datetime.now().strftime("%H:%M:%S")
-                updated_text = orig_text + f"\n\n✅ <i>Di-acknowledge oleh @{username} pukul {now_str} WIB</i>"
+                updated_text = orig_text + f"\n\n✅ <i>Di-acknowledge oleh @{html.escape(str(username))} pukul {now_str} WIB</i>"
 
                 # Keep only re-check button or remove buttons
                 new_markup = {
@@ -681,20 +736,20 @@ class TelegramBot:
             lat = f"{updated.get('latency_ms', '-')} ms" if updated.get('latency_ms') is not None else "-"
             reply = (
                 f"📡 <b>Hasil Re-Check Polling:</b>\n"
-                f"• <b>Perangkat:</b> <code>{updated.get('name', updated.get('ip'))}</code> ({updated.get('ip')})\n"
+                f"• <b>Perangkat:</b> <code>{html.escape(str(updated.get('name') or updated.get('ip')))}</code> ({updated.get('ip')})\n"
                 f"• <b>Status:</b> {icon} <b>{status}</b>\n"
                 f"• <b>Latensi:</b> {lat}\n"
-                f"• <b>Terakhir Dilihat:</b> {updated.get('last_seen', '-')}"
+                f"• <b>Terakhir Dilihat:</b> {html.escape(str(updated.get('last_seen') or '-'))}"
             )
             self.send_message(chat_id, reply)
         except Exception as e:
-            self.send_message(chat_id, f"⚠️ Gagal polling {device.get('ip')}: {e}")
+            self.send_message(chat_id, f"⚠️ Gagal polling {device.get('ip')}: {html.escape(str(e))}")
 
     # ─── Bot Commands ────────────────────────────────────────────────
 
     def _cmd_help(self, chat_id, name):
         text = (
-            f"👋 Halo, <b>{name}</b>!\n\n"
+            f"👋 Halo, <b>{html.escape(str(name))}</b>!\n\n"
             "🏛️ <b>TIKWatch Bot</b> siap membantu monitoring utilisasi & kesehatan router kampus Politeknik Negeri Jember secara real-time.\n\n"
             "<b>📊 Monitoring Bandwidth & Traffic:</b>\n"
             "• <code>/traffic all</code> — Agregat bandwidth seluruh router (Hanya Uplink WAN)\n"
@@ -737,8 +792,8 @@ class TelegramBot:
             "🆔 <b>Informasi Identitas Telegram:</b>\n\n"
             f"• <b>Chat ID:</b> <code>{chat_id}</code>\n"
             f"• <b>User ID:</b> <code>{user_id}</code>\n"
-            f"• <b>Nama:</b> {first_name}\n"
-            f"• <b>Username:</b> @{username if username else '-'}\n"
+            f"• <b>Nama:</b> {html.escape(str(first_name))}\n"
+            f"• <b>Username:</b> @{html.escape(str(username)) if username else '-'}\n"
             "• <b>Status Akses:</b> ✅ <i>Terotorisasi di TIKWatch</i>"
         )
         self.send_message(chat_id, text)
@@ -803,9 +858,9 @@ class TelegramBot:
                 aid = a.get('id')
                 sev = a.get('severity', 'info').upper()
                 s_icon = "🔴" if sev == "CRITICAL" else ("🟡" if sev == "WARNING" else "ℹ️")
-                dname = a.get('device_name') or a.get('device_ip') or 'Device'
-                msg = a.get('message', '-')
-                ts = a.get('created_at', '-')
+                dname = html.escape(str(a.get('device_name') or a.get('device_ip') or 'Device'))
+                msg = html.escape(str(a.get('message') or '-'))
+                ts = html.escape(str(a.get('created_at') or '-'))
                 text += (
                     f"{s_icon} <b>[#{aid}] {sev}</b>\n"
                     f"• <b>Perangkat:</b> <code>{dname}</code> ({a.get('device_ip','')})\n"
@@ -863,10 +918,10 @@ class TelegramBot:
 
             text = f"🔴 <b>Perangkat DOWN ({len(down_devs)} Perangkat):</b>\n\n"
             for d in down_devs:
-                name = d.get('name') or d.get('ip')
+                name = html.escape(str(d.get('name') or d.get('ip')))
                 ip = d.get('ip')
-                dtype = d.get('type') or 'Unknown'
-                last_seen = d.get('last_seen') or 'Belum pernah'
+                dtype = html.escape(str(d.get('type') or 'Unknown'))
+                last_seen = html.escape(str(d.get('last_seen') or 'Belum pernah'))
                 text += (
                     f"• <b>{name}</b> ({ip})\n"
                     f"  Tipe: {dtype} | Terakhir terlihat: <i>{last_seen}</i>\n"
@@ -895,7 +950,7 @@ class TelegramBot:
             for z in zones:
                 z_devs = z.get('devices', [])
                 z_up = sum(1 for d in z_devs if d.get('status') == 'up')
-                text += f"• <b>{z.get('name')}:</b> {len(z_devs)} perangkat (🟢 {z_up}/{len(z_devs)} UP)\n"
+                text += f"• <b>{html.escape(str(z.get('name') or '-'))}:</b> {len(z_devs)} perangkat (🟢 {z_up}/{len(z_devs)} UP)\n"
 
             self.send_message(chat_id, text)
         except Exception as e:
@@ -911,7 +966,7 @@ class TelegramBot:
             if self.socketio:
                 self.socketio.emit('alert_ack', {'id': aid, 'ack_by': f"Telegram (@{username})"})
                 self.socketio.emit('stats_update', self.db.get_dashboard_stats())
-            self.send_message(chat_id, f"✅ Alert <b>#{aid}</b> telah berhasil di-acknowledge oleh @{username}.")
+            self.send_message(chat_id, f"✅ Alert <b>#{aid}</b> telah berhasil di-acknowledge oleh @{html.escape(str(username))}.")
         except ValueError:
             self.send_message(chat_id, "⚠️ Format ID salah. Gunakan angka, contoh: <code>/ack 15</code>")
         except Exception as e:
@@ -923,7 +978,7 @@ class TelegramBot:
             if self.socketio:
                 self.socketio.emit('alert_ack_all', {'ack_by': f"Telegram (@{username})"})
                 self.socketio.emit('stats_update', self.db.get_dashboard_stats())
-            self.send_message(chat_id, f"✅ Seluruh alert aktif berhasil di-acknowledge oleh @{username}.")
+            self.send_message(chat_id, f"✅ Seluruh alert aktif berhasil di-acknowledge oleh @{html.escape(str(username))}.")
         except Exception as e:
             self.send_message(chat_id, f"⚠️ Gagal ack all: {e}")
 
@@ -933,10 +988,10 @@ class TelegramBot:
             return
 
         if not args:
-            self.send_message(chat_id, "ℹ️ Gunakan: <code>/poll &lt;ip/id&gt;</code> untuk satu perangkat, atau <code>/poll all</code> untuk re-check seluruh perangkat.")
+            self.send_message(chat_id, "ℹ️ Gunakan: <code>/poll &lt;nama/ip/id&gt;</code> untuk satu perangkat, atau <code>/poll all</code> untuk re-check seluruh perangkat.")
             return
 
-        target = args[0].strip()
+        target = " ".join(args).strip()
         if target.lower() in ("all", "semua"):
             devices = self.db.get_all_devices()
             if not devices:
@@ -955,17 +1010,13 @@ class TelegramBot:
             threading.Thread(target=_poll_all, daemon=True).start()
             return
 
-        device = None
-        if target.isdigit():
-            device = self.db.get_device(int(target))
+        device = self._find_device_by_target(target)
         if not device:
-            device = self.db.get_device_by_ip(target)
-
-        if not device:
-            self.send_message(chat_id, f"⚠️ Perangkat dengan IP/ID <code>{target}</code> tidak ditemukan di database.")
+            self.send_message(chat_id, f"⚠️ Perangkat <code>{html.escape(target)}</code> tidak ditemukan di database.")
             return
 
-        self.send_message(chat_id, f"🔄 Memulai polling untuk <b>{device.get('name', target)}</b> ({device.get('ip')})...")
+        dname = html.escape(str(device.get('name') or target))
+        self.send_message(chat_id, f"🔄 Memulai polling untuk <b>{dname}</b> ({device.get('ip')})...")
         threading.Thread(target=self._run_poll_and_notify, args=(chat_id, device), daemon=True).start()
 
     def _cmd_traffic_summary(self, chat_id, edit_msg_id=None):
@@ -1015,7 +1066,7 @@ class TelegramBot:
             if routers:
                 current_msg = header + f"🛰️ <b>Status Uplink Semua Router ({len(routers)}):</b>\n\n"
                 for idx, r in enumerate(routers, start=1):
-                    rname = r.get('name') or r.get('ip')
+                    rname = html.escape(str(r.get('name') or r.get('ip') or '-'))
                     rip = r.get('ip')
                     win = r.get('wan_in') or 0.0
                     wout = r.get('wan_out') or 0.0
@@ -1144,15 +1195,6 @@ class TelegramBot:
                 [
                     {"text": "🌐 Semua Router (Uplink)", "callback_data": "cmd:traffic_summary"},
                     {"text": "🔀 Pilih Router (Active Ports)", "callback_data": "cmd:traffic_picker"}
-                ]
-            ]
-        }
-        self.send_message(chat_id, text, reply_markup=markup)
-        markup = {
-            "inline_keyboard": [
-                [
-                    {"text": "🌐 Semua Router (All)", "callback_data": "cmd:traffic_summary"},
-                    {"text": "🔀 Pilih Router (Select)", "callback_data": "cmd:traffic_picker"}
                 ]
             ]
         }
@@ -1659,20 +1701,23 @@ class TelegramBot:
             self._send_or_update_chart(chat_id, target_id, time_range)
             return
 
-        # Target is a router / device
-        device = self._find_device_by_target(args[0])
+        # Target is a router / device (supports multi-word name + optional trailing time_range)
+        if len(args) > 1 and args[-1].lower().strip() in valid_ranges:
+            time_range = args[-1].lower().strip()
+            target_query = " ".join(args[:-1]).strip()
+        else:
+            target_query = " ".join(args).strip()
+
+        device = self._find_device_by_target(target_query)
         if not device:
             self.send_message(
                 chat_id,
-                f"⚠️ Router / perangkat <code>{html.escape(args[0])}</code> tidak ditemukan.\n\n"
+                f"⚠️ Router / perangkat <code>{html.escape(target_query)}</code> tidak ditemukan.\n\n"
                 "Ketik <code>/chart select</code> untuk memilih router dari daftar interaktif."
             )
             return
 
         target_id = str(device['id'])
-        if len(args) > 1:
-            time_range = args[1].lower().strip()
-
         self._send_or_update_chart(chat_id, target_id, time_range)
 
     def _cmd_chart_picker(self, chat_id, time_range='24h', edit_msg_id=None):
@@ -1888,7 +1933,7 @@ class TelegramBot:
             self._cmd_traffic_summary(chat_id, edit_msg_id=edit_msg_id)
             return
 
-        target = str(args[0]).strip()
+        target = " ".join(args).strip()
         device = self._find_device_by_target(target)
 
         if not device:
@@ -1900,8 +1945,9 @@ class TelegramBot:
             return
 
         did = device.get('id')
-        dname = device.get('name') or device.get('ip')
+        dname = html.escape(str(device.get('name') or device.get('ip')))
         dip = device.get('ip')
+        wan_idx = str(device.get('wan_iface_idx') or '').strip()
         dtype = device.get('type', 'device').capitalize()
         status = (device.get('status') or 'unknown').upper()
         status_icon = "🟢" if status == "UP" else ("🔴" if status == "DOWN" else "🟡")
@@ -1949,7 +1995,8 @@ class TelegramBot:
         active_ifaces = self.db.get_latest_device_interface_traffic(did, limit=15, active_only=True)
         if active_ifaces:
             for ifc in active_ifaces:
-                iname = ifc.get('name')
+                raw_iname = str(ifc.get('name') or '-')
+                iname = html.escape(raw_iname)
                 i_idx = str(ifc.get('idx') or '')
                 rx = ifc.get('rx_bps') or 0.0
                 tx = ifc.get('tx_bps') or 0.0
@@ -1959,7 +2006,7 @@ class TelegramBot:
                 is_uplink_port = False
                 if wan_idx and i_idx == wan_idx:
                     is_uplink_port = True
-                elif any(k in iname.lower() for k in ('wan', 'sfp', 'sfpplus', 'ether1', 'pppoe')):
+                elif any(k in raw_iname.lower() for k in ('wan', 'sfp', 'sfpplus', 'ether1', 'pppoe')):
                     is_uplink_port = True
 
                 tag = " <code>[Uplink WAN]</code>" if is_uplink_port else ""
@@ -2013,9 +2060,10 @@ class TelegramBot:
                 medals = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
                 for i, row in enumerate(top_uplinks):
                     rank_icon = medals[i] if i < len(medals) else f"{i+1}."
-                    dname = row.get('device_name') or row.get('device_ip')
+                    raw_dname = str(row.get('device_name') or row.get('device_ip') or '-')
+                    dname = html.escape(raw_dname)
                     dip = row.get('device_ip')
-                    iname = row.get('iface_name', 'Uplink WAN')
+                    iname = html.escape(str(row.get('iface_name') or 'Uplink WAN'))
                     rx = row.get('rx_bps') or 0.0
                     tx = row.get('tx_bps') or 0.0
                     tot = row.get('total_bps') or (rx + tx)
@@ -2023,7 +2071,7 @@ class TelegramBot:
                     util_pct = row.get('util_pct', 0.0)
 
                     is_agg = row.get('include_in_aggregate', 1) == 1
-                    is_bgp = 'bgp' in dname.lower()
+                    is_bgp = 'bgp' in raw_dname.lower()
                     badge = "[Agg ON]" if is_agg else "[Agg OFF]"
                     if is_bgp:
                         badge = "[BGP / Agg ON]" if is_agg else "[BGP]"
@@ -2060,27 +2108,23 @@ class TelegramBot:
         if not args:
             self.send_message(
                 chat_id,
-                "ℹ️ Gunakan format: <code>/capture &lt;ip/id&gt;</code>\n"
-                "Contoh: <code>/capture 192.168.1.1</code> atau <code>/capture 1</code>\n\n"
+                "ℹ️ Gunakan format: <code>/capture &lt;nama/ip/id&gt;</code>\n"
+                "Contoh: <code>/capture core</code> atau <code>/capture 192.168.1.1</code>\n\n"
                 "<i>Bot akan mengambil 2 sampel SNMP berjarak 3 detik secara langsung untuk menghitung throughput real-time tiap interface.</i>"
             )
             return
 
-        target = str(args[0]).strip()
-        device = None
-        if target.isdigit():
-            device = self.db.get_device(int(target))
-        if not device:
-            device = self.db.get_device_by_ip(target)
+        target = " ".join(args).strip()
+        device = self._find_device_by_target(target)
 
         if not device:
-            self.send_message(chat_id, f"⚠️ Perangkat dengan IP/ID <code>{target}</code> tidak ditemukan di database.")
+            self.send_message(chat_id, f"⚠️ Perangkat <code>{html.escape(target)}</code> tidak ditemukan di database.")
             return
 
         if not device.get('snmp_enabled'):
             self.send_message(
                 chat_id,
-                f"⚠️ Perangkat <b>{device.get('name', target)}</b> ({device.get('ip')}) belum mengaktifkan SNMP.\n"
+                f"⚠️ Perangkat <b>{html.escape(str(device.get('name') or target))}</b> ({device.get('ip')}) belum mengaktifkan SNMP.\n"
                 "Aktifkan SNMP pada perangkat dan di menu Settings/Device TIKWatch untuk menggunakan fitur Live Capture."
             )
             return
@@ -2089,7 +2133,7 @@ class TelegramBot:
             self.send_message(chat_id, "⚠️ Worker SNMP belum siap.")
             return
 
-        dname = device.get('name', target)
+        dname = html.escape(str(device.get('name') or target))
         dip = device.get('ip')
         did = device.get('id')
 
@@ -2105,7 +2149,7 @@ class TelegramBot:
             now_str = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
             if err or results is None:
-                err_text = f"⚠️ Gagal melakukan live capture pada <b>{dname}</b> ({dip}):\n<i>{err or 'Unknown error'}</i>"
+                err_text = f"⚠️ Gagal melakukan live capture pada <b>{dname}</b> ({dip}):\n<i>{html.escape(str(err or 'Unknown error'))}</i>"
                 if msg_id:
                     self.edit_message_text(chat_id, msg_id, err_text)
                 else:
@@ -2128,7 +2172,7 @@ class TelegramBot:
                 if tot > 0:
                     active_count += 1
                 text += (
-                    f"• <b>{r.get('name')}</b> (Total: <b>{format_speed(tot)}</b>)\n"
+                    f"• <b>{html.escape(str(r.get('name') or '-'))}</b> (Total: <b>{format_speed(tot)}</b>)\n"
                     f"  📥 RX: {format_speed(rx)} | 📤 TX: {format_speed(tx)}\n"
                 )
 
@@ -2443,22 +2487,22 @@ class TelegramBot:
             try:
                 zone = self.db.get_zone(device['zone_id'])
                 if zone:
-                    zone_str = f"• <b>Zona:</b> {zone.get('name')}\n"
+                    zone_str = f"• <b>Zona:</b> {html.escape(str(zone.get('name') or '-'))}\n"
             except Exception:
                 pass
 
         text = (
             f"{icon} <b>[TIKWatch] {title}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"• <b>Perangkat:</b> <code>{dev_name}</code>\n"
+            f"• <b>Perangkat:</b> <code>{html.escape(str(dev_name or '-'))}</code>\n"
             f"• <b>IP Address:</b> <code>{dev_ip}</code>\n"
             f"{zone_str}"
-            f"• <b>Pesan:</b> {message}\n"
+            f"• <b>Pesan:</b> {html.escape(str(message or '-'))}\n"
             f"• <b>Waktu:</b> <i>{now_str} WIB</i>\n"
         )
 
         if ai_analysis and "valid alert" not in ai_analysis.lower() and "false warning" not in ai_analysis.lower():
-            text += f"\n🤖 <b>AI Diagnostic:</b> <i>{ai_analysis}</i>\n"
+            text += f"\n🤖 <b>AI Diagnostic:</b> <i>{html.escape(str(ai_analysis))}</i>\n"
 
         # Interactive buttons
         keyboard = []

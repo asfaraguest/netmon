@@ -300,6 +300,7 @@ class Database:
                 'telegram_chat_ids': '',
                 'telegram_notify_down': 'true',
                 'telegram_notify_up': 'true',
+                'telegram_censor_ips': 'true',
                 'telegram_daily_digest_enabled': 'true',
                 'telegram_daily_digest_time': '08:00',
                 'anomaly_alert_enabled': 'true',
