@@ -107,6 +107,8 @@ class SNMPWorker:
         self._pending_analysis = {}
         self._metric_history = {}
         self._last_anomaly_alert = {}
+        self._recent_traffic_drops = {}
+        self._drop_lock = threading.Lock()
         self._speed_detected = {}
         self._iface_flap_history = {}
         self._iface_err_prev = {}
@@ -132,7 +134,7 @@ class SNMPWorker:
                 buckets = {}
                 for mr in mrows:
                     ts_key = str(mr['timestamp'])[:17]
-                    b = buckets.setdefault(ts_key, {'ts': time.time(), 'cpu': None, 'mem': None, 'traffic_bps': 0.0})
+                    b = buckets.setdefault(ts_key, {'ts': time.time(), 'cpu': None, 'mem': None, 'traffic_bps': None})
                     try:
                         val = float(mr['metric_value'])
                     except (ValueError, TypeError):
@@ -142,8 +144,8 @@ class SNMPWorker:
                     elif mr['metric_name'] == 'memory_usage':
                         b['mem'] = val
                     elif mr['metric_name'] in ('wan_in', 'wan_out'):
-                        b['traffic_bps'] = max(b['traffic_bps'], val)
-                self._metric_history[did] = list(buckets.values())[-8:]
+                        b['traffic_bps'] = max(b['traffic_bps'] or 0.0, val)
+                self._metric_history[did] = list(buckets.values())[-12:]
 
             saved_flap = self.db.get_poller_state('iface_flap_history')
             if isinstance(saved_flap, dict):
@@ -191,12 +193,150 @@ class SNMPWorker:
             limit = cap_bps
         return min(limit, cap_bps)
 
+    @staticmethod
+    def _calc_median(values):
+        if not values:
+            return 0.0
+        s = sorted(values)
+        n = len(s)
+        if n % 2 == 1:
+            return s[n // 2]
+        return (s[n // 2 - 1] + s[n // 2]) / 2.0
+
+    def _assess_traffic_drop_factors(self, device, older_med_mbps, cur_traffic_mbps, now_ts, drop_min_mbps):
+        """Multi-factor evaluation before raising a traffic drop alert.
+        Considers: 30-min DB baseline (filters short bursts), maintenance/parent state,
+        ping latency & packet loss, residual traffic vs near-zero blackhole,
+        multi-router campus correlation, and campus off-peak/transition hours.
+        Returns (should_alert: bool, severity: str|None, message: str|None).
+        """
+        did = device['id']
+        ip = device.get('ip', '')
+        name = device.get('name', ip)
+
+        # Factor A: Maintenance window or upstream parent device DOWN -> suppress
+        try:
+            in_maint, _ = self.db.is_device_in_maintenance(did)
+            if in_maint:
+                return False, None, None
+            p_down, _ = self.db.is_upstream_parent_down(did)
+            if p_down:
+                return False, None, None
+        except Exception:
+            pass
+
+        # Factor B: 30-minute DB baseline verification (rejects short 1-2 min download/speedtest bursts)
+        effective_baseline_mbps = older_med_mbps
+        try:
+            with self.db.conn() as c:
+                rows = c.execute('''
+                    SELECT substr(timestamp, 1, 19) AS ts_sec, MAX(CAST(metric_value AS REAL)) AS max_bps
+                    FROM snmp_metrics
+                    WHERE device_id = ?
+                      AND metric_name IN ('wan_in', 'wan_out')
+                      AND timestamp >= datetime('now', '-35 minutes')
+                      AND timestamp < datetime('now', '-2 minutes')
+                    GROUP BY ts_sec
+                    ORDER BY ts_sec ASC
+                ''', (did,)).fetchall()
+            if len(rows) >= 6:
+                db_mbps_list = [(r['max_bps'] or 0.0) / 1e6 for r in rows]
+                db_med_mbps = self._calc_median(db_mbps_list)
+                if db_med_mbps < (drop_min_mbps * 0.60) or cur_traffic_mbps > (db_med_mbps * 0.25):
+                    print(f"[Anomaly Engine] Traffic drop suppressed for {name} ({ip}): short burst ended (30m median={db_med_mbps:.1f} Mbps, cur={cur_traffic_mbps:.1f} Mbps)")
+                    return False, None, None
+                effective_baseline_mbps = (older_med_mbps + db_med_mbps) / 2.0
+        except Exception as dbe:
+            logger.warning(f"[Anomaly Engine] 30m baseline check skipped for {ip}: {dbe}")
+
+        drop_pct = max(0.0, (1.0 - (cur_traffic_mbps / effective_baseline_mbps)) * 100.0) if effective_baseline_mbps > 0 else 0.0
+
+        # Factor C: Ping health & packet loss
+        p_stat = self._latest_ping.get(ip, {})
+        pkt_loss = p_stat.get('packet_loss')
+        if pkt_loss is None:
+            pkt_loss = device.get('packet_loss') or 0.0
+        pkt_loss = float(pkt_loss)
+        lat_ms = p_stat.get('latency_ms')
+        if lat_ms is None:
+            lat_ms = device.get('latency_ms')
+        lat_str = f"{float(lat_ms):.1f} ms" if lat_ms is not None else "-"
+        has_ping_degradation = (pkt_loss >= 5.0) or (lat_ms is not None and float(lat_ms) >= 120.0)
+
+        # Factor D: Near-zero blackhole vs residual active traffic
+        is_near_zero = cur_traffic_mbps < 1.5
+        is_residual_active = cur_traffic_mbps >= 2.5
+
+        # Factor E: Multi-router correlation across campus within 5 minutes
+        other_drops = 0
+        with self._drop_lock:
+            cutoff = now_ts - 300
+            stale = [k for k, v in self._recent_traffic_drops.items() if v.get('ts', 0) < cutoff]
+            for k in stale:
+                del self._recent_traffic_drops[k]
+            self._recent_traffic_drops[did] = {
+                'ts': now_ts,
+                'baseline_mbps': effective_baseline_mbps,
+                'cur_mbps': cur_traffic_mbps,
+                'zone_id': device.get('zone_id'),
+            }
+            other_drops = sum(1 for k in self._recent_traffic_drops if k != did)
+
+        down_routers = 0
+        try:
+            with self.db.conn() as c:
+                row = c.execute("SELECT COUNT(*) FROM devices WHERE type='router' AND status='down'").fetchone()
+                down_routers = int(row[0]) if row else 0
+        except Exception:
+            pass
+        correlated_outage = (other_drops >= 1) or (down_routers >= 2)
+
+        # Factor F: Campus schedule / off-peak transition awareness
+        now_dt = datetime.now()
+        hhmm = now_dt.hour * 100 + now_dt.minute
+        is_sunday = (now_dt.weekday() == 6)
+        is_break_window = (1130 <= hhmm <= 1315)
+        is_after_hours = (hhmm >= 1545) or (hhmm <= 645)
+        is_transition_or_offpeak = is_sunday or is_break_window or is_after_hours
+
+        if is_transition_or_offpeak and is_residual_active and not has_ping_degradation and not correlated_outage:
+            print(f"[Anomaly Engine] Traffic drop suppressed for {name} ({ip}): off-peak/transition schedule with healthy ping & residual traffic ({cur_traffic_mbps:.1f} Mbps)")
+            return False, None, None
+
+        if cur_traffic_mbps >= 5.0 and pkt_loss < 5.0 and not correlated_outage and drop_pct < 92.0:
+            print(f"[Anomaly Engine] Traffic drop suppressed for {name} ({ip}): residual traffic {cur_traffic_mbps:.1f} Mbps healthy (0% loss, single router)")
+            return False, None, None
+
+        # Construct evidence-based verdict
+        if correlated_outage:
+            sev = 'critical' if (is_near_zero and other_drops >= 2) else 'warning'
+            msg = (
+                f"ANOMALI TRAFFIC DROP (MULTI-ROUTER): Trafik {name} ({ip}) anjlok "
+                f"{effective_baseline_mbps:.1f} → {cur_traffic_mbps:.1f} Mbps (-{drop_pct:.0f}%), "
+                f"bersamaan dengan {other_drops} router lain & {down_routers} router DOWN "
+                f"[Ping: {lat_str}, Loss: {pkt_loss:.0f}%]. Indikasi kuat gangguan upstream ISP / Firewall / Core BGP!"
+            )
+            return True, sev, msg
+
+        if is_near_zero or has_ping_degradation:
+            msg = (
+                f"ANOMALI TRAFFIC DROP: Trafik {name} ({ip}) turun drastis "
+                f"{effective_baseline_mbps:.1f} → {cur_traffic_mbps:.1f} Mbps (-{drop_pct:.0f}%) "
+                f"[Ping: {lat_str}, Loss: {pkt_loss:.0f}%, router lain normal]. "
+                f"Periksa port/kabel WAN lokal, switch gedung, atau perpindahan routing ISP."
+            )
+            return True, 'warning', msg
+
+        msg = (
+            f"PENURUNAN TRAFIK SIGNIFIKAN: Trafik {name} ({ip}) turun tajam "
+            f"{effective_baseline_mbps:.1f} → {cur_traffic_mbps:.1f} Mbps (-{drop_pct:.0f}%), "
+            f"namun ping normal ({lat_str}, loss {pkt_loss:.0f}%), router lain normal & trafik masih mengalir. "
+            f"Kemungkinan sesi aktivitas gedung selesai atau switching jalur ISP."
+        )
+        return True, 'info', msg
+
     def _analyze_metric_anomalies(self, device, metrics, traffic_data=None):
-        """Menganalisa lonjakan traffic mendadak dan kenaikan drastis resource usage (CPU/RAM).
-        Melakukan korelasi:
-          1. Traffic spike + CPU/RAM spike -> Potensi DDoS, Packet Flood, Broadcast Storm, Loop Routing (Critical)
-          2. Traffic spike saja -> Lonjakan bandwidth / data transfer besar (Warning)
-          3. CPU/RAM spike saja -> Beban komputasi tinggi / proses hang / kripto loop (Warning)
+        """Menganalisa lonjakan traffic, penurunan traffic (multi-faktor), dan resource usage (CPU/RAM).
         Dilengkapi cooldown per perangkat untuk mencegah alert flapping.
         """
         try:
@@ -224,10 +364,11 @@ class SNMPWorker:
         cpu = metrics.get('cpu_usage') if metrics else None
         mem = metrics.get('memory_usage') if metrics else None
 
-        cur_wan_in = traffic_data.get('wan_in', 0.0) if traffic_data else 0.0
-        cur_wan_out = traffic_data.get('wan_out', 0.0) if traffic_data else 0.0
-        cur_traffic_bps = max(cur_wan_in, cur_wan_out)
-        cur_traffic_mbps = cur_traffic_bps / 1e6
+        has_valid_traffic = bool(traffic_data and ('wan_in' in traffic_data or 'wan_out' in traffic_data))
+        cur_wan_in = float(traffic_data.get('wan_in') or 0.0) if has_valid_traffic else 0.0
+        cur_wan_out = float(traffic_data.get('wan_out') or 0.0) if has_valid_traffic else 0.0
+        cur_traffic_bps = max(cur_wan_in, cur_wan_out) if has_valid_traffic else None
+        cur_traffic_mbps = (cur_traffic_bps / 1e6) if cur_traffic_bps is not None else 0.0
 
         if did not in self._metric_history:
             self._metric_history[did] = []
@@ -237,9 +378,9 @@ class SNMPWorker:
         # Anomaly Detection Flags
         traffic_spike = False
         traffic_drop = False
-        drop_pct = 0.0
+        drop_sev = None
+        drop_msg = None
         spike_ratio = 1.0
-        baseline_mbps = 0.0
         cpu_critical = False
         cpu_jumped = False
         prev_cpu = None
@@ -247,40 +388,48 @@ class SNMPWorker:
 
         uplink_mbps = float(device.get('uplink_speed_mbps') or 1000)
         uplink_bps = uplink_mbps * 1e6
-        utilization_pct = (cur_traffic_bps / uplink_bps * 100) if uplink_bps > 0 else 0.0
+        utilization_pct = (cur_traffic_bps / uplink_bps * 100) if (cur_traffic_bps is not None and uplink_bps > 0) else 0.0
         drop_min_mbps = float(settings.get('traffic_drop_min_mbps', 50.0) or 50.0)
 
-        # Require at least 4 previous samples (approx 1-2 minutes) to establish reliable baseline
+        # Require at least 4 previous samples to establish reliable baseline
         if len(history) >= 4:
-            # 1. Traffic Spike & Traffic Drop (Cacti THold) Analysis
+            # 1. Traffic Spike & Multi-Factor Traffic Drop Analysis (only when traffic poll succeeded)
             prev_traffics = [h['traffic_bps'] for h in history if h.get('traffic_bps') is not None]
-            if prev_traffics:
+            if has_valid_traffic and prev_traffics:
                 avg_prev = sum(prev_traffics) / len(prev_traffics)
-                baseline_mbps = avg_prev / 1e6
                 if cur_traffic_mbps >= min_mbps and avg_prev > 0:
                     spike_ratio = cur_traffic_bps / avg_prev
-                    # Must exceed multiplier AND have significant link utilization (>=60%) or high absolute rate (>=300 Mbps)
                     if spike_ratio >= traffic_mult and (utilization_pct >= 60.0 or cur_traffic_mbps >= 300.0):
                         traffic_spike = True
-                # Cacti THold: Sudden Traffic Drop / Blackhole when device is UP
-                if baseline_mbps >= drop_min_mbps and len(prev_traffics) >= 3:
-                    older_avg_mbps = (sum(prev_traffics[:-1]) / len(prev_traffics[:-1])) / 1e6
-                    last_sample_mbps = prev_traffics[-1] / 1e6
-                    if older_avg_mbps >= drop_min_mbps:
-                        if cur_traffic_mbps <= (older_avg_mbps * 0.15) and last_sample_mbps <= (older_avg_mbps * 0.20):
-                            traffic_drop = True
-                            baseline_mbps = older_avg_mbps
-                            drop_pct = max(0.0, (1.0 - (cur_traffic_mbps / older_avg_mbps)) * 100.0)
+
+                # Multi-factor Traffic Drop Check: require >=5 older samples & 3 consecutive low samples
+                if len(prev_traffics) >= 5:
+                    older = prev_traffics[:-2]
+                    older_mbps = [v / 1e6 for v in older]
+                    older_med_mbps = self._calc_median(older_mbps)
+                    sustained_cnt = sum(1 for v in older_mbps if v >= (drop_min_mbps * 0.60))
+                    last1_mbps = prev_traffics[-1] / 1e6
+                    last2_mbps = prev_traffics[-2] / 1e6
+
+                    if older_med_mbps >= drop_min_mbps and sustained_cnt >= max(2, int(len(older_mbps) * 0.7)):
+                        is_3poll_low = (
+                            cur_traffic_mbps <= (older_med_mbps * 0.15)
+                            and last1_mbps <= (older_med_mbps * 0.20)
+                            and last2_mbps <= (older_med_mbps * 0.25)
+                        )
+                        not_recovering = cur_traffic_mbps <= (last1_mbps * 1.4 + 0.5)
+                        if is_3poll_low and not_recovering:
+                            traffic_drop, drop_sev, drop_msg = self._assess_traffic_drop_factors(
+                                device, older_med_mbps, cur_traffic_mbps, now_ts, drop_min_mbps
+                            )
 
             # 2. CPU Spike Analysis (require sustained critical CPU or extreme jump into heavy load >= 85%)
             prev_cpus = [h['cpu'] for h in history if h.get('cpu') is not None]
             if prev_cpus:
                 prev_cpu = prev_cpus[-1]
             if cpu is not None:
-                # Sustained critical load across consecutive polls
                 if cpu >= cpu_thresh and prev_cpu is not None and prev_cpu >= (cpu_thresh - 10.0):
                     cpu_critical = True
-                # Extreme jump that lands in heavy load territory
                 if prev_cpu is not None and (cpu - prev_cpu) >= cpu_jump_thresh and cpu >= 85.0:
                     cpu_jumped = True
 
@@ -290,14 +439,14 @@ class SNMPWorker:
             if mem is not None and mem >= mem_thresh and prev_mem is not None and prev_mem >= mem_thresh:
                 mem_critical = True
 
-        # Append current sample to rolling history (keep latest 8 samples)
+        # Append current sample to rolling history (keep latest 12 samples)
         history.append({
             'ts': now_ts,
             'cpu': cpu,
             'mem': mem,
             'traffic_bps': cur_traffic_bps
         })
-        if len(history) > 8:
+        if len(history) > 12:
             history.pop(0)
 
         # Evaluate correlation & construct alert if anomaly detected
@@ -326,12 +475,9 @@ class SNMPWorker:
             alert_msg = (
                 f"ANOMALI RESOURCE: Penggunaan RAM kritis ({mem:.1f}%) pada {name} ({ip}). Risiko OOM Crash!"
             )
-        elif traffic_drop:
-            severity = 'warning'
-            alert_msg = (
-                f"ANOMALI TRAFFIC DROP: Trafik uplink {name} ({ip}) anjlok dari baseline {baseline_mbps:.1f} Mbps "
-                f"ke {cur_traffic_mbps:.1f} Mbps (-{drop_pct:.0f}%). Indikasi gangguan jalur upstream ISP / BGP blackhole meski perangkat masih UP!"
-            )
+        elif traffic_drop and drop_sev and drop_msg:
+            severity = drop_sev
+            alert_msg = drop_msg
 
         if not severity or not alert_msg:
             return

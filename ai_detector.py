@@ -111,9 +111,19 @@ def evaluate_heuristics(db, alert, device, alert_id):
         # Run advanced local heuristic rules
         alert_msg_lower = alert['message'].lower()
         is_offline_alert = "offline" in alert_msg_lower or "unreachable" in alert_msg_lower or "down" in alert_msg_lower
-        is_anomaly_alert = "anomali" in alert_msg_lower or "lonjakan" in alert_msg_lower or "spike" in alert_msg_lower
+        is_drop_alert = "traffic drop" in alert_msg_lower or "penurunan trafik" in alert_msg_lower or "anjlok" in alert_msg_lower
+        is_anomaly_alert = is_drop_alert or "anomali" in alert_msg_lower or "lonjakan" in alert_msg_lower or "spike" in alert_msg_lower
 
-        if is_anomaly_alert:
+        if is_drop_alert:
+            is_false = 0
+            if "multi-router" in alert_msg_lower:
+                explanation = "Valid Anomaly: Penurunan trafik terdeteksi serentak pada beberapa router. Indikasi kuat gangguan upstream ISP, Firewall, atau Core BGP."
+            elif "penurunan trafik signifikan" in alert_msg_lower:
+                explanation = "Info Penurunan Beban: Ping sehat dan trafik residu masih aktif (router lain normal). Kemungkinan aktivitas gedung selesai atau switching rute."
+            else:
+                explanation = "Valid Anomaly: Trafik uplink router turun drastis mendekati nol atau disertai degradasi link secara berkelanjutan."
+
+        elif is_anomaly_alert:
             is_false = 0
             if "ddos" in alert_msg_lower or "flood" in alert_msg_lower or "kritis" in alert_msg_lower:
                 explanation = "Valid Anomaly: Terdeteksi korelasi lonjakan traffic dan beban CPU tinggi secara simultan. Waspadai serangan DDoS, packet storm, atau loop routing."
@@ -158,9 +168,22 @@ def _refine_with_groq(db, socketio, alert, device, alert_id, initial_is_false, i
             other_devs = [dict(r) for r in rows]
 
         alert_msg_lower = alert['message'].lower()
+        is_drop_alert = "traffic drop" in alert_msg_lower or "penurunan trafik" in alert_msg_lower or "anjlok" in alert_msg_lower
         is_anomaly_alert = "anomali" in alert_msg_lower or "lonjakan" in alert_msg_lower or "spike" in alert_msg_lower
 
-        if is_anomaly_alert:
+        if is_drop_alert:
+            prompt = (
+                f"Analisa kejadian penurunan trafik jaringan kampus berikut secara objektif:\n"
+                f"Perangkat: {device.get('name')} ({device.get('ip')}) | Tipe: {device.get('type')} | Status: {device.get('status')}\n"
+                f"Waktu Kejadian: {datetime.now().strftime('%A %H:%M WIB')}\n"
+                f"Pesan Alert: {alert['message']}\n"
+                f"Konteks Perangkat Lain di Zona yang Sama:\n{json.dumps(other_devs, indent=2)}\n\n"
+                f"Pertimbangkan faktor: apakah router lain juga ikut drop/down, status ping & packet loss, apakah masih ada trafik residu yang mengalir, "
+                f"dan apakah ini wajar (jam kuliah/lab selesai, download besar selesai, atau switching ISP) vs gangguan nyata (kabel/port WAN atau upstream).\n"
+                f"Kembalikan respon JSON: "
+                f'{{"is_false_alarm": 0 atau 1, "explanation": "Diagnosa teknis singkat (maks 2 kalimat Bahasa Indonesia) mengenai penyebab paling mungkin."}}'
+            )
+        elif is_anomaly_alert:
             prompt = (
                 f"Analisa anomali performa jaringan dan lonjakan resource berikut:\n"
                 f"Perangkat: {device.get('name')} ({device.get('ip')}) | Tipe: {device.get('type')}\n"

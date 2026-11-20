@@ -247,3 +247,15 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
       - Memindahkan `PRAGMA journal_mode=WAL` & `PRAGMA wal_autocheckpoint=1000` agar hanya dijalankan sekali di `_init_db()`, serta memasang `PRAGMA busy_timeout=45000` dan cache 8 MB (`cache_size=-8000`) pada setiap koneksi.
       - Menambahkan `_run_with_retry()` (jittered exponential backoff) + `self._write_lock` untuk operasi penulisan kritis (`generate_and_save_monthly_report`, `update_device`, `save_metric`, `save_interface_traffic`, `cleanup_*`, `set_poller_state`).
       - Menambahkan `save_metrics_batch()` dan `save_interface_traffic_batch()` di `database.py`, serta memindahkan `_poll_router_traffic()` ke luar `db_write_lock` di `snmp_worker.py`, sehingga ratusan insert per 15 detik diringkas menjadi 1 transaksi batch per router.
+
+23. **Evaluasi Multi-Faktor & Pengurangan False Alert Traffic Drop (`snmp_worker.py`, `ai_detector.py`):**
+    - **Perbaikan Bug Telemetry Kosong:**
+      - Memperbaiki celah di `_analyze_metric_anomalies()` di mana `traffic_data is None` sebelumnya dianggap `0.0 Mbps` sehingga memicu false alert `ANOMALI TRAFFIC DROP (-100%)`.
+    - **Penilaian Berbasis 6 Faktor Sebelum Judging Traffic Drop (`_assess_traffic_drop_factors`):**
+      - Menggunakan **median** baseline (bukan mean) dan konfirmasi **3 poll berturut-turut** serta verifikasi **median historis 30 menit** di database agar selesainya unduhan/backup sesaat tidak dianggap traffic drop.
+      - Memeriksa **maintenance window** dan status **parent upstream device** agar tidak memicu alert sekunder.
+      - Mengevaluasi **status Ping (Latency & Packet Loss)** serta membedakan kondisi **near-zero blackhole (<1.5 Mbps)** vs **trafik residu yang masih aktif mengalir (>=2.5–5 Mbps)**.
+      - Korelasi **multi-router dalam 5 menit terakhir** (`_recent_traffic_drops`): membedakan insiden terisolasi pada 1 gedung vs gangguan serentak lintas router (indikasi upstream ISP/Firewall/Core BGP).
+      - Memperhitungkan **jam operasional/transisi kampus** (istirahat siang, jam pulang kuliah, malam, Minggu) agar penurunan beban wajar saat ping sehat dan trafik residu masih mengalir tidak memicu alarm palsu.
+    - **Penyelarasan AI Detector (`ai_detector.py`):**
+      - Memisahkan klasifikasi heuristik dan prompt LLM khusus untuk insiden `traffic drop` / `penurunan trafik` agar tidak lagi keliru didiagnosa sebagai lonjakan/spike.
