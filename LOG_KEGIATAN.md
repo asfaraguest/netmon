@@ -281,3 +281,10 @@ Dokumen ini melacak aktivitas dan pembaruan fungsi utama pada aplikasi NetMon.
     - **Serialisasi Per-Device SNMP & Staggering Jadwal Poller:**
       - Menambahkan per-device lock (`_get_device_lock`) agar `poll_device` dan `collect_interface_traffic` tidak membanjiri daemon SNMP router yang sama di detik yang sama, serta men-stagger jadwal awal `traffic_poll` di `poller.py` dan `app.py`.
       - Menambahkan `_state_lock` untuk akses aman `_ping_history`, `_latest_ping`, `_if_prev`, `_if_meta_cache`, memindahkan cache pruning ke `_prune_stale_caches()` (per 60 detik), dan mendefinisikan `logger` di `snmp_worker.py` agar error logging di `_assess_traffic_drop_factors` tidak memicu `NameError`.
+
+26. **Upgrade Standar NOC pada Grafik `Throughput Backbone` Dashboard (`database.py`, `templates/dashboard.html`):**
+    - **Agregasi Akurat & Presisi Lintas-Hari (`get_backbone_traffic_history`):**
+      - Mengelompokkan bucket dengan prefix tanggal lengkap (`%Y-%m-%d`) agar rentang `24h` tidak mencampur jam yang sama dari kemarin dan hari ini.
+      - Menggunakan real peak pada rentang granular (`1h`) dan nilai rata-rata (`AVG`) per bucket untuk rentang panjang (`24h`, `3d`, `7d`) agar tren harian tidak bias oleh spike sesaat, sambil tetap menyertakan `in_peak`/`out_peak` dan `in_avg`/`out_avg`.
+    - **Garis Referensi P95, Summary Strip, & Perbaikan Legend (`templates/dashboard.html`):**
+      - Menambahkan garis referensi putus-putus `P95 Download` & `P95 Upload`, strip ringkasan **`Avg | P95 | Peak`** dan **`Utilisasi P95`** terhadap kapasitas ISP kampus, format sumbu Y adaptif (`Mbps`/`Gbps`) mulai dari `0`, persentase utilisasi di tooltip, serta memperbaiki legend dot dengan CSS class `.tp-legend-dot` / `.tp-legend-line`.

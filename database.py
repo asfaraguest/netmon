@@ -1149,19 +1149,25 @@ class Database:
 
     def get_backbone_traffic_history(self, hours):
         """Riwayat throughput backbone (wan_in/wan_out gabungan semua router) untuk chart dashboard.
-        Real peak per-device per-bucket (MAX), baru dijumlahkan lintas-device (SUM) -- bukan SUM
-        mentah lintas-waktu, supaya tidak menggelembungkan nilai saat bucket berisi banyak sample."""
-        if hours <= 2:
-            bucket_fmt = "strftime('%H:%M', m.timestamp, 'localtime')"
+        - Rentang <= 2h (1h view): memakai real peak per-device per-menit lalu dijumlahkan lintas router.
+        - Rentang > 2h (24h/3d/7d): memakai rata-rata (AVG) per-device per-bucket agar tren tidak
+          bias oleh spike sesaat, sambil tetap menyertakan nilai peak (in_peak/out_peak).
+        """
+        is_short_range = (hours <= 2)
+        if is_short_range:
+            bucket_sql = "strftime('%Y-%m-%d %H:%M', m.timestamp, 'localtime')"
+            label_idx = 11  # 'HH:MM'
             limit = 130
         elif hours <= 24:
-            bucket_fmt = ("strftime('%H:', m.timestamp, 'localtime') || "
+            bucket_sql = ("strftime('%Y-%m-%d %H:', m.timestamp, 'localtime') || "
                           "(CASE WHEN CAST(strftime('%M', m.timestamp, 'localtime') AS INTEGER) < 15 THEN '00' "
                           "WHEN CAST(strftime('%M', m.timestamp, 'localtime') AS INTEGER) < 30 THEN '15' "
                           "WHEN CAST(strftime('%M', m.timestamp, 'localtime') AS INTEGER) < 45 THEN '30' ELSE '45' END)")
+            label_idx = 11  # 'HH:MM'
             limit = 100
         else:
-            bucket_fmt = "strftime('%m-%d %H:00', m.timestamp, 'localtime')"
+            bucket_sql = "strftime('%Y-%m-%d %H:00', m.timestamp, 'localtime')"
+            label_idx = 5   # 'MM-DD HH:00'
             limit = 200
 
         with self.conn() as c:
@@ -1169,9 +1175,11 @@ class Database:
                 WITH per_device_bucket AS (
                     SELECT
                         m.device_id,
-                        {bucket_fmt} AS bucket,
-                        MAX(CASE WHEN m.metric_name = 'wan_in' THEN CAST(m.metric_value AS REAL) ELSE 0 END) AS rx_peak,
-                        MAX(CASE WHEN m.metric_name = 'wan_out' THEN CAST(m.metric_value AS REAL) ELSE 0 END) AS tx_peak
+                        {bucket_sql} AS bucket,
+                        COALESCE(MAX(CASE WHEN m.metric_name = 'wan_in' THEN CAST(m.metric_value AS REAL) END), 0) AS rx_peak,
+                        COALESCE(MAX(CASE WHEN m.metric_name = 'wan_out' THEN CAST(m.metric_value AS REAL) END), 0) AS tx_peak,
+                        COALESCE(AVG(CASE WHEN m.metric_name = 'wan_in' THEN CAST(m.metric_value AS REAL) END), 0) AS rx_avg,
+                        COALESCE(AVG(CASE WHEN m.metric_name = 'wan_out' THEN CAST(m.metric_value AS REAL) END), 0) AS tx_avg
                     FROM snmp_metrics m
                     JOIN devices d ON m.device_id = d.id
                     WHERE d.type = 'router'
@@ -1180,14 +1188,36 @@ class Database:
                       AND m.timestamp >= datetime('now', ? || ' hours')
                     GROUP BY m.device_id, bucket
                 )
-                SELECT bucket, SUM(rx_peak) AS rx_sum, SUM(tx_peak) AS tx_sum
+                SELECT
+                    bucket,
+                    SUM(rx_peak) AS rx_peak_sum,
+                    SUM(tx_peak) AS tx_peak_sum,
+                    SUM(rx_avg)  AS rx_avg_sum,
+                    SUM(tx_avg)  AS tx_avg_sum
                 FROM per_device_bucket
                 GROUP BY bucket
                 ORDER BY bucket ASC
                 LIMIT ?
             ''', (f'-{hours}', limit)).fetchall()
 
-        return [{'t': r['bucket'], 'in': round((r['rx_sum'] or 0) / 1000000.0, 2), 'out': round((r['tx_sum'] or 0) / 1000000.0, 2)} for r in rows]
+        points = []
+        for r in rows:
+            b_str = str(r['bucket'] or '')
+            t_label = b_str[label_idx:] if len(b_str) > label_idx else b_str
+            rx_peak_mbps = round((r['rx_peak_sum'] or 0) / 1000000.0, 2)
+            tx_peak_mbps = round((r['tx_peak_sum'] or 0) / 1000000.0, 2)
+            rx_avg_mbps = round((r['rx_avg_sum'] or 0) / 1000000.0, 2)
+            tx_avg_mbps = round((r['tx_avg_sum'] or 0) / 1000000.0, 2)
+            points.append({
+                't': t_label,
+                'in': rx_peak_mbps if is_short_range else rx_avg_mbps,
+                'out': tx_peak_mbps if is_short_range else tx_avg_mbps,
+                'in_avg': rx_avg_mbps,
+                'out_avg': tx_avg_mbps,
+                'in_peak': rx_peak_mbps,
+                'out_peak': tx_peak_mbps,
+            })
+        return points
 
     def get_chart_traffic_data(self, device_id=None, time_range='24h'):
         """Ambil data time-series throughput untuk rendering chart grafik (PNG) sesuai rentang waktu NetMon.
