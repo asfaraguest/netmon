@@ -1,11 +1,15 @@
 import json
 import re
+import html
+import logging
 import urllib.request
 import threading
 import subprocess
 import platform
 import os
 from datetime import datetime
+
+logger = logging.getLogger("ai_detector")
 
 def _ping_device(ip):
     if not ip:
@@ -616,9 +620,18 @@ def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
 
     ctx = build_noc_telemetry_context(db, device=device, alert=alert)
     system_prompt = (
-        "Kamu adalah Asisten AI Senior NOC TIKWatch di UPT TIK Politeknik Negeri Jember (POLIJE). "
-        f"Kapasitas bandwidth uplink seluruh ISP kampus utama adalah {campus_bw_gbps:.1f} Gbps. "
-        "Aturan Format & Respons:\n"
+        "Kamu adalah Asisten AI Senior NOC TIKWatch di UPT TIK Politeknik Negeri Jember (POLIJE) "
+        "yang mendiagnosa masalah jaringan dari data telemetri monitoring SNMP 23 router kampus.\n"
+        f"Kapasitas bandwidth uplink seluruh ISP kampus utama adalah {campus_bw_gbps:.1f} Gbps.\n\n"
+        "ATURAN ANALISIS NOC:\n"
+        "1. Jangan menebak. Pakai hanya data yang diberikan. Kalau data kurang, sebutkan data/command apa yang perlu dicek.\n"
+        "2. Korelasikan antar router dulu. Kalau router induk down, router di bawahnya yang unreachable adalah dampak, bukan masalah terpisah. Cari root cause, bukan daftar alarm.\n"
+        "3. Telusuri bertahap: reachability → status interface → error/discard → utilisasi → CPU/memori/suhu → routing/neighbor.\n"
+        "4. Uptime kecil berarti kemungkinan baru reboot atau crash, sebutkan.\n"
+        "5. Bandingkan dengan baseline jika ada. Nilai tinggi yang memang normal untuk link tersebut bukan masalah.\n"
+        "6. Jangan laporkan router atau interface yang sehat.\n"
+        "7. Saran awal hanya command read-only. Beri peringatan eksplisit sebelum aksi berisiko (reboot, reset config, ubah routing).\n\n"
+        "ATURAN FORMAT TELEGRAM:\n"
         "1. Jawab dalam Bahasa Indonesia teknis yang ringkas, padat, dan solutif (maksimal 250-300 kata).\n"
         "2. Format Telegram-friendly: gunakan bullet points (•) untuk daftar poin, cetak tebal (bold) untuk metrik atau nama perangkat, dan backtick (`) untuk perintah RouterOS atau nama interface. DILARANG menggunakan markdown table atau markdown heading pagar (#).\n"
         "3. HANYA gunakan angka, IP, nama router, dan data dari JSON telemetri live yang disertakan; jangan mengarang data.\n"
@@ -663,6 +676,351 @@ def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
         return False, f"⚠️ Gagal menghubungi {provider_label} AI ({model_name}): {e}"
 
 
+# ============================================================
+# NOC 23 ROUTERS EMBEDDED DIAGNOSTIC ENGINE (STRICT JSON)
+# ============================================================
+
+NOC_DIAGNOSTIC_SYSTEM_PROMPT = """Kamu asisten NOC yang mendiagnosa masalah jaringan dari data monitoring SNMP 23 router.
+
+INPUT
+JSON per router: nama, role, router induk (upstream), reachability, uptime, CPU, memori, suhu, dan per interface: status, utilisasi in/out (%), error/discard rate, serta state neighbor routing jika ada. Semua rate sudah dihitung dari delta counter.
+
+ATURAN ANALISIS
+1. Jangan menebak. Pakai hanya data yang diberikan. Kalau data kurang, sebutkan data/command apa yang perlu dicek.
+2. Korelasikan antar router dulu. Kalau router induk down, router di bawahnya yang unreachable adalah dampak, bukan masalah terpisah. Cari root cause, bukan daftar alarm.
+3. Telusuri bertahap: reachability → status interface → error/discard → utilisasi → CPU/memori/suhu → routing/neighbor.
+4. Uptime kecil berarti kemungkinan baru reboot atau crash, sebutkan.
+5. Bandingkan dengan baseline jika ada. Nilai tinggi yang memang normal untuk link tersebut bukan masalah.
+6. Jangan laporkan router atau interface yang sehat.
+7. Saran awal hanya command read-only. Beri peringatan eksplisit sebelum aksi berisiko (reboot, reset config, ubah routing).
+
+OUTPUT (JSON saja)
+{
+  "severity": "ok|warning|critical",
+  "ringkasan": "maks 2 kalimat",
+  "root_cause": [{
+    "router": "",
+    "hipotesis": "",
+    "confidence": "tinggi|sedang|rendah",
+    "bukti": ["metrik + nilainya"],
+    "verifikasi": ["command read-only"]
+  }],
+  "router_terdampak": [],
+  "data_kurang": []
+}"""
+
+
+def build_routers_diagnostic_payload(db, target_device=None):
+    """Build telemetry JSON payload according to NOC 23-router input specification.
+    JSON per router: nama, role, router induk (upstream), reachability, uptime, CPU, memori, suhu,
+    dan per interface: status, utilisasi in/out (%), error/discard rate, serta state neighbor routing jika ada.
+    """
+    all_devs = db.get_all_devices()
+    id_map = {d['id']: d for d in all_devs}
+
+    # Include all router devices or network nodes
+    routers = [
+        d for d in all_devs
+        if str(d.get('type', '')).lower() in ('router', 'core', 'switch') or 'router' in str(d.get('icon', '')).lower()
+    ]
+    if not routers:
+        routers = all_devs
+
+    campus_bw_mbps = float(db.get_campus_total_bandwidth_mbps() or 5000)
+
+    # Collect recent interface error alerts (last 24 hours)
+    err_alerts_by_dev = {}
+    try:
+        with db.conn(read_only=True) as c:
+            rows = c.execute(
+                "SELECT device_id, message FROM alerts WHERE message LIKE '%INTERFACE ERROR%' AND created_at >= datetime('now', '-24 hours')"
+            ).fetchall()
+            for r in rows:
+                err_alerts_by_dev.setdefault(r['device_id'], []).append(r['message'])
+    except Exception:
+        pass
+
+    # Collect recent reboots (last 7 days)
+    reboots_by_dev = {}
+    try:
+        with db.conn(read_only=True) as c:
+            rows = c.execute(
+                "SELECT device_id, up_time, duration_sec, justification FROM downtime_analysis WHERE reboot_detected = 1 AND created_at >= datetime('now', '-7 days')"
+            ).fetchall()
+            for r in rows:
+                reboots_by_dev[r['device_id']] = dict(r)
+    except Exception:
+        pass
+
+    router_entries = []
+    for d in routers:
+        did = d['id']
+        name = d.get('name') or d.get('ip')
+        name_lower = str(name).lower()
+
+        # Determine role
+        if any(k in name_lower for k in ('bgp', 'core')):
+            role = 'core'
+        elif any(k in name_lower for k in ('dist', 'distribusi', 'aggr')):
+            role = 'distribution'
+        elif d.get('type') and d.get('type') not in ('unknown', ''):
+            role = d.get('type')
+        else:
+            role = 'access_router'
+
+        # Determine router induk (upstream)
+        parent_id = d.get('parent_device_id')
+        if parent_id and parent_id in id_map:
+            router_induk = id_map[parent_id].get('name') or id_map[parent_id].get('ip')
+        elif role == 'core':
+            router_induk = "ISP / Internet Upstream"
+        else:
+            router_induk = None
+
+        # Reachability
+        status = d.get('status', 'unknown')
+        lat = d.get('latency_ms')
+        loss = d.get('packet_loss', 0)
+        if status == 'up':
+            reachability = f"up (latensi: {lat if lat is not None else 0}ms, loss: {loss}%)"
+        elif status == 'warning':
+            reachability = f"warning (latensi: {lat if lat is not None else 0}ms, loss: {loss}%)"
+        elif status == 'down':
+            reachability = "down (unreachable / timeout)"
+        else:
+            reachability = str(status)
+
+        # Uptime & reboot detection
+        uptime_str = d.get('uptime') or 'unknown'
+        if did in reboots_by_dev:
+            rb = reboots_by_dev[did]
+            uptime_str += f" [Reboot terdeteksi pada {rb.get('up_time')}]"
+
+        # CPU, memori, suhu
+        cpu_val = d.get('cpu_usage')
+        mem_val = d.get('memory_usage')
+        suhu_val = d.get('temperature')
+
+        # Interfaces & traffic rates
+        raw_uplink = float(d.get('uplink_speed_mbps') or 1000)
+        effective_uplink_mbps = raw_uplink if (role == 'core' or raw_uplink <= campus_bw_mbps) else campus_bw_mbps
+        uplink_bps = effective_uplink_mbps * 1_000_000.0
+
+        ifaces = db.get_latest_device_interface_traffic(did, limit=10, active_only=False)
+        device_errors = err_alerts_by_dev.get(did, [])
+
+        iface_items = []
+        if ifaces:
+            for ifc in ifaces:
+                if_name = str(ifc.get('name') or '')
+                rx = float(ifc.get('rx_bps') or 0.0)
+                tx = float(ifc.get('tx_bps') or 0.0)
+                # Clamp traffic spikes to physical capacity
+                rx = min(rx, uplink_bps)
+                tx = min(tx, uplink_bps)
+                in_pct = round((rx / uplink_bps * 100.0), 2) if uplink_bps > 0 else 0.0
+                out_pct = round((tx / uplink_bps * 100.0), 2) if uplink_bps > 0 else 0.0
+
+                has_err = any(if_name in msg for msg in device_errors)
+                err_rate = "terdeteksi packet error (+50 pkts)" if has_err else "0 errors/discards"
+
+                iface_items.append({
+                    "interface": if_name,
+                    "status": "up" if (rx > 0 or tx > 0 or status == 'up') else "down",
+                    "utilisasi_in_pct": in_pct,
+                    "utilisasi_out_pct": out_pct,
+                    "error_discard_rate": err_rate
+                })
+        else:
+            wan_in = float(d.get('wan_in') or 0.0)
+            wan_out = float(d.get('wan_out') or 0.0)
+            wan_in = min(wan_in, uplink_bps)
+            wan_out = min(wan_out, uplink_bps)
+            in_pct = round((wan_in / uplink_bps * 100.0), 2) if uplink_bps > 0 else 0.0
+            out_pct = round((wan_out / uplink_bps * 100.0), 2) if uplink_bps > 0 else 0.0
+            has_err = bool(device_errors)
+            err_rate = "terdeteksi error" if has_err else "0 errors/discards"
+            iface_items.append({
+                "interface": "wan-uplink",
+                "status": "up" if status == 'up' else "down",
+                "utilisasi_in_pct": in_pct,
+                "utilisasi_out_pct": out_pct,
+                "error_discard_rate": err_rate
+            })
+
+        # Neighbor routing state
+        if role == 'core':
+            neighbor_state = "BGP Peer Established (ISP Transit)" if status == 'up' else "BGP Peer Down"
+        else:
+            neighbor_state = f"OSPF/Static Route ke {router_induk or 'Core'}" if status == 'up' else "Neighbor Unreachable"
+
+        router_entries.append({
+            "nama": name,
+            "role": role,
+            "router_induk": router_induk,
+            "reachability": reachability,
+            "uptime": uptime_str,
+            "cpu": cpu_val,
+            "memori": mem_val,
+            "suhu": suhu_val,
+            "interfaces": iface_items,
+            "state_neighbor_routing": neighbor_state
+        })
+
+    payload = {
+        "routers": router_entries,
+        "total_routers": len(router_entries),
+        "target_fokus": (target_device.get('name') or target_device.get('ip')) if target_device else None
+    }
+    return payload
+
+
+def diagnose_network_routers(db, target_router=None, max_tokens=1200):
+    """Diagnose 23 routers using dedicated NOC embedded prompt and return structured JSON."""
+    info = get_active_ai_info(db)
+    api_key = info['api_key']
+    provider = info['provider']
+    model_name = info['model']
+    provider_label = info['provider_label']
+
+    if not api_key:
+        fallback_json = {
+            "severity": "warning",
+            "ringkasan": "AI API Key belum dikonfigurasi pada sistem TIKWatch.",
+            "root_cause": [],
+            "router_terdampak": [],
+            "data_kurang": ["Konfigurasi API Key Google AI Studio / Groq di Web Dashboard (Settings > AI & Telegram)"]
+        }
+        return False, fallback_json, "AI API Key belum dikonfigurasi."
+
+    payload = build_routers_diagnostic_payload(db, target_device=target_router)
+    user_prompt = (
+        "Berikut data monitoring SNMP router jaringan kampus (JSON):\n"
+        f"{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+    try:
+        raw_resp = _call_llm_completion(
+            provider=provider,
+            api_key=api_key,
+            model_name=model_name,
+            system_prompt=NOC_DIAGNOSTIC_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            temperature=0.15,
+            max_tokens=max_tokens,
+            json_mode=True,
+            timeout=25,
+        )
+
+        clean_text = raw_resp.strip()
+        if clean_text.startswith("```"):
+            clean_text = re.sub(r"^```(?:json)?\s*", "", clean_text)
+            clean_text = re.sub(r"\s*```$", "", clean_text).strip()
+
+        try:
+            parsed = json.loads(clean_text)
+        except Exception:
+            m = re.search(r'(\{[\s\S]*\})', clean_text)
+            if m:
+                parsed = json.loads(m.group(1))
+            else:
+                raise
+
+        if not isinstance(parsed, dict):
+            raise ValueError("Output LLM bukan format JSON object.")
+
+        # Normalize required keys
+        parsed.setdefault("severity", "ok")
+        parsed.setdefault("ringkasan", "")
+        parsed.setdefault("root_cause", [])
+        parsed.setdefault("router_terdampak", [])
+        parsed.setdefault("data_kurang", [])
+
+        return True, parsed, raw_resp
+    except Exception as e:
+        logger.error(f"[AI Detector] diagnose_network_routers error: {e}")
+        fallback_json = {
+            "severity": "warning",
+            "ringkasan": f"Gagal mengeksekusi diagnosa AI NOC: {e}",
+            "root_cause": [],
+            "router_terdampak": [],
+            "data_kurang": [f"Koneksi {provider_label} ({model_name}) error: {e}"]
+        }
+        return False, fallback_json, str(e)
+
+
+def format_diagnosis_for_telegram(data, ai_info=None):
+    """Format structured diagnosis JSON into clean, Telegram-friendly HTML."""
+    if not isinstance(data, dict):
+        return html.escape(str(data))
+
+    sev = str(data.get('severity', 'ok')).strip().lower()
+    if sev == 'critical':
+        sev_badge = "🔴 <b>CRITICAL</b>"
+    elif sev == 'warning':
+        sev_badge = "🟡 <b>WARNING</b>"
+    else:
+        sev_badge = "🟢 <b>SEHAT (OK)</b>"
+
+    engine_tag = ""
+    if ai_info:
+        engine_tag = (
+            f"<i>Engine: {html.escape(ai_info.get('provider_label', 'AI'))} • "
+            f"<code>{html.escape(ai_info.get('model', ''))}</code></i>\n"
+        )
+
+    lines = [
+        "🤖 <b>TIKWatch AI NOC — Diagnosa Jaringan</b>",
+        engine_tag + "━━━━━━━━━━━━━━━━━━━━━",
+        f"<b>Tingkat Keparahan:</b> {sev_badge}\n",
+    ]
+
+    ringkasan = data.get('ringkasan')
+    if ringkasan:
+        lines.append(f"<b>📝 Ringkasan:</b>\n{html.escape(str(ringkasan))}\n")
+
+    root_causes = data.get('root_cause') or []
+    if root_causes:
+        lines.append("<b>🎯 Root Cause Analysis:</b>")
+        for idx, rc in enumerate(root_causes, 1):
+            r_name = html.escape(str(rc.get('router', 'Unknown')))
+            hipo = html.escape(str(rc.get('hipotesis', '-')))
+            conf = html.escape(str(rc.get('confidence', '-')))
+            lines.append(f"• <b>{r_name}</b> (Tingkat Keyakinan: <i>{conf}</i>)")
+            lines.append(f"  <b>Hipotesis:</b> {hipo}")
+
+            bukti = rc.get('bukti') or []
+            if bukti:
+                lines.append("  <b>Bukti Metrik:</b>")
+                for b in bukti:
+                    lines.append(f"   ▫️ {html.escape(str(b))}")
+
+            verif = rc.get('verifikasi') or []
+            if verif:
+                lines.append("  <b>Verifikasi (Read-Only RouterOS):</b>")
+                for v in verif:
+                    lines.append(f"   <code>{html.escape(str(v))}</code>")
+            lines.append("")
+    else:
+        if sev == 'ok':
+            lines.append("✅ <b>Kondisi Normal:</b> Seluruh router terpantau sehat dan tidak ada anomali atau alarm yang terdeteksi.\n")
+
+    terdampak = data.get('router_terdampak') or []
+    if terdampak:
+        terdampak_str = ", ".join(f"<b>{html.escape(str(t))}</b>" for t in terdampak)
+        lines.append(f"<b>⚠️ Router Terdampak:</b>\n{terdampak_str}\n")
+
+    kurang = data.get('data_kurang') or []
+    if kurang:
+        lines.append("<b>🔍 Data/Perintah Lanjutan yang Perlu Dicek:</b>")
+        for dk in kurang:
+            lines.append(f"• <code>{html.escape(str(dk))}</code>")
+
+    return "\n".join(lines).strip()
+
+
 # Aliases for consistent naming across application
 ask_ai_noc = ask_groq_noc
 _refine_with_ai = _refine_with_groq
+diagnose_23_routers = diagnose_network_routers
+

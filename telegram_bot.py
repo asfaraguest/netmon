@@ -74,6 +74,8 @@ class TelegramBot:
         self._stop_event = threading.Event()
         self._poll_thread = None
         self.is_running = False
+        self._last_diag_json = None
+        self._last_diag_time = 0
 
         self.reload_config()
 
@@ -159,7 +161,7 @@ class TelegramBot:
         commands = [
             {"command": "status", "description": "Ringkasan kesehatan jaringan"},
             {"command": "ai", "description": "Tanya AI NOC tentang kondisi jaringan live"},
-            {"command": "diagnosa", "description": "Diagnosa mendalam router dengan AI"},
+            {"command": "diagnosa", "description": "Diagnosa AI NOC 23 router jaringan"},
             {"command": "traffic", "description": "Traffic: All router / Selected router"},
             {"command": "resource", "description": "Resource usage: Server / All router / Selected"},
             {"command": "server", "description": "Resource usage server TIKWatch (CPU/RAM/Disk)"},
@@ -728,6 +730,27 @@ class TelegramBot:
                 p_label = ai_detector.get_active_ai_info(self.db)['provider_label']
                 self.answer_callback_query(cq_id, text=f"🤖 Menganalisa perangkat ({p_label})...")
                 self._cmd_diagnosa(chat_id, [did])
+            elif action == "diag_json":
+                if hasattr(self, '_last_diag_json') and self._last_diag_json:
+                    self.answer_callback_query(cq_id, text="📄 Memuat output JSON...")
+                    json_str = json.dumps(self._last_diag_json, indent=2, ensure_ascii=False)
+                    import ai_detector
+                    cur_info = ai_detector.get_active_ai_info(self.db)
+                    reply = (
+                        f"🤖 <b>TIKWatch AI NOC — Output JSON Diagnosa</b>\n"
+                        f"<i>Engine: {html.escape(cur_info['provider_label'])} • <code>{html.escape(cur_info['model'])}</code></i>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"<pre><code class=\"language-json\">{html.escape(json_str)}</code></pre>"
+                    )
+                    if len(reply) > 3950:
+                        reply = reply[:3940] + "\n<i>…(terpotong)</i>"
+                    self.send_message(chat_id, reply)
+                else:
+                    self.answer_callback_query(cq_id, text="🔄 Menjalankan diagnosa baru...")
+                    self._cmd_diagnosa(chat_id, ["raw"])
+            elif action == "diag_refresh":
+                self.answer_callback_query(cq_id, text="🔄 Memperbarui diagnosa AI NOC...")
+                self._cmd_diagnosa(chat_id, [])
 
     def _run_poll_and_notify(self, chat_id, device):
         """Poll device and reply with updated status."""
@@ -775,7 +798,9 @@ class TelegramBot:
             "• <code>/chart select</code> — Menu interaktif memilih router untuk digambar grafiknya\n\n"
             f"<b>🤖 AI NOC Assistant ({html.escape(ai_tag)}):</b>\n"
             f"• <code>/ai &lt;pertanyaan&gt;</code> — Tanya AI tentang kondisi jaringan, utilisasi {bw_label}, atau alert aktif\n"
-            "• <code>/diagnosa &lt;nama/ip/id&gt;</code> — Diagnosa AI kesehatan perangkat & rekomendasi RouterOS\n\n"
+            "• <code>/diagnosa</code> — Diagnosa AI NOC komprehensif 23 router (root cause, dampak, perintah RouterOS)\n"
+            "• <code>/diagnosa &lt;nama/ip/id&gt;</code> — Diagnosa AI terfokus pada 1 router spesifik\n"
+            "• <code>/diagnosa raw</code> — Tampilkan hasil diagnosa AI dalam format JSON murni\n\n"
             "<b>🖥️ Status Jaringan, Resource & Kontrol:</b>\n"
             "• <code>/server</code> atau <code>/resource server</code> — Resource usage server TIKWatch (CPU, RAM, Disk, Uptime)\n"
             "• <code>/resource all</code> — Resource usage (CPU, RAM, Temp) seluruh router\n"
@@ -2412,7 +2437,9 @@ class TelegramBot:
                 f"• <code>/ai bagaimana kondisi jaringan dan utilisasi {bw_str} saat ini?</code>\n"
                 "• <code>/ai analisa alert terbuka dan potensi gangguan</code>\n"
                 "• <code>/ai router mana yang beban CPU atau trafiknya paling tinggi?</code>\n"
-                "• <code>/diagnosa &lt;nama/ip/id&gt;</code> — Diagnosa mendalam 1 router spesifik\n\n"
+                "• <code>/diagnosa</code> — Diagnosa AI NOC komprehensif 23 router jaringan\n"
+                "• <code>/diagnosa &lt;nama/ip/id&gt;</code> — Diagnosa mendalam 1 router spesifik\n"
+                "• <code>/diagnosa raw</code> — Tampilkan hasil diagnosa AI dalam format JSON murni\n\n"
                 f"{cfg_note}"
             )
             return
@@ -2443,50 +2470,84 @@ class TelegramBot:
         threading.Thread(target=_worker, daemon=True).start()
 
     def _cmd_diagnosa(self, chat_id, args):
-        """Handle /diagnosa <nama/ip/id> for deep AI analysis of a specific device."""
-        if not args:
-            self.send_message(chat_id, "ℹ️ Masukkan nama, IP, atau ID router. Contoh: <code>/diagnosa core</code>")
-            return
-        target = " ".join(args).strip()
-        device = self._find_device_by_target(target)
-        if not device:
-            self.send_message(chat_id, f"⚠️ Perangkat <code>{html.escape(target)}</code> tidak ditemukan.")
-            return
-
+        """Handle /diagnosa [all|raw|<nama/ip/id>] for deep AI NOC network diagnosis."""
         import ai_detector
         ai_info = ai_detector.get_active_ai_info(self.db)
+        if not ai_info['configured']:
+            self.send_message(
+                chat_id,
+                "⚠️ AI API Key belum dikonfigurasi.\n"
+                "Silakan masukkan API Key Google AI Studio atau Groq di Web Dashboard: <b>Settings > AI & Telegram</b>."
+            )
+            return
+
         p_label = ai_info['provider_label']
+
+        target_str = " ".join(args).strip() if args else ""
+        target_lower = target_str.lower()
+
+        is_raw_json = target_lower in ("raw", "json")
+        is_all = not target_str or target_lower in ("all", "semua", "jaringan", "network", "polije", "raw", "json")
+
+        target_device = None
+        if not is_all:
+            target_device = self._find_device_by_target(target_str)
+            if not target_device:
+                self.send_message(
+                    chat_id,
+                    f"⚠️ Perangkat <code>{html.escape(target_str)}</code> tidak ditemukan.\n"
+                    "Gunakan <code>/diagnosa</code> untuk diagnosa 23 router atau <code>/devices</code> untuk daftar router."
+                )
+                return
 
         def _worker():
             try:
-                import ai_detector
-                question = (
-                    f"Lakukan diagnosa kesehatan dan performa mendalam untuk perangkat target "
-                    f"{device.get('name')} ({device.get('ip')}). Sertakan analisa CPU/RAM/suhu/latency/uptime, "
-                    f"trafik port aktif, riwayat downtime/reboot, dan rekomendasi konkret (termasuk perintah RouterOS jika perlu)."
-                )
-                ok, answer = ai_detector.ask_ai_noc(self.db, question, device=device)
+                ok, diag_json, raw_text = ai_detector.diagnose_network_routers(self.db, target_router=target_device)
                 if not ok:
-                    self.send_message(chat_id, answer)
+                    self.send_message(chat_id, f"⚠️ Gagal diagnosa AI NOC: {html.escape(raw_text)}")
                     return
-                formatted = self._format_ai_html(answer)
+
+                # Cache last diagnosis result
+                self._last_diag_json = diag_json
+                self._last_diag_time = time.time()
+
                 cur_info = ai_detector.get_active_ai_info(self.db)
-                dname = html.escape(str(device.get('name') or device.get('ip')))
-                reply = (
-                    f"🩺 <b>AI Diagnosa: {dname}</b> (<code>{device.get('ip')}</code>)\n"
-                    f"<i>Engine: {cur_info['provider_label']} • <code>{html.escape(cur_info['model'])}</code></i>\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"{formatted}"
-                )
+                if is_raw_json:
+                    json_str = json.dumps(diag_json, indent=2, ensure_ascii=False)
+                    reply = (
+                        f"🤖 <b>TIKWatch AI NOC — Raw Output JSON</b>\n"
+                        f"<i>Engine: {html.escape(cur_info['provider_label'])} • <code>{html.escape(cur_info['model'])}</code></i>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"<pre><code class=\"language-json\">{html.escape(json_str)}</code></pre>"
+                    )
+                    if len(reply) > 3950:
+                        reply = reply[:3940] + "\n<i>…(terpotong)</i>"
+                    self.send_message(chat_id, reply)
+                    return
+
+                reply = ai_detector.format_diagnosis_for_telegram(diag_json, ai_info=cur_info)
                 if len(reply) > 3950:
                     reply = reply[:3940] + "\n<i>…(terpotong)</i>"
-                self.send_message(chat_id, reply)
+
+                markup = {
+                    "inline_keyboard": [
+                        [
+                            {"text": "📄 Lihat Output JSON", "callback_data": "cmd:diag_json"},
+                            {"text": "🔄 Diagnosa Ulang", "callback_data": "cmd:diag_refresh"}
+                        ]
+                    ]
+                }
+                self.send_message(chat_id, reply, reply_markup=markup)
             except Exception as e:
                 logger.error(f"[Telegram AI] /diagnosa error: {e}")
                 self.send_message(chat_id, f"⚠️ Gagal diagnosa AI: {e}")
 
-        dlabel = html.escape(str(device.get('name') or device.get('ip')))
-        self.send_message(chat_id, f"🩺 <i>Menjalankan AI diagnosa ({p_label}) untuk <b>{dlabel}</b>…</i>")
+        if target_device:
+            dlabel = html.escape(str(target_device.get('name') or target_device.get('ip')))
+            self.send_message(chat_id, f"🩺 <i>Menjalankan AI NOC diagnosa ({p_label}) terfokus pada <b>{dlabel}</b> (korelasi 23 router)…</i>")
+        else:
+            self.send_message(chat_id, f"🩺 <i>Menjalankan AI NOC diagnosa ({p_label}) untuk seluruh 23 router jaringan kampus…</i>")
+
         threading.Thread(target=_worker, daemon=True).start()
 
     def _run_ai_alert_analysis(self, chat_id, alert_id):
