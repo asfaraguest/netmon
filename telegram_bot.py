@@ -2347,7 +2347,7 @@ class TelegramBot:
         def _save_code_block(m):
             code_content = m.group(2)
             code_blocks.append(code_content)
-            return f"__NETMON_CODE_BLOCK_{len(code_blocks)-1}__"
+            return f"@@NETMON_CODE_BLOCK_{len(code_blocks)-1}@@"
 
         text = re.sub(r'```([a-zA-Z0-9_\-\+]*)\n?(.*?)```', _save_code_block, text, flags=re.DOTALL)
 
@@ -2356,7 +2356,7 @@ class TelegramBot:
         def _save_inline_code(m):
             code_content = m.group(1)
             inline_codes.append(code_content)
-            return f"__NETMON_INLINE_CODE_{len(inline_codes)-1}__"
+            return f"@@NETMON_INLINE_CODE_{len(inline_codes)-1}@@"
 
         text = re.sub(r'`([^`\n]+)`', _save_inline_code, text)
 
@@ -2368,7 +2368,7 @@ class TelegramBot:
 
         # Step 5: Convert bold **text** or __text__
         text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
-        text = re.sub(r'__(.+?)__', r'<b>\1</b>', text)
+        text = re.sub(r'(?<!\w)__(.+?)__(?!\w)', r'<b>\1</b>', text)
 
         # Step 6: Convert bullet points (* item or - item -> • item)
         text = re.sub(r'(?m)^[\*\-]\s+', '• ', text)
@@ -2376,12 +2376,12 @@ class TelegramBot:
         # Step 7: Restore inline code with <code>
         for i, code in enumerate(inline_codes):
             escaped_code = html.escape(code)
-            text = text.replace(f"__NETMON_INLINE_CODE_{i}__", f"<code>{escaped_code}</code>")
+            text = text.replace(f"@@NETMON_INLINE_CODE_{i}@@", f"<code>{escaped_code}</code>")
 
         # Step 8: Restore code blocks with <pre><code>
         for i, block in enumerate(code_blocks):
             escaped_block = html.escape(block.strip())
-            text = text.replace(f"__NETMON_CODE_BLOCK_{i}__", f"<pre><code>{escaped_block}</code></pre>")
+            text = text.replace(f"@@NETMON_CODE_BLOCK_{i}@@", f"<pre><code>{escaped_block}</code></pre>")
 
         # Step 9: Collapse excessive blank lines
         text = re.sub(r'\n{3,}', '\n\n', text)
