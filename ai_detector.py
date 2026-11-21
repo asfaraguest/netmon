@@ -428,12 +428,21 @@ def build_noc_telemetry_context(db, device=None, alert=None):
     ctx = {}
     try:
         stats = db.get_dashboard_stats()
-        campus_bw_mbps = db.get_campus_total_bandwidth_mbps()
+        campus_bw_mbps = float(db.get_campus_total_bandwidth_mbps() or 5000)
         routers = db.get_router_traffic_summary()
         agg_routers = [r for r in routers if r.get('include_in_aggregate', 1) == 1]
         tot_in_mbps = round(sum((r.get('wan_in') or 0.0) for r in agg_routers) / 1e6, 2)
         tot_out_mbps = round(sum((r.get('wan_out') or 0.0) for r in agg_routers) / 1e6, 2)
-        peak_util_pct = round((max(tot_in_mbps, tot_out_mbps) / campus_bw_mbps * 100.0), 1) if campus_bw_mbps > 0 else 0.0
+
+        # Clamping aggregate in/out to total ISP capacity to guarantee math accuracy against extreme counter glitches
+        tot_in_mbps = min(tot_in_mbps, campus_bw_mbps)
+        tot_out_mbps = min(tot_out_mbps, campus_bw_mbps)
+
+        in_util_pct = round((tot_in_mbps / campus_bw_mbps * 100.0), 1) if campus_bw_mbps > 0 else 0.0
+        out_util_pct = round((tot_out_mbps / campus_bw_mbps * 100.0), 1) if campus_bw_mbps > 0 else 0.0
+        peak_util_pct = max(in_util_pct, out_util_pct)
+        headroom_mbps = round(max(0.0, campus_bw_mbps - max(tot_in_mbps, tot_out_mbps)), 1)
+        headroom_gbps = round(headroom_mbps / 1000.0, 2)
 
         ctx['campus_summary'] = {
             'total_devices': stats.get('total', 0),
@@ -444,9 +453,14 @@ def build_noc_telemetry_context(db, device=None, alert=None):
             'avg_latency_ms': stats.get('avg_latency'),
             'unacked_alerts': stats.get('unacked_alerts', 0),
             'campus_total_isp_bandwidth_mbps': campus_bw_mbps,
+            'campus_total_isp_bandwidth_gbps': round(campus_bw_mbps / 1000.0, 1),
             'backbone_wan_in_mbps': tot_in_mbps,
             'backbone_wan_out_mbps': tot_out_mbps,
-            'backbone_utilization_pct': peak_util_pct,
+            'backbone_in_utilization_pct': in_util_pct,
+            'backbone_out_utilization_pct': out_util_pct,
+            'backbone_peak_utilization_pct': peak_util_pct,
+            'backbone_headroom_mbps': headroom_mbps,
+            'backbone_headroom_gbps': headroom_gbps,
         }
 
         # Include configured active ISPs breakdown if present
@@ -470,16 +484,28 @@ def build_noc_telemetry_context(db, device=None, alert=None):
         ][:15]
 
         router_devs = [d for d in all_devs if d.get('type') == 'router']
-        ctx['top_routers_by_traffic'] = [
-            {
-                'name': r.get('name'), 'ip': r.get('ip'),
-                'wan_in_mbps': round((r.get('wan_in') or 0.0) / 1e6, 2),
-                'wan_out_mbps': round((r.get('wan_out') or 0.0) / 1e6, 2),
-                'uplink_mbps': r.get('uplink_speed_mbps'),
+        ctx['top_routers_by_traffic'] = []
+        for r in routers[:8]:
+            dev_name = str(r.get('name') or '')
+            is_core = any(x in dev_name.lower() for x in ('bgp', 'core'))
+            raw_uplink = int(r.get('uplink_speed_mbps') or 1000)
+            # Building routers cannot physically exceed the total campus ISP uplink
+            effective_uplink = raw_uplink if (is_core or raw_uplink <= campus_bw_mbps) else int(campus_bw_mbps)
+            wan_in_m = round((r.get('wan_in') or 0.0) / 1e6, 2)
+            wan_out_m = round((r.get('wan_out') or 0.0) / 1e6, 2)
+            uplink_bps = effective_uplink * 1_000_000.0
+            in_pct = round((r.get('wan_in') or 0.0) / uplink_bps * 100.0, 1) if uplink_bps > 0 else 0.0
+            out_pct = round((r.get('wan_out') or 0.0) / uplink_bps * 100.0, 1) if uplink_bps > 0 else 0.0
+            ctx['top_routers_by_traffic'].append({
+                'name': dev_name,
+                'ip': r.get('ip'),
+                'wan_in_mbps': wan_in_m,
+                'wan_out_mbps': wan_out_m,
+                'uplink_mbps': effective_uplink,
+                'in_util_pct': in_pct,
+                'out_util_pct': out_pct,
                 'agg': r.get('include_in_aggregate', 1)
-            }
-            for r in routers[:8]
-        ]
+            })
         ctx['top_routers_by_cpu'] = [
             {
                 'name': d.get('name'), 'ip': d.get('ip'),
@@ -596,7 +622,9 @@ def ask_groq_noc(db, user_question, device=None, alert=None, max_tokens=750):
         "1. Jawab dalam Bahasa Indonesia teknis yang ringkas, padat, dan solutif (maksimal 250-300 kata).\n"
         "2. Format Telegram-friendly: gunakan bullet points (•) untuk daftar poin, cetak tebal (bold) untuk metrik atau nama perangkat, dan backtick (`) untuk perintah RouterOS atau nama interface. DILARANG menggunakan markdown table atau markdown heading pagar (#).\n"
         "3. HANYA gunakan angka, IP, nama router, dan data dari JSON telemetri live yang disertakan; jangan mengarang data.\n"
-        "4. Berikan diagnosa root cause dan rekomendasi perbaikan/perintah RouterOS yang dapat langsung dieksekusi teknisi."
+        "4. Pelaporan Bandwidth & Utilisasi: WAJIB laporkan utilisasi bandwidth ISP kampus secara akurat dan terpisah antara Download (IN) dan Upload (OUT), contoh: `Download: 135.2 Mbps (2.7%), Upload: 35.8 Mbps (0.7%) dari total kapasitas 5.0 Gbps (Sisa Headroom: 4.86 Gbps)`. JANGAN menggabungkan utilisasi download dan upload menjadi satu persentase ambigu.\n"
+        "5. Validasi Anomali & Spike: Nilai traffic yang melebihi batas uplink fisik interface atau kapasitas total ISP kampus adalah anomali counter/glitch SNMP. Jangan menganggap lonjakan abnormal tersebut sebagai traffic valid.\n"
+        "6. Berikan diagnosa root cause dan rekomendasi perbaikan/perintah RouterOS yang dapat langsung dieksekusi teknisi."
     )
     raw_user_prompt = (
         f"Permintaan/Pertanyaan Operator NOC:\n{user_question}\n\n"

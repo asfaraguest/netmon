@@ -216,9 +216,11 @@ class SNMPWorker:
     # ─── anomaly / spike cap helper ─────────────────────────────────
     def _anomaly_limit_bps(self, effective_speed_bps):
         """Batas atas (bps) untuk mendeteksi spike/anomali traffic.
-        Diambil dari settings:
-          - anomaly_cap_multiplier : toleransi terhadap kapasitas link (default 1.05)
-          - anomaly_cap_gbps      : plafon mutlak dalam Gbps (default 5.0)
+        Secara mutlak dibatasi oleh:
+          1. Toleransi link fisik: effective_speed_bps * anomaly_cap_multiplier
+          2. Plafon total ISP kampus: campus_total_bandwidth_mbps * 1e6 * anomaly_cap_multiplier
+          3. Plafon settings anomaly_cap_gbps (jika disetel)
+        Traffic tidak boleh melebihi kapasitas link fisik maupun total bandwidth seluruh ISP kampus.
         """
         try:
             mult = float(self.db.get_settings().get('anomaly_cap_multiplier', 1.05))
@@ -228,12 +230,20 @@ class SNMPWorker:
             cap_gbps = float(self.db.get_settings().get('anomaly_cap_gbps', 5.0))
         except (ValueError, TypeError):
             cap_gbps = 5.0
-        cap_bps = cap_gbps * 1e9
+
+        # Plafon mutlak dari total bandwidth ISP kampus
+        try:
+            campus_bw_mbps = float(self.db.get_campus_total_bandwidth_mbps() or 5000)
+            isp_ceiling_bps = (campus_bw_mbps * 1e6) * mult
+        except Exception:
+            isp_ceiling_bps = 5.0 * 1e9 * mult
+
+        cap_bps = min(cap_gbps * 1e9, isp_ceiling_bps)
+
         if effective_speed_bps and effective_speed_bps > 0:
             limit = effective_speed_bps * mult
-        else:
-            limit = cap_bps
-        return min(limit, cap_bps)
+            return min(limit, cap_bps)
+        return cap_bps
 
     @staticmethod
     def _calc_median(values):
@@ -1973,11 +1983,15 @@ class SNMPWorker:
                     cap_mbps = (limit_bps / 1e6) if limit_bps > 0 else 100000.0
                     print(f"[Traffic] Spike terdeteksi pada device_id={did} interface={name} (rx_bps={rx_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps) - reset to 0")
                     rx_bps = 0.0
+                    if hasattr(self, '_if_prev') and (did, str(idx)) in self._if_prev:
+                        self._if_prev[(did, str(idx))] = None
 
                 if tx_bps > limit_bps:
                     cap_mbps = (limit_bps / 1e6) if limit_bps > 0 else 100000.0
                     print(f"[Traffic] Spike terdeteksi pada device_id={did} interface={name} (tx_bps={tx_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps) - reset to 0")
                     tx_bps = 0.0
+                    if hasattr(self, '_if_prev') and (did, str(idx)) in self._if_prev:
+                        self._if_prev[(did, str(idx))] = None
                 
                 traffic_batch.append((did, str(name), int(idx), rx_bps, tx_bps))
 
@@ -2146,18 +2160,41 @@ class SNMPWorker:
                         if speed_mbps > max_detected_speed:
                             max_detected_speed = speed_mbps
                 
-                if max_detected_speed > 0:
+                wan_detected_speed = 0
+                if target_idx:
+                    h_wan = if_high_speeds.get(f"1.3.6.1.2.1.31.1.1.1.15.{target_idx}") if if_high_speeds else None
+                    l_wan = if_low_speeds.get(f"1.3.6.1.2.1.2.2.1.5.{target_idx}") if if_low_speeds else None
+                    if h_wan is not None:
+                        try: wan_detected_speed = int(h_wan)
+                        except Exception: pass
+                    elif l_wan is not None:
+                        try: wan_detected_speed = int(l_wan) // 1000000
+                        except Exception: pass
+
+                speed_to_use = wan_detected_speed if wan_detected_speed > 0 else max_detected_speed
+
+                if speed_to_use > 0:
                     standard_speeds = [100, 1000, 2500, 5000, 10000, 25000, 40000, 100000]
-                    closest_speed = min(standard_speeds, key=lambda x: abs(x - max_detected_speed))
+                    closest_speed = min(standard_speeds, key=lambda x: abs(x - speed_to_use))
                     
-                    if abs(closest_speed - max_detected_speed) / closest_speed <= 0.2:
+                    if abs(closest_speed - speed_to_use) / closest_speed <= 0.2:
                         final_speed = closest_speed
                     else:
-                        final_speed = max_detected_speed
+                        final_speed = speed_to_use
+
+                    # Unless device is Core BGP router, a building router's WAN uplink
+                    # cannot physically exceed the campus total ISP bandwidth capacity.
+                    try:
+                        campus_bw_cap = int(self.db.get_campus_total_bandwidth_mbps() or 5000)
+                    except Exception:
+                        campus_bw_cap = 5000
+                    dev_name_low = str(device.get('name', '')).lower()
+                    if 'bgp' not in dev_name_low and 'core' not in dev_name_low and final_speed > campus_bw_cap:
+                        final_speed = min(final_speed, campus_bw_cap)
 
                     with self.db_write_lock:
                         cur_dev = self.db.get_device(did)
-                        if cur_dev and (not cur_dev.get('uplink_speed_mbps') or cur_dev.get('uplink_speed_mbps') == 1000):
+                        if cur_dev and (not cur_dev.get('uplink_speed_mbps') or cur_dev.get('uplink_speed_mbps') == 1000 or cur_dev.get('uplink_speed_mbps') > campus_bw_cap):
                             self.db.update_device(did, {'uplink_speed_mbps': final_speed})
                             print(f"[Speed Auto-Detect] Updated {cur_dev.get('name', ip)} uplink capacity to {final_speed} Mbps")
         except Exception as se:
@@ -2255,7 +2292,9 @@ class SNMPWorker:
                     if wan_in_bps > limit_bps or wan_out_bps > limit_bps:
                         cap_mbps = (limit_bps / 1e6) if limit_bps > 0 else 100000.0
                         print(f"[Traffic] Spike terdeteksi pada device_id={did} WAN interface={target_idx} (wan_in={wan_in_bps:.1f}, wan_out={wan_out_bps:.1f} melebihi limit {cap_mbps:.1f} Mbps) - dropped")
-                        # Skip recording this anomalous poll to avoid ruining the graph (return None instead of 0)
+                        # Reset cached counter baseline so corrupted counters do not cause secondary spikes next poll
+                        if hasattr(self, '_last_traffic') and did in self._last_traffic:
+                            self._last_traffic[did] = None
                         return None
 
                     return {"wan_in": wan_in_bps, "wan_out": wan_out_bps}

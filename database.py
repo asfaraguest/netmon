@@ -1614,8 +1614,9 @@ class Database:
             return results
 
     def get_router_traffic_summary(self):
-        """Ambil data utilisasi bandwidth WAN seluruh router yang terdaftar."""
-        with self.conn() as c:
+        """Ambil data utilisasi bandwidth WAN seluruh router yang terdaftar,
+        dilengkapi sanitasi anomali/spike yang melebihi threshold link atau total ISP kampus."""
+        with self.conn(read_only=True) as c:
             rows = c.execute('''
                 SELECT id, name, ip, type, wan_in, wan_out, uplink_speed_mbps, status, last_polled,
                        COALESCE(include_in_aggregate, 1) AS include_in_aggregate
@@ -1623,7 +1624,28 @@ class Database:
                 WHERE type = 'router' OR wan_in IS NOT NULL OR wan_out IS NOT NULL
                 ORDER BY COALESCE(include_in_aggregate, 1) DESC, (COALESCE(wan_in, 0) + COALESCE(wan_out, 0)) DESC
             ''').fetchall()
-            return [dict(r) for r in rows]
+
+            try:
+                campus_bw_mbps = float(self.get_campus_total_bandwidth_mbps() or 5000)
+            except Exception:
+                campus_bw_mbps = 5000.0
+            max_isp_bps = (campus_bw_mbps * 1e6) * 1.05
+
+            clean_rows = []
+            for r in rows:
+                d = dict(r)
+                uplink_mbps = float(d.get('uplink_speed_mbps') or 1000)
+                link_cap_bps = (uplink_mbps * 1e6) * 1.05
+                max_allowed = min(link_cap_bps, max_isp_bps)
+
+                win = d.get('wan_in')
+                wout = d.get('wan_out')
+                if win is not None and win > max_allowed:
+                    d['wan_in'] = 0.0
+                if wout is not None and wout > max_allowed:
+                    d['wan_out'] = 0.0
+                clean_rows.append(d)
+            return clean_rows
 
     def cleanup_interface_traffic(self, interface_retention_hours=168, metrics_retention_hours=None):
         # metrics_retention_hours default None -> pakai interface_retention_hours (kompatibel mundur
