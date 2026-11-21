@@ -751,6 +751,25 @@ class TelegramBot:
             elif action == "diag_refresh":
                 self.answer_callback_query(cq_id, text="🔄 Memperbarui diagnosa AI NOC...")
                 self._cmd_diagnosa(chat_id, [])
+            elif action == "glossary":
+                self.answer_callback_query(cq_id, text="💡 Memuat penjelasan istilah...")
+                msg = (
+                    "💡 <b>Glosarium Istilah Monitoring Jaringan (Standar Industri):</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
+                    "• 🎯 <b>P95 (95th Percentile):</b> Standar industri MRTG/Cacti & billing ISP (Burstable 95th). "
+                    "Artinya 95% waktu penggunaan berada di bawah nilai ini, dan 5% lonjakan sesaat (spikes) diabaikan. "
+                    "Nilai ini adalah acuan kapasitas riil yang sesungguhnya dibutuhkan kampus.\n\n"
+                    "• 🌊 <b>Throughput vs Bandwidth:</b> Bandwidth adalah kapasitas total 'pipa' fisik (contoh: 5.0 Gbps ISP), "
+                    "sedangkan Throughput adalah debit aliran data aktual yang sedang melintasi pipa tersebut.\n\n"
+                    "• 💡 <b>Headroom:</b> Sisa ruang kosong kapasitas bandwidth yang belum terpakai. Semakin besar headroom, "
+                    "semakin bebas jaringan dari antrian paket (bufferbloat) dan degradasi latensi.\n\n"
+                    "• 📥 <b>Inbound (WAN IN / Download):</b> Aliran trafik data yang masuk dari internet/ISP menuju router kampus.\n\n"
+                    "• 📤 <b>Outbound (WAN OUT / Upload):</b> Aliran trafik data yang keluar dari jaringan kampus menuju internet.\n\n"
+                    "• ⚡ <b>Peak (Beban Puncak):</b> Titik laju data tertinggi absolut yang sempat tercatat dalam rentang waktu grafik.\n\n"
+                    "• 🛡️ <b>Anti-Spike Clamping:</b> Filter fisik yang otomatis menahan/membuang angka anomali counter SNMP jika terbaca "
+                    "melebihi kapasitas fisik interface (misal port 1 Gbps tidak akan pernah menampilkan spike 10 Gbps)."
+                )
+                self.send_message(chat_id, msg)
 
     def _run_poll_and_notify(self, chat_id, device):
         """Poll device and reply with updated status."""
@@ -1929,6 +1948,7 @@ class TelegramBot:
             f"  ⚡ <b>Beban Puncak Terkini:</b> <b>{cur_max_util:.1f}%</b> (Puncak: {peak_max_util:.1f}%){sat_warn}\n"
             f"  💡 <b>Headroom Bebas:</b> {headroom_mbps:.1f} Mbps ({max(0.0, 100.0 - cur_max_util):.1f}%)\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 <i>Hint: <b>P95</b> mengabaikan 5% spike sesaat (standar Cacti/MRTG). <b>Headroom</b> = sisa kapasitas bebas pipa ISP.</i>\n"
             f"<i>Waktu generate: {now_str} WIB</i>"
         )
 
@@ -1952,7 +1972,8 @@ class TelegramBot:
                     {"text": "🌐 Total Backbone", "callback_data": f"chart:all:{cur_code}"},
                 ],
                 [
-                    {"text": "📋 Teks Traffic", "callback_data": f"cmd:traffic_dev:{target_key}" if target_key != "all" else "cmd:traffic_summary"}
+                    {"text": "📋 Teks Traffic", "callback_data": f"cmd:traffic_dev:{target_key}" if target_key != "all" else "cmd:traffic_summary"},
+                    {"text": "💡 Penjelasan Istilah", "callback_data": "cmd:glossary"}
                 ]
             ]
         }

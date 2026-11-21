@@ -1443,3 +1443,16 @@ window.loadLatencyChart = function() {
     })
     .catch(err => console.error("Error loading latency chart:", err));
 };
+
+// Global Bootstrap Tooltip Initializer
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
+      document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+        new bootstrap.Tooltip(el, { trigger: 'hover focus' });
+      });
+    }
+  } catch (e) {
+    console.debug("Bootstrap tooltip init skipped:", e);
+  }
+});
