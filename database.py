@@ -1214,14 +1214,16 @@ class Database:
                 LIMIT ?
             ''', (f'-{hours}', limit)).fetchall()
 
+        campus_bw_mbps = float(self.get_campus_total_bandwidth_mbps() or 5000)
         points = []
         for r in rows:
             b_str = str(r['bucket'] or '')
             t_label = b_str[label_idx:] if len(b_str) > label_idx else b_str
-            rx_peak_mbps = round((r['rx_peak_sum'] or 0) / 1000000.0, 2)
-            tx_peak_mbps = round((r['tx_peak_sum'] or 0) / 1000000.0, 2)
-            rx_avg_mbps = round((r['rx_avg_sum'] or 0) / 1000000.0, 2)
-            tx_avg_mbps = round((r['tx_avg_sum'] or 0) / 1000000.0, 2)
+            # Clamping to campus total ISP capacity (RRDtool DS MAX rule)
+            rx_peak_mbps = min(round((r['rx_peak_sum'] or 0) / 1000000.0, 2), campus_bw_mbps)
+            tx_peak_mbps = min(round((r['tx_peak_sum'] or 0) / 1000000.0, 2), campus_bw_mbps)
+            rx_avg_mbps = min(round((r['rx_avg_sum'] or 0) / 1000000.0, 2), campus_bw_mbps)
+            tx_avg_mbps = min(round((r['tx_avg_sum'] or 0) / 1000000.0, 2), campus_bw_mbps)
             points.append({
                 't': t_label,
                 'in': rx_peak_mbps if is_short_range else rx_avg_mbps,
@@ -1409,14 +1411,19 @@ class Database:
                         LIMIT ?
                     ''', (f'-{hours}', limit)).fetchall()
 
+        campus_bw_mbps = float(self.get_campus_total_bandwidth_mbps() or 5000)
+        is_core_dev = any(k in str(target_name).lower() for k in ('bgp', 'core'))
+        max_allowed_mbps = campus_bw_mbps if (is_aggregate or is_core_dev) else min(float(uplink_mbps or 1000), campus_bw_mbps)
+
         # Parse points into list
         points = []
         rx_vals = []
         tx_vals = []
         for r in rows:
             b_str = r['bucket']
-            rx_m = round((r['rx_bps'] or 0.0) / 1_000_000.0, 2)
-            tx_m = round((r['tx_bps'] or 0.0) / 1_000_000.0, 2)
+            # Physical Link Clamping (RRDtool DS MAX rule): filter past historical glitches
+            rx_m = min(round((r['rx_bps'] or 0.0) / 1_000_000.0, 2), max_allowed_mbps)
+            tx_m = min(round((r['tx_bps'] or 0.0) / 1_000_000.0, 2), max_allowed_mbps)
             points.append({
                 'bucket': b_str,
                 'rx_mbps': rx_m,

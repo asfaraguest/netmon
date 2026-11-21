@@ -1911,7 +1911,7 @@ class SNMPWorker:
                 if (v := (hc_out or {}).get(k)) is not None), None)
             if rx is None or tx is None:
                 continue
-            key = (did, idx)
+            key = (did, str(idx))
             with self._state_lock:
                 prev = self._if_prev.get(key)
                 self._if_prev[key] = {'rx': rx, 'tx': tx, 'ts': now_ts, 'is_64bit': is_64bit}
@@ -1921,9 +1921,15 @@ class SNMPWorker:
                 dt = now_ts - prev['ts']
                 if dt <= 0:
                     continue
-                if dt > 3 * traffic_interval and not logged_gap:
-                    print(f"[Traffic] Gap polling terdeteksi device_id={did} dt={dt:.1f}s (expected ~{traffic_interval}s)")
-                    logged_gap = True
+                # Heartbeat Gap Protection (Standard RRDtool):
+                # Jika interval polling terlambat jauh melebihi 2.5x traffic_interval (misal poller sempat
+                # terhenti atau device baru pulih dari offline), re-anchor baseline dan lewati perhitungan
+                # delta saat ini agar akumulasi counter selama gap tidak memicu spike palsu di grafik.
+                if dt > 2.5 * traffic_interval:
+                    if not logged_gap:
+                        print(f"[Traffic] Gap polling terdeteksi device_id={did} dt={dt:.1f}s (re-anchoring baseline, skip delta)")
+                        logged_gap = True
+                    continue
                 d_rx = rx - prev['rx']
                 d_tx = tx - prev['tx']
                 
